@@ -20,8 +20,9 @@ gridlock:
   # Octopus account/electricity meter. Check the AppDaemon log for
   # "Multiple entities match" warnings if you have more than one
   # account/meter and discovery picks the wrong one; only then set the
-  # affected key explicitly below (a secrets.yaml !secret ref works
-  # the same way it always did, if you'd rather not commit it):
+  # affected key explicitly below as a literal value (NOT !secret —
+  # AppDaemon's app-config loader has no built-in secrets.yaml/!secret
+  # support the way HA core does; using it here breaks the whole file):
   # octopus_dispatch: binary_sensor.octopus_energy_a_XXXXXXXX_intelligent_dispatching
   # import_rate: sensor.octopus_energy_electricity_XXXXXXXX_1111111111111_current_rate
   # export_rate: sensor.octopus_energy_electricity_XXXXXXXX_2222222222222_export_current_rate
@@ -84,17 +85,17 @@ gridlock:
   storm_watch_target_soc: 100
   # SSEN Power Track — polled directly by the engine, no HA sensors needed.
   # Postcode prefix (outward code + first digit of inward code, e.g.
-  # "SW1A 1") — also via AppDaemon secrets.yaml, e.g. gridlock_postcode: "SW1A 1".
-  # Leave commented out to disable SSEN polling.
-  # ssen_postcode: !secret gridlock_postcode
+  # "SW1A 1") — literal value (see note above re: !secret not working
+  # here). Leave commented out to disable SSEN polling.
+  # ssen_postcode: "SW1A 1"
 
-  # --- Self-updater (optional; not needed if installed via HACS,
+  # --- Self-updater (optional; not needed via the Supervisor add-on,
   #     which handles updates through the HA UI instead) ---
   # Fine-grained PAT with Contents:Read on this repo only — use a
-  # separate read-only token from anything with write access, and
-  # keep it out of this file: reference AppDaemon's secrets.yaml.
+  # separate read-only token from anything with write access. Literal
+  # value only (!secret doesn't work in this file — see note above).
   # update_repo: "james-autho-tech/gridlock"
-  # update_token: !secret gridlock_pat
+  # update_token: "github_pat_..."
   # update_branch: main
   # update_path: apps/gridlock/gridlock.py
   # auto_update: false   # true = pull + hot-reload automatically
