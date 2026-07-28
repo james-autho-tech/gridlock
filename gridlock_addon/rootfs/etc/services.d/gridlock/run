@@ -18,6 +18,9 @@ else
     # file doesn't parse (e.g. an unsupported !secret tag), with no
     # obvious error pointing at why nothing gets published. Validate it
     # ourselves first so a broken file can't sit there forever.
+    # bashio sets `set -o errexit`, so a non-zero exit from this command
+    # substitution would silently kill the whole script right here —
+    # `|| true` neutralises that; $YAML_ERR itself carries the result.
     YAML_ERR="$(python3 -c "
 import sys, yaml
 try:
@@ -25,7 +28,7 @@ try:
 except Exception as exc:
     print(exc)
     sys.exit(1)
-" 2>&1)"
+" 2>&1)" || true
     if [ -n "$YAML_ERR" ]; then
         bashio::log.error "gridlock.yaml failed to parse: ${YAML_ERR}"
         bashio::log.error "Backing it up to gridlock.yaml.broken and restoring the template so the engine can start — re-apply your entity IDs to the fresh copy."
@@ -45,7 +48,10 @@ cp /opt/appdaemon/apps/gridlock/gridlock.py "${CONFIG_DIR}/apps/gridlock/gridloc
 # AppDaemon requires latitude/longitude/elevation/time_zone up front —
 # pull them from HA core's own config via the Supervisor API proxy
 # rather than hardcoding, with a short retry in case core isn't ready.
-python3 - "${CONFIG_DIR}" <<'PYEOF'
+# `if ! cmd; then` (not a bare command + separate `$?` check) because
+# bashio's `set -o errexit` would otherwise kill the script silently
+# the instant this exits non-zero, before the check below ever runs.
+if ! python3 - "${CONFIG_DIR}" <<'PYEOF'
 import json
 import os
 import sys
@@ -87,7 +93,7 @@ appdaemon_yaml = f"""appdaemon:
 with open(os.path.join(config_dir, "appdaemon.yaml"), "w") as f:
     f.write(appdaemon_yaml)
 PYEOF
-if [ $? -ne 0 ]; then
+then
     bashio::log.error "Failed to fetch HA core config — cannot start AppDaemon."
     exit 1
 fi
