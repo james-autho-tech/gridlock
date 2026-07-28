@@ -75,9 +75,11 @@ gridlock:
   ssen_postcode: "GU7 1"
 
   # --- Self-updater (optional, [REDACTED]-style) ---
-  # Fine-grained PAT with Contents:Read on this repo only.
-  # update_repo: "yourname/gridlock"
-  # update_token: "github_pat_..."
+  # Fine-grained PAT with Contents:Read on this repo only — use a
+  # separate read-only token from anything with write access, and
+  # keep it out of this file: reference AppDaemon's secrets.yaml.
+  # update_repo: "james-autho-tech/gridlock"
+  # update_token: !secret gridlock_pat
   # update_branch: main
-  # update_path: gridlock/gridlock.py
+  # update_path: gridlock.py    # repo root layout — see README
   # auto_update: false   # true = pull + hot-reload automatically

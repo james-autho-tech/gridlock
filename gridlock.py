@@ -129,7 +129,7 @@ class GridLock(hass.Hass):
         self.update_repo = a.get("update_repo")          # e.g. "you/gridlock"
         self.update_token = a.get("update_token")
         self.update_branch = a.get("update_branch", "main")
-        self.update_path = a.get("update_path", "gridlock/gridlock.py")
+        self.update_path = a.get("update_path", "gridlock.py")
         self.auto_update = bool(a.get("auto_update", False))
         if self.update_repo:
             self.run_every(self.check_update, "now", 6 * 3600)

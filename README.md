@@ -33,26 +33,37 @@ HA-side watchdog.
 
 ## Deploying from a private GitHub repo ([REDACTED]-style)
 
-Repo layout = this folder at the repo root (`gridlock/gridlock.py` etc).
+Repo layout = `gridlock.py`, `gridlock.yaml` etc at the repo **root**
+(this repo). Cloning it into `apps/` gives AppDaemon a `gridlock/`
+subfolder containing them, which it discovers automatically — no
+nesting needed inside the repo itself.
 
-**Initial deploy** — clone into AppDaemon's apps dir:
+**Initial deploy** — clone into AppDaemon's apps dir. Since the repo
+is private, use a fine-grained PAT scoped to **Contents: Read only**
+on this repo (a separate, minimal token from anything with write
+access — this one lives on the HA box):
 
     cd /addon_configs/a0d7b954_appdaemon/apps
-    git clone git@github.com:yourname/gridlock.git
+    git clone https://<READ_ONLY_TOKEN>@github.com/james-autho-tech/gridlock.git
 
-Use a read-only deploy key or a fine-grained PAT for the private repo.
-AppDaemon discovers `gridlock/gridlock.yaml` and `gridlock.py` in the
-subfolder automatically.
+This creates `apps/gridlock/gridlock.py` + `gridlock.yaml`, which
+AppDaemon picks up automatically. `dashboard.yaml` and
+`ha_support.yaml` also land in that folder but aren't AppDaemon
+apps — AppDaemon ignores YAML without a `module`/`class` key, so
+they're inert; move them out if you'd rather not see them there.
 
 **Updates** — two options:
 
-1. Built-in self-updater: set `update_repo` + `update_token` in
-   gridlock.yaml. The engine checks every 6h, publishes
-   `sensor.gridlock_version` (with `update_available`), notifies on a
-   new version, and with `auto_update: true` pulls the new file,
-   syntax-checks it, backs up the old one, and lets AppDaemon
-   hot-reload it. Bump the `VERSION` string in gridlock.py to release.
-2. Plain `git pull` (manually or via an HA shell_command).
+1. Built-in self-updater: set `update_repo` + `update_token` (same
+   read-only PAT works) in gridlock.yaml. The engine checks every 6h,
+   publishes `sensor.gridlock_version` (with `update_available`),
+   notifies on a new version, and with `auto_update: true` pulls the
+   new file, syntax-checks it, backs up the old one, and lets
+   AppDaemon hot-reload it. Bump the `VERSION` string in gridlock.py
+   and push to `main` to release. `update_path` defaults to
+   `gridlock.py`, matching this repo's root layout.
+2. Plain `git pull` (manually or via an HA shell_command) inside
+   `apps/gridlock/`.
 
 Do not commit your real `update_token` — keep gridlock.yaml with
 secrets out of the repo or use AppDaemon `secrets.yaml`
