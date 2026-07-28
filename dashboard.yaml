@@ -91,6 +91,9 @@ views:
                   <div class="gl-tile" style="--tile-c:var(--green)">
                     <div class="lbl"><ha-icon icon="mdi:trophy-outline"></ha-icon>Best tariff</div>
                     <div class="val" style="font-size:16px">{{ states('sensor.gridlock_tariff_compare') }}</div></div>
+                  <div class="gl-tile" style="--tile-c:var(--cyan)">
+                    <div class="lbl"><ha-icon icon="mdi:ev-station"></ha-icon>EV planned</div>
+                    <div class="val num" style="color:var(--cyan)">{{ states('sensor.gridlock_ev_dispatch_kwh') }} kWh</div></div>
                 </div>
                 <div class="gl-bar">
                   <div class="lbl"><span>Battery {{ soc | round(0) }}%</span>

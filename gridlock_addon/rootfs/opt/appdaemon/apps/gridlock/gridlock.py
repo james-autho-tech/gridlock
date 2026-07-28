@@ -3,7 +3,7 @@ import os
 import re
 import urllib.request
 
-VERSION = "2.5.2"
+VERSION = "2.6.0"
 
 import appdaemon.plugins.hass.hassapi as hass
 from datetime import datetime, timedelta, time as dtime
@@ -552,13 +552,30 @@ class GridLock(hass.Hass):
         return default
 
     def _dispatch_windows(self):
+        """[(start, end, charge_kwh)] from planned_dispatches — Octopus
+        reports charge_in_kwh as negative (energy flowing to the car),
+        normalised to positive here."""
         wins = []
         for d in self._attr_list(self.ent_dispatch, "planned_dispatches"):
             try:
-                wins.append((self._iso(d["start"]), self._iso(d["end"])))
-            except (KeyError, ValueError):
+                kwh = abs(float(d.get("charge_in_kwh", 0.0)))
+                wins.append((self._iso(d["start"]), self._iso(d["end"]), kwh))
+            except (KeyError, ValueError, TypeError):
                 continue
         return wins
+
+    def ev_dispatch_totals(self):
+        """(planned_kwh, completed_kwh) Octopus has told the charger to
+        deliver — planned = still upcoming, completed = already done."""
+        def total(attr):
+            s = 0.0
+            for d in self._attr_list(self.ent_dispatch, attr):
+                try:
+                    s += abs(float(d.get("charge_in_kwh", 0.0)))
+                except (TypeError, ValueError):
+                    continue
+            return round(s, 2)
+        return total("planned_dispatches"), total("completed_dispatches")
 
     def _pv_curve(self):
         """{slot_start_utc: kWh} from Solcast detailedForecast (kW avg/30min)."""
@@ -600,7 +617,8 @@ class GridLock(hass.Hass):
             s = base + timedelta(minutes=SLOT_MIN * i)
             e = s + timedelta(minutes=SLOT_MIN)
             imp = self._rate_at(imp_w, s, live_imp if i == 0 else self.default_import)
-            in_disp = any(ds <= s < de for ds, de in disp)
+            ev_win = next(((ds, de, kwh) for ds, de, kwh in disp if ds <= s < de), None)
+            in_disp = ev_win is not None
             if in_disp:
                 imp = min(imp, cheap_floor)  # IOG dispatch = off-peak price
             slots.append({
@@ -611,6 +629,7 @@ class GridLock(hass.Hass):
                 "pv": pv.get(s, 0.0),
                 "load": self._load_kwh(s),
                 "dispatch": in_disp,
+                "ev_kwh": ev_win[2] if ev_win else 0.0,
                 "charge": 0.0,   # grid->battery kWh (AC side)
                 "export": 0.0,   # battery->grid kWh (battery side)
             })
@@ -730,7 +749,12 @@ class GridLock(hass.Hass):
             return "EXPORT"
         return "ECO"
 
-    def publish_plan(self, slots, trace, cost, soc0):
+    def publish_plan(self, slots, trace, cost, soc0, live_label=None):
+        """live_label overrides row 0's displayed action — the optimiser
+        plan is theoretical (doesn't model EV/Storm/Session events), so
+        when a live override (e.g. "EV Protection") is actually being
+        applied for right now, the table should say so instead of
+        showing what the battery-only plan would otherwise have done."""
         fc = [{"x": s["start"].isoformat(), "y": trace[i]}
               for i, s in enumerate(slots)]
         self.set_state("sensor.gridlock_soc_forecast", state=str(trace[0]),
@@ -741,19 +765,24 @@ class GridLock(hass.Hass):
 
         rows = []
         for i, s in enumerate(slots):
-            act = self._action(s)
-            colour = {"CHARGE": "#22c55e", "EXPORT": "#38bdf8",
-                      "ECO": "#9ca3af"}[act]
+            if i == 0 and live_label:
+                act, colour = live_label, "#a78bfa"
+            else:
+                act = self._action(s)
+                colour = {"CHARGE": "#22c55e", "EXPORT": "#38bdf8",
+                          "ECO": "#9ca3af"}[act]
+            ev_cell = (f"<span style='color:#38bdf8'>⚡ {s['ev_kwh']:.2f}</span>"
+                       if s["dispatch"] else "—")
             rows.append(
                 f"<tr><td>{s['start'].astimezone().strftime('%a %H:%M')}</td>"
                 f"<td>{s['imp']*100:.1f}p</td><td>{s['exp']*100:.1f}p</td>"
                 f"<td>{s['pv']:.2f}</td><td>{s['load']:.2f}</td>"
-                f"<td style='color:{colour};font-weight:600'>{act}"
-                f"{' ⚡' if s['dispatch'] else ''}</td>"
+                f"<td style='color:{colour};font-weight:600'>{act}</td>"
+                f"<td>{ev_cell}</td>"
                 f"<td>{trace[i]:.0f}%</td></tr>")
         html = ("<table class='gridlock-plan'><tr><th>Slot</th><th>Import</th>"
                 "<th>Export</th><th>PV kWh</th><th>Load kWh</th><th>Action</th>"
-                "<th>SoC</th></tr>" + "".join(rows) + "</table>")
+                "<th>EV kWh</th><th>SoC</th></tr>" + "".join(rows) + "</table>")
         return html
 
     def publish_compare(self, slots, soc0, live_cost):
@@ -808,6 +837,15 @@ class GridLock(hass.Hass):
                                    "export_credit_today": exp,
                                    "standing_charge_today": stand})
 
+        planned_kwh, completed_kwh = self.ev_dispatch_totals()
+        self.set_state("sensor.gridlock_ev_dispatch_kwh",
+                       state=f"{planned_kwh:.2f}",
+                       attributes={"friendly_name": "GridLock EV Dispatch kWh",
+                                   "unit_of_measurement": "kWh",
+                                   "icon": "mdi:ev-station",
+                                   "planned_kwh": planned_kwh,
+                                   "completed_kwh": completed_kwh})
+
     # ------------------------------------------------------------------
     # MAIN LOOP
     # ------------------------------------------------------------------
@@ -846,12 +884,31 @@ class GridLock(hass.Hass):
 
         slots = self.build_slots(now)
         slots, trace, cost = self.optimise(slots, soc0)
-        plan_html = self.publish_plan(slots, trace, cost, soc0)
-        self.publish_compare(self.build_slots(now), soc0, cost)
-        self.plan = slots
 
         cur = slots[0]
         action = self._action(cur)
+        ev_active = bool(self.ent_ev) and self.get_state(self.ent_ev) == "on"
+        session = self.active_saving_session(now)
+        storm = self.storm_active()
+
+        # The optimiser's plan doesn't model EV/Storm/Session events, so
+        # for "now" specifically (row 0), show what will actually be
+        # applied below rather than the theoretical battery-only action.
+        if storm:
+            live_label = ("Storm Watch — Charging"
+                           if soc0 < self.storm_target_soc - 1
+                           else "Storm Watch — Holding")
+        elif session and soc0 > self.floor_soc + 5:
+            live_label = "Saving Session Export"
+        elif ev_active:
+            live_label = "Charging (EV concurrent)" if action == "CHARGE" else "EV Protection"
+        else:
+            live_label = None
+
+        plan_html = self.publish_plan(slots, trace, cost, soc0, live_label)
+        self.publish_compare(self.build_slots(now), soc0, cost)
+        self.plan = slots
+
         target = next((trace[i] for i, s in enumerate(slots)
                        if self._action(s) == "CHARGE" and
                        (i + 1 == len(slots) or
@@ -860,10 +917,6 @@ class GridLock(hass.Hass):
         self.set_state("sensor.gridlock_target_soc", state=str(int(target)),
                        attributes={"friendly_name": "GridLock Target SoC",
                                    "unit_of_measurement": "%"})
-
-        ev_active = bool(self.ent_ev) and self.get_state(self.ent_ev) == "on"
-        session = self.active_saving_session(now)
-        storm = self.storm_active()
 
         # --- Storm Watch overrides everything: charge & hold ---
         if storm:

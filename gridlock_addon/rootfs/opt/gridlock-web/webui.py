@@ -43,6 +43,7 @@ def build_status():
     target = ha_get_state("sensor.gridlock_target_soc")
     compare = ha_get_state("sensor.gridlock_tariff_compare") or {}
     net = ha_get_state("sensor.gridlock_calculated_net_cost_today") or {}
+    ev_dispatch = ha_get_state("sensor.gridlock_ev_dispatch_kwh") or {}
 
     return {
         "soc": as_float(soc),
@@ -56,6 +57,7 @@ def build_status():
         "net_today": net.get("state", "0.00"),
         "best_tariff": compare.get("state", "—"),
         "compare_html": compare.get("attributes", {}).get("compare_html") or "",
+        "ev_planned_kwh": ev_dispatch.get("state", "0.00"),
         "entities": {
             "Battery SoC": status_attrs.get("soc_entity"),
             "Import rate": status_attrs.get("import_rate_entity"),
@@ -174,6 +176,7 @@ async function refresh() {
         <div class="gl-tile"><div class="lbl">Today net</div><div class="val num">£${d.net_today}</div></div>
         <div class="gl-tile"><div class="lbl">Plan cost 24h</div><div class="val num" style="color:var(--violet)">£${Number(d.plan_cost_24h).toFixed(2)}</div></div>
         <div class="gl-tile"><div class="lbl">Best tariff</div><div class="val" style="font-size:16px">${d.best_tariff}</div></div>
+        <div class="gl-tile"><div class="lbl">EV planned</div><div class="val num" style="color:var(--cyan)">${d.ev_planned_kwh} kWh</div></div>
       </div>
       <div class="gl-bar">
         <div class="lbl"><span>Battery ${Math.round(d.soc)}%</span><span>target ${Math.round(d.target)}%</span></div>
