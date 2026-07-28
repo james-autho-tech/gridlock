@@ -7,10 +7,31 @@ CONFIG_DIR=/config
 
 mkdir -p "${CONFIG_DIR}/apps/gridlock"
 
-if [ ! -f "${CONFIG_DIR}/apps/gridlock/gridlock.yaml" ]; then
+GL_YAML="${CONFIG_DIR}/apps/gridlock/gridlock.yaml"
+
+if [ ! -f "$GL_YAML" ]; then
     bashio::log.info "No gridlock.yaml in addon_config yet — copying the template."
-    bashio::log.warning "Edit ${CONFIG_DIR}/apps/gridlock/gridlock.yaml and ${CONFIG_DIR}/secrets.yaml before trusting the plan."
-    cp /opt/appdaemon/apps/gridlock/gridlock.yaml.example "${CONFIG_DIR}/apps/gridlock/gridlock.yaml"
+    bashio::log.warning "Edit ${GL_YAML} before trusting the plan."
+    cp /opt/appdaemon/apps/gridlock/gridlock.yaml.example "$GL_YAML"
+else
+    # Self-heal: AppDaemon silently fails to load the whole app if this
+    # file doesn't parse (e.g. an unsupported !secret tag), with no
+    # obvious error pointing at why nothing gets published. Validate it
+    # ourselves first so a broken file can't sit there forever.
+    YAML_ERR="$(python3 -c "
+import sys, yaml
+try:
+    yaml.safe_load(open('$GL_YAML'))
+except Exception as exc:
+    print(exc)
+    sys.exit(1)
+" 2>&1)"
+    if [ -n "$YAML_ERR" ]; then
+        bashio::log.error "gridlock.yaml failed to parse: ${YAML_ERR}"
+        bashio::log.error "Backing it up to gridlock.yaml.broken and restoring the template so the engine can start — re-apply your entity IDs to the fresh copy."
+        cp "$GL_YAML" "${GL_YAML}.broken"
+        cp /opt/appdaemon/apps/gridlock/gridlock.yaml.example "$GL_YAML"
+    fi
 fi
 
 if [ ! -f "${CONFIG_DIR}/secrets.yaml" ]; then
