@@ -1,0 +1,83 @@
+gridlock:
+  module: gridlock
+  class: GridLock
+
+  # --- Hardware (Sigenergy) ---
+  sigen_mode: select.sigen_plant_remote_ems_control_mode
+  sigen_discharge_limit: number.sigen_plant_ess_max_discharging_limit
+  sigen_charge_limit: number.sigen_plant_ess_max_charging_limit
+  sigen_soc: sensor.sigen_inverter_battery_state_of_charge
+
+  # --- Inputs ---
+  ev_charging: switch.hypervolt_charging          # your existing entity
+  octopus_dispatch: binary_sensor.octopus_energy_a_0c909a7a_intelligent_dispatching
+  import_rate: sensor.octopus_energy_electricity_23l3183632_2500021340283_current_rate
+  export_rate: sensor.octopus_energy_electricity_23l3183632_2501000148658_export_current_rate
+  octopus_saving_events: event.octopus_energy_a_0c909a7a_octoplus_saving_session_events
+
+  # Rate curves (BottlecapDave rate events — check exact ids in Dev Tools)
+  import_rates_previous: event.octopus_energy_electricity_23l3183632_2500021340283_previous_day_rates
+  import_rates_today: event.octopus_energy_electricity_23l3183632_2500021340283_current_day_rates
+  import_rates_tomorrow: event.octopus_energy_electricity_23l3183632_2500021340283_next_day_rates
+  export_rates_today: event.octopus_energy_electricity_23l3183632_2501000148658_current_day_rates
+  export_rates_tomorrow: event.octopus_energy_electricity_23l3183632_2501000148658_next_day_rates
+
+  # Solcast half-hourly curves
+  solcast_detail_today: sensor.solcast_pv_forecast_forecast_today
+  solcast_detail_tomorrow: sensor.solcast_pv_forecast_forecast_tomorrow
+
+  # --- Model parameters ---
+  battery_capacity_kwh: 36.0
+  typical_daily_house_kwh: 12.0
+  inverter_efficiency: 0.90
+  battery_degradation_cost: 0.03      # £/kWh discharged
+  floor_soc: 10
+  charge_rate_kw: 10.0
+  discharge_rate_kw: 10.0
+  ev_concurrent_charge_kw: 5.0        # battery charge rate while Hypervolt active
+  default_import_rate: 0.2839
+  default_export_rate: 0.15
+  export_margin: 0.02
+  # Optional: 24 hourly load weights (relative). Uncomment to shape load:
+  # load_hourly_weights: [2,2,2,2,2,2,4,6,5,4,4,4,4,4,4,5,7,9,9,8,6,5,4,3]
+
+  # --- Tariff comparison ([REDACTED]-Compare style) ---
+  compare_tariffs:
+    - name: "Octopus Go"
+      import_default: 0.2662
+      import: [{ start: "00:30", end: "05:30", rate: 0.085 }]
+      export: 0.15
+    - name: "Flexible (SVT)"
+      import_default: 0.2703
+      export: 0.15
+    - name: "Cosy Octopus"
+      import_default: 0.2634
+      import:
+        - { start: "04:00", end: "07:00", rate: 0.1289 }
+        - { start: "13:00", end: "16:00", rate: 0.1289 }
+        - { start: "16:00", end: "19:00", rate: 0.3595 }
+        - { start: "22:00", end: "00:00", rate: 0.1289 }
+      export: 0.15
+    - name: "E7"
+      import_default: 0.2950
+      import: [{ start: "00:30", end: "07:30", rate: 0.13 }]
+      export: 0.04
+
+  # --- Storm Watch ---
+  # Charge to target and hold (no exports) while a weather alert is active.
+  # Works with MeteoAlarm (HA core integration, uses Met Office feed for UK):
+  storm_watch_entity:
+    - entity: binary_sensor.meteoalarm      # Met Office red warnings only
+      severity: ["Extreme"]
+  storm_watch_target_soc: 100
+  # SSEN Power Track — polled directly by the engine, no HA sensors needed.
+  # SET YOUR POSTCODE PREFIX (outward code + first digit of inward code):
+  ssen_postcode: "GU7 1"
+
+  # --- Self-updater (optional, [REDACTED]-style) ---
+  # Fine-grained PAT with Contents:Read on this repo only.
+  # update_repo: "yourname/gridlock"
+  # update_token: "github_pat_..."
+  # update_branch: main
+  # update_path: gridlock/gridlock.py
+  # auto_update: false   # true = pull + hot-reload automatically

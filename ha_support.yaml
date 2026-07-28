@@ -1,0 +1,63 @@
+# =====================================================================
+# GridLock — HA-side support (the ONLY config that must live in HA).
+# Save as /config/packages/gridlock.yaml
+# (needs `homeassistant: packages: !include_dir_named packages`)
+#
+# Why this can't be in the AppDaemon package:
+# - input_booleans must be real HA helpers to be toggleable in the UI
+# - the watchdog exists to survive AppDaemon itself dying, so it must
+#   run in HA, not AppDaemon
+# =====================================================================
+
+input_boolean:
+  gridlock_enable:
+    name: GridLock Engine Master Switch
+    icon: mdi:shield-flash
+    initial: on
+  gridlock_storm_watch:
+    name: GridLock Storm Watch (manual)
+    icon: mdi:weather-lightning-rainy
+
+automation:
+  - alias: "GridLock fail-safe watchdog"
+    description: >
+      If the GridLock heartbeat goes stale (AppDaemon crashed or hung),
+      revert the inverter to safe self-consumption defaults.
+    mode: single
+    triggers:
+      - trigger: time_pattern
+        minutes: "/5"
+    conditions:
+      - condition: template
+        value_template: >
+          {{ states('sensor.gridlock_heartbeat') in ['unknown', 'unavailable']
+             or (now() - (states('sensor.gridlock_heartbeat')
+                 | as_datetime(now()))).total_seconds() > 900 }}
+      - condition: template
+        value_template: >
+          {{ states('select.sigen_plant_remote_ems_control_mode')
+             != 'Maximum Self Consumption'
+             or states('number.sigen_plant_ess_max_discharging_limit')
+             | float(10) < 10 }}
+    actions:
+      - action: select.select_option
+        target:
+          entity_id: select.sigen_plant_remote_ems_control_mode
+        data:
+          option: "Maximum Self Consumption"
+      - action: number.set_value
+        target:
+          entity_id: number.sigen_plant_ess_max_discharging_limit
+        data:
+          value: 10
+      - action: number.set_value
+        target:
+          entity_id: number.sigen_plant_ess_max_charging_limit
+        data:
+          value: 10
+      - action: persistent_notification.create
+        data:
+          title: "GridLock watchdog fired"
+          message: >
+            GridLock heartbeat is stale — inverter reverted to
+            Maximum Self Consumption. Check the AppDaemon log.

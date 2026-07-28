@@ -1,0 +1,254 @@
+views:
+  - title: GridLock
+    type: panel
+    cards:
+      - type: grid
+        columns: 1
+        square: false
+        cards:
+          # ==========================================
+          # HERO — ENGINE READOUT
+          # ==========================================
+          - type: custom:html-template-card
+            ignore_line_breaks: true
+            content: |
+              <style>
+                .gl { --bg:#0b1220; --panel:#111a2c; --line:#1e293b; --ink:#e2e8f0;
+                      --dim:#64748b; --cyan:#38bdf8; --green:#34d399; --amber:#fbbf24;
+                      --violet:#a78bfa; --red:#f87171;
+                      background:var(--bg); border:1px solid var(--line); border-radius:14px;
+                      padding:20px 22px; font-family:system-ui,sans-serif; color:var(--ink); }
+                .gl .num { font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+                           font-variant-numeric:tabular-nums; }
+                .gl-top { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; }
+                .gl-state { font-size:26px; font-weight:700; letter-spacing:.5px; }
+                .gl-dot { width:10px; height:10px; border-radius:50%; display:inline-block;
+                          margin-right:8px; background:var(--green);
+                          box-shadow:0 0 8px var(--green); animation:glpulse 2s infinite; }
+                @keyframes glpulse { 50% { opacity:.45 } }
+                @media (prefers-reduced-motion:reduce){ .gl-dot{animation:none} }
+                .gl-reason { color:var(--dim); font-size:14px; }
+                .gl-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+                           gap:12px; margin-top:18px; }
+                .gl-tile { background:var(--panel); border:1px solid var(--line);
+                           border-radius:10px; padding:12px 14px; }
+                .gl-tile .lbl { font-size:11px; text-transform:uppercase; letter-spacing:1.2px;
+                                color:var(--dim); margin-bottom:6px; }
+                .gl-tile .val { font-size:22px; font-weight:600; }
+                .gl-bar { margin-top:16px; }
+                .gl-bar .lbl { font-size:11px; text-transform:uppercase; letter-spacing:1.2px;
+                               color:var(--dim); display:flex; justify-content:space-between; }
+                .gl-track { height:10px; border-radius:6px; background:var(--panel);
+                            border:1px solid var(--line); margin-top:6px; position:relative;
+                            overflow:hidden; }
+                .gl-fill { height:100%; border-radius:6px;
+                           background:linear-gradient(90deg,#0e7490,var(--green)); }
+                .gl-target { position:absolute; top:-2px; bottom:-2px; width:2px;
+                             background:var(--amber); }
+              </style>
+
+              {% set soc = states('sensor.sigen_inverter_battery_state_of_charge') | float(0) %}
+              {% set tgt = states('sensor.gridlock_target_soc') | float(0) %}
+              {% set imp = states('sensor.octopus_energy_electricity_23l3183632_2500021340283_current_rate') | float(0) %}
+              {% set exp = states('sensor.octopus_energy_electricity_23l3183632_2501000148658_export_current_rate') | float(0) %}
+              {% set st = states('sensor.gridlock_status') %}
+              <div class="gl">
+                <div class="gl-top">
+                  <span class="gl-state">
+                    <span class="gl-dot" style="background:
+                      {%- if 'Storm' in st %}var(--red)
+                      {%- elif 'Charg' in st %}var(--green)
+                      {%- elif 'Export' in st or 'Session' in st %}var(--cyan)
+                      {%- elif st in ['Disabled','unavailable','unknown'] %}var(--red)
+                      {%- else %}var(--violet){% endif -%};"></span>{{ st }}
+                  </span>
+                  <span class="gl-reason">{{ state_attr('sensor.gridlock_status','reason') or '—' }}</span>
+                </div>
+                <div class="gl-grid">
+                  <div class="gl-tile"><div class="lbl">Import</div>
+                    <div class="val num" style="color:var(--amber)">{{ '%.1f' | format(imp*100) }}p</div></div>
+                  <div class="gl-tile"><div class="lbl">Export</div>
+                    <div class="val num" style="color:var(--cyan)">{{ '%.1f' | format(exp*100) }}p</div></div>
+                  <div class="gl-tile"><div class="lbl">Today net</div>
+                    <div class="val num">£{{ states('sensor.gridlock_calculated_net_cost_today') }}</div></div>
+                  <div class="gl-tile"><div class="lbl">Plan cost 24h</div>
+                    <div class="val num" style="color:var(--violet)">£{{ '%.2f' | format(state_attr('sensor.gridlock_soc_forecast','plan_cost_24h') | float(0)) }}</div></div>
+                  <div class="gl-tile"><div class="lbl">Best tariff</div>
+                    <div class="val" style="font-size:16px">{{ states('sensor.gridlock_tariff_compare') }}</div></div>
+                </div>
+                <div class="gl-bar">
+                  <div class="lbl"><span>Battery {{ soc | round(0) }}%</span>
+                    <span>target {{ tgt | round(0) }}%</span></div>
+                  <div class="gl-track">
+                    <div class="gl-fill num" style="width:{{ soc }}%"></div>
+                    <div class="gl-target" style="left:{{ tgt }}%"></div>
+                  </div>
+                </div>
+              </div>
+
+          # ==========================================
+          # LIVE POWER FLOW
+          # ==========================================
+          - type: custom:power-flow-card-plus
+            entities:
+              battery:
+                state_of_charge: sensor.sigen_inverter_battery_state_of_charge
+                invert_state: true
+                entity: sensor.sigen_plant_battery_power
+              grid:
+                entity: sensor.octopus_energy_electricity_23l3183632_2500021340283_current_demand
+              solar:
+                entity: sensor.sigen_inverter_pv_power
+            w_decimals: 0
+            kw_decimals: 1
+
+          # ==========================================
+          # 24H PLAN CHART (3 axes: rate / SoC / solar)
+          # ==========================================
+          - type: custom:apexcharts-card
+            header:
+              show: true
+              title: 24h Plan
+              show_states: true
+              colorize_states: true
+            graph_span: 24h
+            span:
+              start: hour
+            now:
+              show: true
+              label: NOW
+              color: "#f87171"
+            yaxis:
+              - id: rate
+                min: 0
+                decimals: 2
+                apex_config:
+                  title: { text: "£/kWh" }
+              - id: soc
+                min: 0
+                max: 100
+                opposite: true
+                apex_config:
+                  title: { text: "SoC %" }
+              - id: solar
+                min: 0
+                show: false
+            apex_config:
+              chart: { height: 440px, background: "transparent" }
+              grid: { borderColor: "#1e293b" }
+              legend: { show: true, position: bottom }
+              tooltip: { shared: true }
+            series:
+              - entity: sensor.octopus_energy_electricity_23l3183632_2500021340283_current_rate
+                name: Import
+                yaxis_id: rate
+                type: line
+                color: "#fbbf24"
+                stroke_width: 2
+                curve: stepline
+              - entity: sensor.octopus_energy_electricity_23l3183632_2501000148658_export_current_rate
+                name: Export
+                yaxis_id: rate
+                type: line
+                color: "#38bdf8"
+                stroke_width: 2
+                stroke_dash: 3
+                curve: stepline
+              - entity: sensor.sigen_inverter_battery_state_of_charge
+                name: SoC
+                yaxis_id: soc
+                type: line
+                color: "#34d399"
+                stroke_width: 3
+              - entity: sensor.gridlock_soc_forecast
+                name: Predicted SoC
+                yaxis_id: soc
+                type: area
+                color: "#a78bfa"
+                opacity: 0.12
+                stroke_width: 2
+                stroke_dash: 4
+                data_generator: |
+                  return entity.attributes.forecast_data.map((e) =>
+                    [new Date(e.x).getTime(), e.y]);
+              - entity: sensor.gridlock_target_soc
+                name: Target
+                yaxis_id: soc
+                type: line
+                color: "#fbbf24"
+                stroke_width: 1
+                stroke_dash: 6
+              - entity: sensor.solcast_pv_forecast_power_now
+                name: Solar (kW)
+                yaxis_id: solar
+                type: area
+                color: "#facc15"
+                opacity: 0.2
+                stroke_width: 0
+                unit: kW
+                transform: "return x / 1000;"
+                float_precision: 2
+
+          # ==========================================
+          # 30-MIN ACTION TAPE
+          # ==========================================
+          - type: custom:html-template-card
+            ignore_line_breaks: true
+            content: |
+              <style>
+                .gl-wrap { background:#0b1220; border:1px solid #1e293b; border-radius:14px;
+                           padding:18px 20px; font-family:system-ui,sans-serif; }
+                .gl-h { font-size:12px; letter-spacing:1.6px; text-transform:uppercase;
+                        color:#64748b; margin-bottom:10px; }
+                .gl-scroll { max-height: 520px; overflow-y:auto; }
+                table.gridlock-plan { width:100%; border-collapse:collapse; font-size:13px;
+                        font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+                        font-variant-numeric:tabular-nums; }
+                table.gridlock-plan th { position:sticky; top:0; background:#0b1220;
+                        color:#64748b; font-size:11px; letter-spacing:1.2px;
+                        text-transform:uppercase; text-align:left; padding:8px 10px;
+                        border-bottom:1px solid #334155; }
+                table.gridlock-plan td { padding:7px 10px; border-bottom:1px solid #14203a;
+                        color:#cbd5e1; }
+                table.gridlock-plan tr:hover td { background:rgba(56,189,248,.05); }
+              </style>
+              <div class="gl-wrap">
+                <div class="gl-h">30-minute action tape</div>
+                <div class="gl-scroll">
+                  {% if state_attr('sensor.gridlock_status', 'plan_html') %}
+                    {{ state_attr('sensor.gridlock_status', 'plan_html') | safe }}
+                  {% else %}
+                    <div style="color:#64748b;padding:12px;">Waiting for first plan — the engine computes one every 5 minutes.</div>
+                  {% endif %}
+                </div>
+              </div>
+
+          # ==========================================
+          # TARIFF COMPARE
+          # ==========================================
+          - type: custom:html-template-card
+            ignore_line_breaks: true
+            content: |
+              <style>
+                .gl-wrap2 { background:#0b1220; border:1px solid #1e293b; border-radius:14px;
+                            padding:18px 20px; font-family:system-ui,sans-serif; }
+                .gl-h2 { font-size:12px; letter-spacing:1.6px; text-transform:uppercase;
+                         color:#64748b; margin-bottom:10px; }
+                .gl-wrap2 table.gridlock-plan { width:100%; border-collapse:collapse; font-size:14px;
+                         font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+                         font-variant-numeric:tabular-nums; }
+                .gl-wrap2 table.gridlock-plan th { color:#64748b; font-size:11px;
+                         letter-spacing:1.2px; text-transform:uppercase; text-align:left;
+                         padding:8px 10px; border-bottom:1px solid #334155; }
+                .gl-wrap2 table.gridlock-plan td { padding:9px 10px;
+                         border-bottom:1px solid #14203a; color:#cbd5e1; }
+                .gl-wrap2 table.gridlock-plan tr:first-child td { color:#34d399; font-weight:700; }
+              </style>
+              <div class="gl-wrap2">
+                <div class="gl-h2">Tariff comparison — same 24h, re-optimised per tariff</div>
+                {% if state_attr('sensor.gridlock_tariff_compare', 'compare_html') %}
+                  {{ state_attr('sensor.gridlock_tariff_compare', 'compare_html') | safe }}
+                {% else %}
+                  <div style="color:#64748b;padding:12px;">Waiting for first comparison run.</div>
+                {% endif %}
+              </div>
