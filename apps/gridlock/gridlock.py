@@ -3,7 +3,7 @@ import os
 import re
 import urllib.request
 
-VERSION = "2.2.0"
+VERSION = "2.2.1"
 
 import appdaemon.plugins.hass.hassapi as hass
 from datetime import datetime, timedelta, time as dtime
@@ -32,9 +32,7 @@ class GridLock(hass.Hass):
         self.ent_dispatch = a["octopus_dispatch"]
         self.ent_import_rate = a.get("import_rate")
         self.ent_export_rate = a.get("export_rate")
-        self.ent_saving_events = a.get(
-            "octopus_saving_events",
-            "event.octopus_energy_a_0c909a7a_octoplus_saving_session_events")
+        self.ent_saving_events = a.get("octopus_saving_events")
 
         # Rate curve sources (BottlecapDave rate events)
         self.ent_rates = [e for e in [
@@ -95,6 +93,12 @@ class GridLock(hass.Hass):
         # Comparison tariffs (see apps.yaml)
         self.compare_tariffs = a.get("compare_tariffs", [])
 
+        # Daily financials (Octopus Energy accumulative cost/standing
+        # charge sensors + a solar export value sensor if you have one)
+        self.ent_daily_import_cost = a.get("daily_import_cost_entity")
+        self.ent_daily_export_value = a.get("daily_export_value_entity")
+        self.ent_daily_standing_charge = a.get("daily_standing_charge_entity")
+
         self.plan = []          # list of slot dicts after optimisation
         self.plan_built_at = None
 
@@ -117,10 +121,10 @@ class GridLock(hass.Hass):
             elif ent:
                 self.log(f"Storm Watch entity '{ent}' not found",
                          level="WARNING")
-        if self.entity_exists(self.ent_saving_events):
+        if self.ent_saving_events and self.entity_exists(self.ent_saving_events):
             self.listen_state(self.on_saving_event, self.ent_saving_events)
             self.check_and_join_sessions()
-        else:
+        elif self.ent_saving_events:
             self.log(f"Saving Sessions entity '{self.ent_saving_events}' "
                      "not found", level="WARNING")
 
@@ -144,6 +148,8 @@ class GridLock(hass.Hass):
     # HELPERS
     # ------------------------------------------------------------------
     def get_float_state(self, entity_id, default=0.0):
+        if not entity_id:
+            return default
         try:
             v = self.get_state(entity_id)
             return float(v) if v not in (None, "unknown", "unavailable") else default
@@ -573,11 +579,9 @@ class GridLock(hass.Hass):
                                                for n, c in rows]})
 
     def update_daily_financials(self):
-        imp = self.get_float_state(
-            "sensor.octopus_energy_electricity_23l3183632_2500021340283_current_accumulative_cost")
-        exp = self.get_float_state("sensor.solar_export_value_today_numeric")
-        stand = self.get_float_state(
-            "sensor.octopus_energy_electricity_23l3183632_2500021340283_current_standing_charge")
+        imp = self.get_float_state(self.ent_daily_import_cost)
+        exp = self.get_float_state(self.ent_daily_export_value)
+        stand = self.get_float_state(self.ent_daily_standing_charge)
         net = round(imp + stand - exp, 2)
         self.set_state("sensor.gridlock_calculated_net_cost_today",
                        state=f"{net:.2f}",

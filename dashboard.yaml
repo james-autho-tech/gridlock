@@ -49,8 +49,8 @@ views:
 
               {% set soc = states('sensor.sigen_inverter_battery_state_of_charge') | float(0) %}
               {% set tgt = states('sensor.gridlock_target_soc') | float(0) %}
-              {% set imp = states('sensor.octopus_energy_electricity_23l3183632_2500021340283_current_rate') | float(0) %}
-              {% set exp = states('sensor.octopus_energy_electricity_23l3183632_2501000148658_export_current_rate') | float(0) %}
+              {% set imp = states('sensor.octopus_energy_electricity_YOURACCOUNT_YOURMPAN_IMPORT_current_rate') | float(0) %}
+              {% set exp = states('sensor.octopus_energy_electricity_YOURACCOUNT_YOURMPAN_EXPORT_export_current_rate') | float(0) %}
               {% set st = states('sensor.gridlock_status') %}
               <div class="gl">
                 <div class="gl-top">
@@ -96,7 +96,7 @@ views:
                 invert_state: true
                 entity: sensor.sigen_plant_battery_power
               grid:
-                entity: sensor.octopus_energy_electricity_23l3183632_2500021340283_current_demand
+                entity: sensor.octopus_energy_electricity_YOURACCOUNT_YOURMPAN_IMPORT_current_demand
               solar:
                 entity: sensor.sigen_inverter_pv_power
             w_decimals: 0
@@ -139,14 +139,14 @@ views:
               legend: { show: true, position: bottom }
               tooltip: { shared: true }
             series:
-              - entity: sensor.octopus_energy_electricity_23l3183632_2500021340283_current_rate
+              - entity: sensor.octopus_energy_electricity_YOURACCOUNT_YOURMPAN_IMPORT_current_rate
                 name: Import
                 yaxis_id: rate
                 type: line
                 color: "#fbbf24"
                 stroke_width: 2
                 curve: stepline
-              - entity: sensor.octopus_energy_electricity_23l3183632_2501000148658_export_current_rate
+              - entity: sensor.octopus_energy_electricity_YOURACCOUNT_YOURMPAN_EXPORT_export_current_rate
                 name: Export
                 yaxis_id: rate
                 type: line

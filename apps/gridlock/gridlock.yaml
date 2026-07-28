@@ -9,18 +9,26 @@ gridlock:
   sigen_soc: sensor.sigen_inverter_battery_state_of_charge
 
   # --- Inputs ---
+  # Replace YOURACCOUNT / YOURMPAN_IMPORT / YOURMPAN_EXPORT below with
+  # your own Octopus Energy (BottlecapDave) integration's entity IDs —
+  # check the exact ids under Developer Tools > States.
   ev_charging: switch.hypervolt_charging          # your existing entity
-  octopus_dispatch: binary_sensor.octopus_energy_a_0c909a7a_intelligent_dispatching
-  import_rate: sensor.octopus_energy_electricity_23l3183632_2500021340283_current_rate
-  export_rate: sensor.octopus_energy_electricity_23l3183632_2501000148658_export_current_rate
-  octopus_saving_events: event.octopus_energy_a_0c909a7a_octoplus_saving_session_events
+  octopus_dispatch: binary_sensor.octopus_energy_a_YOURACCOUNT_intelligent_dispatching
+  import_rate: sensor.octopus_energy_electricity_YOURACCOUNT_YOURMPAN_IMPORT_current_rate
+  export_rate: sensor.octopus_energy_electricity_YOURACCOUNT_YOURMPAN_EXPORT_export_current_rate
+  octopus_saving_events: event.octopus_energy_a_YOURACCOUNT_octoplus_saving_session_events
 
-  # Rate curves (BottlecapDave rate events — check exact ids in Dev Tools)
-  import_rates_previous: event.octopus_energy_electricity_23l3183632_2500021340283_previous_day_rates
-  import_rates_today: event.octopus_energy_electricity_23l3183632_2500021340283_current_day_rates
-  import_rates_tomorrow: event.octopus_energy_electricity_23l3183632_2500021340283_next_day_rates
-  export_rates_today: event.octopus_energy_electricity_23l3183632_2501000148658_current_day_rates
-  export_rates_tomorrow: event.octopus_energy_electricity_23l3183632_2501000148658_next_day_rates
+  # Rate curves (BottlecapDave rate events)
+  import_rates_previous: event.octopus_energy_electricity_YOURACCOUNT_YOURMPAN_IMPORT_previous_day_rates
+  import_rates_today: event.octopus_energy_electricity_YOURACCOUNT_YOURMPAN_IMPORT_current_day_rates
+  import_rates_tomorrow: event.octopus_energy_electricity_YOURACCOUNT_YOURMPAN_IMPORT_next_day_rates
+  export_rates_today: event.octopus_energy_electricity_YOURACCOUNT_YOURMPAN_EXPORT_current_day_rates
+  export_rates_tomorrow: event.octopus_energy_electricity_YOURACCOUNT_YOURMPAN_EXPORT_next_day_rates
+
+  # Daily financials (used for sensor.gridlock_calculated_net_cost_today)
+  daily_import_cost_entity: sensor.octopus_energy_electricity_YOURACCOUNT_YOURMPAN_IMPORT_current_accumulative_cost
+  daily_export_value_entity: sensor.solar_export_value_today_numeric
+  daily_standing_charge_entity: sensor.octopus_energy_electricity_YOURACCOUNT_YOURMPAN_IMPORT_current_standing_charge
 
   # Solcast half-hourly curves
   solcast_detail_today: sensor.solcast_pv_forecast_forecast_today
@@ -71,8 +79,9 @@ gridlock:
       severity: ["Extreme"]
   storm_watch_target_soc: 100
   # SSEN Power Track — polled directly by the engine, no HA sensors needed.
-  # SET YOUR POSTCODE PREFIX (outward code + first digit of inward code):
-  ssen_postcode: "GU7 1"
+  # SET YOUR POSTCODE PREFIX (outward code + first digit of inward code,
+  # e.g. "SW1A 1"). Leave blank to disable SSEN polling.
+  ssen_postcode: ""
 
   # --- Self-updater (optional; not needed if installed via HACS,
   #     which handles updates through the HA UI instead) ---

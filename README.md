@@ -29,8 +29,11 @@ add-on and [HACS](https://hacs.xyz/) already installed.
    `/addon_configs/a0d7b954_appdaemon/apps/gridlock/ha_support.yaml`)
    to `/config/packages/gridlock.yaml` (helpers + fail-safe watchdog
    — see comments for why this bit must live in HA). Restart HA.
-6. Paste `dashboard.yaml` into a new dashboard via the raw config
-   editor. Requires HACS frontend cards: apexcharts-card,
+6. In `dashboard.yaml`, replace the `YOURACCOUNT`/`YOURMPAN_IMPORT`/
+   `YOURMPAN_EXPORT` placeholders with the same entity IDs you used in
+   `gridlock.yaml` (Lovelace cards aren't templated, so this has to
+   match literally). Then paste it into a new dashboard via the raw
+   config editor. Requires HACS frontend cards: apexcharts-card,
    power-flow-card-plus, html-template-card.
 7. Watch the AppDaemon log for the startup banner and entity warnings.
 
