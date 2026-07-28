@@ -11,7 +11,7 @@ import urllib.request
 
 import yaml
 
-CONFIG_DIR = "/addon_config"
+CONFIG_DIR = "/config"
 SUPERVISOR_TOKEN = os.environ["SUPERVISOR_TOKEN"]
 PORT = 8099
 

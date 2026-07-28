@@ -3,7 +3,7 @@
 # Starts GridLock's bundled AppDaemon instance.
 # ==============================================================================
 
-CONFIG_DIR=/addon_config
+CONFIG_DIR=/config
 
 mkdir -p "${CONFIG_DIR}/apps/gridlock"
 
