@@ -3,7 +3,7 @@ import os
 import re
 import urllib.request
 
-VERSION = "2.5.0"
+VERSION = "2.5.1"
 
 import appdaemon.plugins.hass.hassapi as hass
 from datetime import datetime, timedelta, time as dtime
@@ -270,15 +270,21 @@ class GridLock(hass.Hass):
         return pool[0]
 
     def _find_load_entity(self):
-        """Discover a house-load/consumption power sensor — naming
-        varies by inverter integration, so match loosely on keywords
-        rather than a fixed prefix/suffix."""
+        """Discover a house-load power sensor — naming varies by
+        inverter integration, so match loosely on keywords rather than
+        a fixed prefix/suffix. The sampling logic needs an
+        instantaneous power (kW) reading, not a cumulative/daily
+        energy total, so "_power" entities are preferred when both
+        kinds show up (e.g. Sigenergy exposes total_load_power
+        alongside daily_load_consumption/total_load_consumption)."""
         flat = self._all_states_flat()
         candidates = [eid for eid in flat
                       if eid.startswith("sensor.") and "sigen" in eid
                       and ("load" in eid or "consumption" in eid)]
-        live = [eid for eid in candidates if self._is_live(flat.get(eid))]
-        pool = live or candidates
+        power_candidates = [eid for eid in candidates if "power" in eid]
+        pool_source = power_candidates or candidates
+        live = [eid for eid in pool_source if self._is_live(flat.get(eid))]
+        pool = live or pool_source
         if not pool:
             return None
         if len(pool) > 1:
