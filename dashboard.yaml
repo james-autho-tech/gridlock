@@ -20,6 +20,10 @@ views:
                       padding:20px 22px; font-family:system-ui,sans-serif; color:var(--ink); }
                 .gl .num { font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
                            font-variant-numeric:tabular-nums; }
+                .gl-eyebrow { display:flex; align-items:center; gap:6px; color:var(--cyan);
+                              font-size:11px; font-weight:600; letter-spacing:2.5px;
+                              text-transform:uppercase; margin-bottom:10px; }
+                .gl-eyebrow ha-icon { --mdc-icon-size:14px; }
                 .gl-top { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; }
                 .gl-state { font-size:26px; font-weight:700; letter-spacing:.5px; }
                 .gl-dot { width:10px; height:10px; border-radius:50%; display:inline-block;
@@ -31,9 +35,15 @@ views:
                 .gl-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
                            gap:12px; margin-top:18px; }
                 .gl-tile { background:var(--panel); border:1px solid var(--line);
-                           border-radius:10px; padding:12px 14px; }
-                .gl-tile .lbl { font-size:11px; text-transform:uppercase; letter-spacing:1.2px;
+                           border-radius:10px; padding:12px 14px; position:relative;
+                           overflow:hidden; }
+                .gl-tile::before { content:""; position:absolute; inset:0 0 auto 0; height:2px;
+                           background:linear-gradient(90deg,transparent,var(--tile-c,var(--cyan)),transparent);
+                           opacity:.6; }
+                .gl-tile .lbl { display:flex; align-items:center; gap:6px; font-size:11px;
+                                text-transform:uppercase; letter-spacing:1.2px;
                                 color:var(--dim); margin-bottom:6px; }
+                .gl-tile .lbl ha-icon { --mdc-icon-size:14px; color:var(--tile-c,var(--dim)); }
                 .gl-tile .val { font-size:22px; font-weight:600; }
                 .gl-bar { margin-top:16px; }
                 .gl-bar .lbl { font-size:11px; text-transform:uppercase; letter-spacing:1.2px;
@@ -53,6 +63,7 @@ views:
               {% set exp = states('sensor.octopus_energy_electricity_YOURACCOUNT_YOURMPAN_EXPORT_export_current_rate') | float(0) %}
               {% set st = states('sensor.gridlock_status') %}
               <div class="gl">
+                <div class="gl-eyebrow"><ha-icon icon="mdi:flash"></ha-icon>GridLock Engine</div>
                 <div class="gl-top">
                   <span class="gl-state">
                     <span class="gl-dot" style="background:
@@ -65,15 +76,20 @@ views:
                   <span class="gl-reason">{{ state_attr('sensor.gridlock_status','reason') or '—' }}</span>
                 </div>
                 <div class="gl-grid">
-                  <div class="gl-tile"><div class="lbl">Import</div>
+                  <div class="gl-tile" style="--tile-c:var(--amber)">
+                    <div class="lbl"><ha-icon icon="mdi:transmission-tower-import"></ha-icon>Import</div>
                     <div class="val num" style="color:var(--amber)">{{ '%.1f' | format(imp*100) }}p</div></div>
-                  <div class="gl-tile"><div class="lbl">Export</div>
+                  <div class="gl-tile" style="--tile-c:var(--cyan)">
+                    <div class="lbl"><ha-icon icon="mdi:transmission-tower-export"></ha-icon>Export</div>
                     <div class="val num" style="color:var(--cyan)">{{ '%.1f' | format(exp*100) }}p</div></div>
-                  <div class="gl-tile"><div class="lbl">Today net</div>
+                  <div class="gl-tile">
+                    <div class="lbl"><ha-icon icon="mdi:currency-gbp"></ha-icon>Today net</div>
                     <div class="val num">£{{ states('sensor.gridlock_calculated_net_cost_today') }}</div></div>
-                  <div class="gl-tile"><div class="lbl">Plan cost 24h</div>
+                  <div class="gl-tile" style="--tile-c:var(--violet)">
+                    <div class="lbl"><ha-icon icon="mdi:chart-timeline-variant"></ha-icon>Plan cost 24h</div>
                     <div class="val num" style="color:var(--violet)">£{{ '%.2f' | format(state_attr('sensor.gridlock_soc_forecast','plan_cost_24h') | float(0)) }}</div></div>
-                  <div class="gl-tile"><div class="lbl">Best tariff</div>
+                  <div class="gl-tile" style="--tile-c:var(--green)">
+                    <div class="lbl"><ha-icon icon="mdi:trophy-outline"></ha-icon>Best tariff</div>
                     <div class="val" style="font-size:16px">{{ states('sensor.gridlock_tariff_compare') }}</div></div>
                 </div>
                 <div class="gl-bar">
@@ -198,8 +214,10 @@ views:
               <style>
                 .gl-wrap { background:#0b1220; border:1px solid #1e293b; border-radius:14px;
                            padding:18px 20px; font-family:system-ui,sans-serif; }
-                .gl-h { font-size:12px; letter-spacing:1.6px; text-transform:uppercase;
+                .gl-h { display:flex; align-items:center; gap:6px; font-size:12px;
+                        letter-spacing:1.6px; text-transform:uppercase;
                         color:#64748b; margin-bottom:10px; }
+                .gl-h ha-icon { --mdc-icon-size:14px; color:#38bdf8; }
                 .gl-scroll { max-height: 520px; overflow-y:auto; }
                 table.gridlock-plan { width:100%; border-collapse:collapse; font-size:13px;
                         font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
@@ -213,7 +231,7 @@ views:
                 table.gridlock-plan tr:hover td { background:rgba(56,189,248,.05); }
               </style>
               <div class="gl-wrap">
-                <div class="gl-h">30-minute action tape</div>
+                <div class="gl-h"><ha-icon icon="mdi:timeline-clock-outline"></ha-icon>30-minute action tape</div>
                 <div class="gl-scroll">
                   {% if state_attr('sensor.gridlock_status', 'plan_html') %}
                     {{ state_attr('sensor.gridlock_status', 'plan_html') | safe }}
@@ -232,8 +250,10 @@ views:
               <style>
                 .gl-wrap2 { background:#0b1220; border:1px solid #1e293b; border-radius:14px;
                             padding:18px 20px; font-family:system-ui,sans-serif; }
-                .gl-h2 { font-size:12px; letter-spacing:1.6px; text-transform:uppercase;
+                .gl-h2 { display:flex; align-items:center; gap:6px; font-size:12px;
+                         letter-spacing:1.6px; text-transform:uppercase;
                          color:#64748b; margin-bottom:10px; }
+                .gl-h2 ha-icon { --mdc-icon-size:14px; color:#a78bfa; }
                 .gl-wrap2 table.gridlock-plan { width:100%; border-collapse:collapse; font-size:14px;
                          font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
                          font-variant-numeric:tabular-nums; }
@@ -245,7 +265,7 @@ views:
                 .gl-wrap2 table.gridlock-plan tr:first-child td { color:#34d399; font-weight:700; }
               </style>
               <div class="gl-wrap2">
-                <div class="gl-h2">Tariff comparison — same 24h, re-optimised per tariff</div>
+                <div class="gl-h2"><ha-icon icon="mdi:scale-balance"></ha-icon>Tariff comparison — same 24h, re-optimised per tariff</div>
                 {% if state_attr('sensor.gridlock_tariff_compare', 'compare_html') %}
                   {{ state_attr('sensor.gridlock_tariff_compare', 'compare_html') | safe }}
                 {% else %}
