@@ -3,7 +3,7 @@ import os
 import re
 import urllib.request
 
-VERSION = "2.4.0"
+VERSION = "2.4.1"
 
 import appdaemon.plugins.hass.hassapi as hass
 from datetime import datetime, timedelta, time as dtime
@@ -51,22 +51,24 @@ class GridLock(hass.Hass):
         self.ent_saving_events = a.get("octopus_saving_events") or self._find_entity(
             prefix="event.octopus_energy_", suffix="_octoplus_saving_session_events")
 
-        # Rate curve sources (BottlecapDave rate events) — derived from
-        # the import/export rate entities above so the account/MPAN
-        # always matches, rather than pattern-matched independently.
+        # Rate curve sources (BottlecapDave rate events) — matched off
+        # the import/export rate entities' account/MPAN stem, trying
+        # both known naming variants (see _find_sibling docstring).
+        import_stem = self._mpan_stem(self.ent_import_rate, "_current_rate")
+        export_stem = self._mpan_stem(self.ent_export_rate, "_export_current_rate")
         self.ent_rates = [e for e in [
-            a.get("import_rates_previous") or self._derive(
-                self.ent_import_rate, "_current_rate", "event", "_previous_day_rates"),
-            a.get("import_rates_today") or self._derive(
-                self.ent_import_rate, "_current_rate", "event", "_current_day_rates"),
-            a.get("import_rates_tomorrow") or self._derive(
-                self.ent_import_rate, "_current_rate", "event", "_next_day_rates"),
+            a.get("import_rates_previous") or self._find_sibling(
+                import_stem, "event", ["_previous_day_rates"]),
+            a.get("import_rates_today") or self._find_sibling(
+                import_stem, "event", ["_current_day_rates"]),
+            a.get("import_rates_tomorrow") or self._find_sibling(
+                import_stem, "event", ["_next_day_rates"]),
         ] if e]
         self.ent_export_rates = [e for e in [
-            a.get("export_rates_today") or self._derive(
-                self.ent_export_rate, "_export_current_rate", "event", "_current_day_rates"),
-            a.get("export_rates_tomorrow") or self._derive(
-                self.ent_export_rate, "_export_current_rate", "event", "_next_day_rates"),
+            a.get("export_rates_today") or self._find_sibling(
+                export_stem, "event", ["_export_current_day_rates", "_current_day_rates"]),
+            a.get("export_rates_tomorrow") or self._find_sibling(
+                export_stem, "event", ["_export_next_day_rates", "_next_day_rates"]),
         ] if e]
 
         # Solcast detailed curves
@@ -121,14 +123,14 @@ class GridLock(hass.Hass):
         # Comparison tariffs (see apps.yaml)
         self.compare_tariffs = a.get("compare_tariffs", [])
 
-        # Daily financials — also derived from the import rate entity;
-        # daily_export_value_entity has no fixed Octopus naming pattern
-        # (varies by inverter integration) so it stays explicit-only.
-        self.ent_daily_import_cost = a.get("daily_import_cost_entity") or self._derive(
-            self.ent_import_rate, "_current_rate", "sensor", "_current_accumulative_cost")
+        # Daily financials — also matched off the import rate entity's
+        # stem; daily_export_value_entity has no fixed Octopus naming
+        # pattern (varies by inverter integration) so stays explicit-only.
+        self.ent_daily_import_cost = a.get("daily_import_cost_entity") or self._find_sibling(
+            import_stem, "sensor", ["_current_accumulative_cost"])
         self.ent_daily_export_value = a.get("daily_export_value_entity")
-        self.ent_daily_standing_charge = a.get("daily_standing_charge_entity") or self._derive(
-            self.ent_import_rate, "_current_rate", "sensor", "_current_standing_charge")
+        self.ent_daily_standing_charge = a.get("daily_standing_charge_entity") or self._find_sibling(
+            import_stem, "sensor", ["_current_standing_charge"])
 
         self.plan = []          # list of slot dicts after optimisation
         self.plan_built_at = None
@@ -260,14 +262,35 @@ class GridLock(hass.Hass):
         return pool[0]
 
     @staticmethod
-    def _derive(base_entity, old_suffix, new_domain, new_suffix):
-        """Build a sibling entity_id off an already-discovered one, e.g.
-        sensor.x_current_rate -> event.x_previous_day_rates, keeping the
-        same account/MPAN without re-guessing it."""
-        if not base_entity or not base_entity.endswith(old_suffix):
+    def _mpan_stem(base_entity, suffix):
+        """Strip domain + a known suffix off an already-discovered
+        entity_id, e.g. 'sensor.x_ACCT_MPAN_current_rate' -> 'x_ACCT_MPAN',
+        to find sibling entities sharing the same meter."""
+        if not base_entity or not base_entity.endswith(suffix):
             return None
-        stem = base_entity.split(".", 1)[1][: -len(old_suffix)]
-        return f"{new_domain}.{stem}{new_suffix}"
+        return base_entity.split(".", 1)[1][: -len(suffix)]
+
+    def _find_sibling(self, stem, domain, suffixes):
+        """Find a sibling entity sharing `stem` (same account/MPAN) in
+        `domain`, trying each of `suffixes` in turn and preferring live
+        matches — Octopus's entity naming has changed between versions
+        (e.g. day-rate events sometimes gaining an "_export_" infix), so
+        this searches rather than blindly constructing one exact name."""
+        if not stem:
+            return None
+        flat = self._all_states_flat()
+        matches = [eid for eid in flat
+                   if eid.startswith(f"{domain}.") and stem in eid
+                   and any(eid.endswith(suf) for suf in suffixes)]
+        if not matches:
+            return None
+        live = [eid for eid in matches if self._is_live(flat.get(eid))]
+        pool = live or matches
+        if len(pool) > 1:
+            self.log(f"Multiple sibling entities for stem={stem!r} "
+                     f"suffixes={suffixes}: {pool} — set it explicitly "
+                     "if the wrong one gets picked.", level="WARNING")
+        return pool[0]
 
     def get_float_state(self, entity_id, default=0.0):
         if not entity_id:
