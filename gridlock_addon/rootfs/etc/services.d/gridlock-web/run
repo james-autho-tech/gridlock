@@ -1,0 +1,3 @@
+#!/usr/bin/with-contenv bashio
+bashio::log.info "Starting GridLock web UI on :8099..."
+exec python3 /opt/gridlock-web/webui.py
