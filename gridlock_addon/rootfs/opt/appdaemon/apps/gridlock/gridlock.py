@@ -3,7 +3,7 @@ import os
 import re
 import urllib.request
 
-VERSION = "2.4.1"
+VERSION = "2.5.0"
 
 import appdaemon.plugins.hass.hassapi as hass
 from datetime import datetime, timedelta, time as dtime
@@ -77,6 +77,14 @@ class GridLock(hass.Hass):
                   "sensor.solcast_pv_forecast_forecast_today"),
             a.get("solcast_detail_tomorrow",
                   "sensor.solcast_pv_forecast_forecast_tomorrow")] if e]
+
+        # Load — a discovered/configured power sensor (kW) gets sampled
+        # every tick and blended into a learned per-half-hour-of-day
+        # profile (persisted to disk), which _load_kwh() prefers once a
+        # slot has data. typical_daily_house_kwh / load_hourly_weights
+        # remain the fallback for slots not learned yet.
+        self.ent_load_power = a.get("load_power_entity") or self._find_load_entity()
+        self.load_profile = self._load_load_profile()
 
         # Parameters
         self.battery_kwh = float(a.get("battery_capacity_kwh", 10.0))
@@ -260,6 +268,59 @@ class GridLock(hass.Hass):
                      f"using {pool[0]} as a best guess for ev_charging — "
                      "verify this is correct.", level="WARNING")
         return pool[0]
+
+    def _find_load_entity(self):
+        """Discover a house-load/consumption power sensor — naming
+        varies by inverter integration, so match loosely on keywords
+        rather than a fixed prefix/suffix."""
+        flat = self._all_states_flat()
+        candidates = [eid for eid in flat
+                      if eid.startswith("sensor.") and "sigen" in eid
+                      and ("load" in eid or "consumption" in eid)]
+        live = [eid for eid in candidates if self._is_live(flat.get(eid))]
+        pool = live or candidates
+        if not pool:
+            return None
+        if len(pool) > 1:
+            self.log(f"Multiple candidate load-power entities found {pool} "
+                     "— set load_power_entity explicitly in gridlock.yaml.",
+                     level="WARNING")
+        return pool[0]
+
+    def _load_profile_path(self):
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "load_profile.json")
+
+    def _load_load_profile(self):
+        try:
+            with open(self._load_profile_path()) as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {}
+
+    def _save_load_profile(self):
+        try:
+            with open(self._load_profile_path(), "w") as f:
+                json.dump(self.load_profile, f)
+        except OSError:
+            pass
+
+    def _update_load_profile(self, now):
+        """Blend a tick's power reading into the learned per-half-hour-
+        of-day average kWh, exponentially — so it adapts over ~days
+        without one anomalous reading throwing a slot off."""
+        if not self.ent_load_power:
+            return
+        kw = self.get_float_state(self.ent_load_power, None)
+        if kw is None:
+            return
+        slot_idx = str(now.hour * 2 + (1 if now.minute >= 30 else 0))
+        observed_slot_kwh = kw * (5 / 60) * 6  # this tick covers ~5 min of a 30-min slot
+        alpha = 0.05
+        prev = self.load_profile.get(slot_idx)
+        self.load_profile[slot_idx] = (observed_slot_kwh if prev is None
+                                        else prev * (1 - alpha) + observed_slot_kwh * alpha)
+        self._save_load_profile()
 
     @staticmethod
     def _mpan_stem(base_entity, suffix):
@@ -506,6 +567,10 @@ class GridLock(hass.Hass):
         return curve
 
     def _load_kwh(self, slot_start):
+        slot_idx = str(slot_start.hour * 2 + (1 if slot_start.minute >= 30 else 0))
+        learned = self.load_profile.get(slot_idx)
+        if learned is not None:
+            return learned
         if self.load_weights and len(self.load_weights) == 24:
             w = float(self.load_weights[slot_start.hour])
             total = sum(float(x) for x in self.load_weights)
@@ -771,6 +836,7 @@ class GridLock(hass.Hass):
 
         now = self.get_now()
         soc0 = self.get_float_state(self.ent_soc, 50.0)
+        self._update_load_profile(now)
 
         slots = self.build_slots(now)
         slots, trace, cost = self.optimise(slots, soc0)

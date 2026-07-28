@@ -39,6 +39,13 @@ gridlock:
   solcast_detail_today: sensor.solcast_pv_forecast_forecast_today
   solcast_detail_tomorrow: sensor.solcast_pv_forecast_forecast_tomorrow
 
+  # House load: auto-discovered (a "sensor." entity containing "sigen"
+  # + "load"/"consumption") and learned into a per-half-hour-of-day
+  # profile over time — see load_hourly_weights below for the fallback
+  # used before enough data's been learned. Override only if discovery
+  # picks the wrong sensor or your inverter integration isn't Sigen:
+  # load_power_entity: sensor.sigen_plant_load_power
+
   # --- Model parameters ---
   battery_capacity_kwh: 36.0
   typical_daily_house_kwh: 12.0
@@ -51,7 +58,8 @@ gridlock:
   default_import_rate: 0.2839
   default_export_rate: 0.15
   export_margin: 0.02
-  # Optional: 24 hourly load weights (relative). Uncomment to shape load:
+  # Optional: 24 hourly load weights (relative), used only for slots
+  # the learned load profile above doesn't have data for yet:
   # load_hourly_weights: [2,2,2,2,2,2,4,6,5,4,4,4,4,4,4,5,7,9,9,8,6,5,4,3]
 
   # --- Tariff comparison ([REDACTED]-Compare style) ---
