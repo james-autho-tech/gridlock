@@ -3,7 +3,7 @@ import os
 import re
 import urllib.request
 
-VERSION = "2.8.1"
+VERSION = "2.8.2"
 
 import appdaemon.plugins.hass.hassapi as hass
 from datetime import datetime, timedelta, time as dtime
@@ -698,8 +698,17 @@ class GridLock(hass.Hass):
             imp = self._rate_at(imp_w, s, live_imp if i == 0 else self.default_import)
             ev_win = next(((ds, de, kwh) for ds, de, kwh in disp if ds <= s < de), None)
             in_disp = ev_win is not None
+            ev_slot_kwh = 0.0
             if in_disp:
                 imp = min(imp, cheap_floor)  # IOG dispatch = off-peak price
+                # charge_in_kwh is the total for the whole dispatch
+                # window, which Octopus merges across contiguous slots
+                # (e.g. one entry spanning 2.5h) — split evenly across
+                # however many 30-min slots that window actually covers,
+                # rather than showing the same window total on every one.
+                ds, de, win_kwh = ev_win
+                num_slots = max(1, round((de - ds).total_seconds() / (SLOT_MIN * 60)))
+                ev_slot_kwh = win_kwh / num_slots
             slots.append({
                 "start": s, "end": e,
                 "imp": imp,
@@ -708,7 +717,7 @@ class GridLock(hass.Hass):
                 "pv": pv.get(s, 0.0),
                 "load": self._load_kwh(s),
                 "dispatch": in_disp,
-                "ev_kwh": ev_win[2] if ev_win else 0.0,
+                "ev_kwh": ev_slot_kwh,
                 "charge": 0.0,   # grid->battery kWh (AC side)
                 "export": 0.0,   # battery->grid kWh (battery side)
             })
