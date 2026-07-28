@@ -3,7 +3,7 @@ import os
 import re
 import urllib.request
 
-VERSION = "2.5.1"
+VERSION = "2.5.2"
 
 import appdaemon.plugins.hass.hassapi as hass
 from datetime import datetime, timedelta, time as dtime
@@ -155,13 +155,13 @@ class GridLock(hass.Hass):
             self.listen_state(self.on_trigger, self.ent_ev)
         else:
             self.log("Could not discover a Hypervolt charging switch — set "
-                      "ev_charging explicitly in gridlock.yaml if you have "
+                      "ev_charging explicitly in apps.yaml if you have "
                       "an EV charger to protect.", level="WARNING")
         if self.ent_dispatch:
             self.listen_state(self.on_trigger, self.ent_dispatch)
         else:
             self.log("Could not discover an octopus_dispatch entity — set it "
-                      "explicitly in gridlock.yaml if you use Intelligent "
+                      "explicitly in apps.yaml if you use Intelligent "
                       "Octopus Go.", level="WARNING")
         self.listen_state(self.on_trigger, "input_boolean.gridlock_enable")
         if self.entity_exists("input_boolean.gridlock_storm_watch"):
@@ -241,7 +241,7 @@ class GridLock(hass.Hass):
         if len(pool) > 1:
             self.log(f"Multiple entities match (prefix={prefix!r} "
                      f"suffix={suffix!r} contains={contains!r}): {pool} — "
-                     "set it explicitly in gridlock.yaml/secrets.yaml to "
+                     "set it explicitly in apps.yaml/secrets.yaml to "
                      "disambiguate.", level="WARNING")
         return pool[0]
 
@@ -260,7 +260,7 @@ class GridLock(hass.Hass):
             return None
         if len(pool) > 1:
             self.log(f"Multiple Hypervolt charging switches found {pool} — "
-                     "set ev_charging explicitly in gridlock.yaml.",
+                     "set ev_charging explicitly in apps.yaml.",
                      level="WARNING")
             return pool[0]
         if not charging:
@@ -289,7 +289,7 @@ class GridLock(hass.Hass):
             return None
         if len(pool) > 1:
             self.log(f"Multiple candidate load-power entities found {pool} "
-                     "— set load_power_entity explicitly in gridlock.yaml.",
+                     "— set load_power_entity explicitly in apps.yaml.",
                      level="WARNING")
         return pool[0]
 

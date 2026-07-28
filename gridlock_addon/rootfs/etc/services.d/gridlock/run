@@ -7,12 +7,12 @@ CONFIG_DIR=/config
 
 mkdir -p "${CONFIG_DIR}/apps/gridlock"
 
-GL_YAML="${CONFIG_DIR}/apps/gridlock/gridlock.yaml"
+GL_YAML="${CONFIG_DIR}/apps/gridlock/apps.yaml"
 
 if [ ! -f "$GL_YAML" ]; then
-    bashio::log.info "No gridlock.yaml in addon_config yet — copying the template."
+    bashio::log.info "No apps.yaml in addon_config yet — copying the template."
     bashio::log.warning "Edit ${GL_YAML} before trusting the plan."
-    cp /opt/appdaemon/apps/gridlock/gridlock.yaml.example "$GL_YAML"
+    cp /opt/appdaemon/apps/gridlock/apps.yaml.example "$GL_YAML"
 else
     # Self-heal: AppDaemon silently fails to load the whole app if this
     # file doesn't parse (e.g. an unsupported !secret tag), with no
@@ -30,10 +30,10 @@ except Exception as exc:
     sys.exit(1)
 " 2>&1)" || true
     if [ -n "$YAML_ERR" ]; then
-        bashio::log.error "gridlock.yaml failed to parse: ${YAML_ERR}"
-        bashio::log.error "Backing it up to gridlock.yaml.broken and restoring the template so the engine can start — re-apply your entity IDs to the fresh copy."
+        bashio::log.error "apps.yaml failed to parse: ${YAML_ERR}"
+        bashio::log.error "Backing it up to apps.yaml.broken and restoring the template so the engine can start — re-apply your entity IDs to the fresh copy."
         cp "$GL_YAML" "${GL_YAML}.broken"
-        cp /opt/appdaemon/apps/gridlock/gridlock.yaml.example "$GL_YAML"
+        cp /opt/appdaemon/apps/gridlock/apps.yaml.example "$GL_YAML"
     fi
 fi
 
@@ -42,7 +42,7 @@ if [ ! -f "${CONFIG_DIR}/secrets.yaml" ]; then
 fi
 
 # gridlock.py always comes from the image (update by installing a new
-# add-on version), gridlock.yaml/secrets.yaml persist in addon_config.
+# add-on version), apps.yaml/secrets.yaml persist in addon_config.
 cp /opt/appdaemon/apps/gridlock/gridlock.py "${CONFIG_DIR}/apps/gridlock/gridlock.py"
 
 # AppDaemon requires latitude/longitude/elevation/time_zone up front —

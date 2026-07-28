@@ -30,10 +30,10 @@ add-on and [HACS](https://hacs.xyz/) already installed.
 2. Repository: `https://github.com/james-autho-tech/gridlock`,
    category: **AppDaemon**.
 3. Find "GridLock" in HACS → Automation and install. This places
-   `gridlock.py` + `gridlock.yaml` in AppDaemon's `apps/gridlock/`
+   `gridlock.py` + `apps.yaml` in AppDaemon's `apps/gridlock/`
    automatically. Updates then show up in HACS like any other
    integration.
-4. Edit `apps/gridlock/gridlock.yaml`: tariff rates and battery/model
+4. Edit `apps/gridlock/apps.yaml`: tariff rates and battery/model
    parameters. Octopus (import/export rate, IOG dispatch, saving
    sessions) and Hypervolt (EV charging) entities are **auto-discovered
    by naming pattern at startup** — nothing to set for a single
@@ -41,7 +41,7 @@ add-on and [HACS](https://hacs.xyz/) already installed.
    Ingress web UI's "Discovered entities" panel) for "Multiple
    entities match" warnings if you have more than one Octopus
    account/meter; only then set the affected key explicitly, as a
-   **literal value** directly in `gridlock.yaml`:
+   **literal value** directly in `apps.yaml`:
 
        import_rate: sensor.octopus_energy_electricity_AAAAAAAA_1111111111111_current_rate
 
@@ -64,7 +64,7 @@ add-on and [HACS](https://hacs.xyz/) already installed.
    — see comments for why this bit must live in HA). Restart HA.
 6. In `dashboard.yaml`, replace the `YOURACCOUNT`/`YOURMPAN_IMPORT`/
    `YOURMPAN_EXPORT` placeholders with the same entity IDs you used in
-   `gridlock.yaml` (Lovelace cards aren't templated, so this has to
+   `apps.yaml` (Lovelace cards aren't templated, so this has to
    match literally). Then paste it into a new dashboard via the raw
    config editor. Requires HACS frontend cards: apexcharts-card,
    power-flow-card-plus, html-template-card.
@@ -75,12 +75,12 @@ add-on and [HACS](https://hacs.xyz/) already installed.
 1. Clone or copy `apps/gridlock/` (this repo) into your AppDaemon
    `apps/` folder (HAOS add-on:
    `/addon_configs/a0d7b954_appdaemon/apps/`), so you end up with
-   `apps/gridlock/gridlock.py` + `gridlock.yaml`.
+   `apps/gridlock/gridlock.py` + `apps.yaml`.
 2. Steps 4–7 above.
 
 Optional built-in self-updater (not needed if you installed via
 HACS): set `update_repo` + `update_token` (literal value, not
-`!secret` — see note above) in gridlock.yaml with a fine-grained PAT
+`!secret` — see note above) in apps.yaml with a fine-grained PAT
 scoped to **Contents: Read only** on this repo. The engine checks
 every 6h,
 publishes `sensor.gridlock_version` (with `update_available`),

@@ -4,7 +4,7 @@ On first start the add-on writes a template config to its persistent
 storage folder, `/addon_configs/gridlock/` (visible over Samba / the
 File editor / Studio Code Server add-ons):
 
-- `apps/gridlock/gridlock.yaml` — model parameters, tariff rates.
+- `apps/gridlock/apps.yaml` — model parameters, tariff rates.
   Octopus and Hypervolt entities are **auto-discovered by naming
   pattern at startup** — nothing to set for a single account/meter/
   charger. If discovery is ambiguous (multiple Octopus accounts/
@@ -23,7 +23,7 @@ shows exactly which entity got picked for each field, with a red dot
 for anything not found. That's the fastest way to confirm discovery
 worked, or to see what to override if it picked the wrong one.
 
-Edit `gridlock.yaml`/`secrets.yaml` as needed, then **restart the
+Edit `apps.yaml`/`secrets.yaml` as needed, then **restart the
 add-on** to pick up changes.
 
 `gridlock.py` is reset from the add-on image on every start — don't

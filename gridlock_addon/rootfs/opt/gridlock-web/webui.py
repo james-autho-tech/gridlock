@@ -149,7 +149,7 @@ function renderEntities(entities) {
     <div class="gl-ent-row">
       <span class="gl-ent-dot" style="background:${eid ? 'var(--green)' : 'var(--red)'}"></span>
       <span class="gl-ent-label">${esc(label)}</span>
-      <span class="gl-ent-id num">${eid ? esc(eid) : 'not found — set explicitly in gridlock.yaml'}</span>
+      <span class="gl-ent-id num">${eid ? esc(eid) : 'not found — set explicitly in apps.yaml'}</span>
     </div>`).join('');
   return `<div class="gl-ent-list">${rows}</div>`;
 }
