@@ -74,12 +74,13 @@ gridlock:
   # SET YOUR POSTCODE PREFIX (outward code + first digit of inward code):
   ssen_postcode: "GU7 1"
 
-  # --- Self-updater (optional, [REDACTED]-style) ---
+  # --- Self-updater (optional; not needed if installed via HACS,
+  #     which handles updates through the HA UI instead) ---
   # Fine-grained PAT with Contents:Read on this repo only — use a
   # separate read-only token from anything with write access, and
   # keep it out of this file: reference AppDaemon's secrets.yaml.
   # update_repo: "james-autho-tech/gridlock"
   # update_token: !secret gridlock_pat
   # update_branch: main
-  # update_path: gridlock.py    # repo root layout — see README
+  # update_path: apps/gridlock/gridlock.py
   # auto_update: false   # true = pull + hot-reload automatically

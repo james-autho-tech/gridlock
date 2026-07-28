@@ -3,7 +3,7 @@ import os
 import re
 import urllib.request
 
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 
 import appdaemon.plugins.hass.hassapi as hass
 from datetime import datetime, timedelta, time as dtime
@@ -129,7 +129,7 @@ class GridLock(hass.Hass):
         self.update_repo = a.get("update_repo")          # e.g. "you/gridlock"
         self.update_token = a.get("update_token")
         self.update_branch = a.get("update_branch", "main")
-        self.update_path = a.get("update_path", "gridlock.py")
+        self.update_path = a.get("update_path", "apps/gridlock/gridlock.py")
         self.auto_update = bool(a.get("auto_update", False))
         if self.update_repo:
             self.run_every(self.check_update, "now", 6 * 3600)

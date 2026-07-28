@@ -8,18 +8,50 @@ Watch (Met Office red warnings, SSEN Power Track outages, manual toggle),
 tariff comparison, safe-mode fault handling, and a heartbeat for the
 HA-side watchdog.
 
-## Install
+## Install (HACS)
 
-1. Copy `gridlock.py` and `gridlock.yaml` into your AppDaemon `apps/`
-   folder (HAOS add-on: `/addon_configs/a0d7b954_appdaemon/apps/`).
-2. Edit `gridlock.yaml`: entity IDs, `ssen_postcode`, tariff rates.
-3. Copy `ha_support.yaml` to `/config/packages/gridlock.yaml`
-   (helpers + fail-safe watchdog — see comments for why this bit
-   must live in HA). Restart HA.
-4. Paste `dashboard.yaml` into a new dashboard via the raw config
-   editor. Requires HACS cards: apexcharts-card, power-flow-card-plus,
-   html-template-card.
-5. Watch the AppDaemon log for the startup banner and entity warnings.
+Requires the [AppDaemon](https://github.com/hassio-addons/addon-appdaemon)
+add-on and [HACS](https://hacs.xyz/) already installed.
+
+1. HACS → the three-dot menu (top right) → **Custom repositories**.
+2. Repository: `https://github.com/james-autho-tech/gridlock`,
+   category: **AppDaemon**. (Private repo — HACS needs its own
+   configured GitHub token to have read access to your account's
+   private repos, which it does by default since it's the same
+   account that set HACS up.)
+3. Find "GridLock" in HACS → AppDaemon and install. This places
+   `gridlock.py` + `gridlock.yaml` in AppDaemon's `apps/gridlock/`
+   automatically. Updates then show up in HACS like any other
+   integration.
+4. Edit `apps/gridlock/gridlock.yaml`: entity IDs, `ssen_postcode`,
+   tariff rates.
+5. Copy `ha_support.yaml` (from the HACS-managed clone, or
+   `/addon_configs/a0d7b954_appdaemon/apps/gridlock/ha_support.yaml`)
+   to `/config/packages/gridlock.yaml` (helpers + fail-safe watchdog
+   — see comments for why this bit must live in HA). Restart HA.
+6. Paste `dashboard.yaml` into a new dashboard via the raw config
+   editor. Requires HACS frontend cards: apexcharts-card,
+   power-flow-card-plus, html-template-card.
+7. Watch the AppDaemon log for the startup banner and entity warnings.
+
+## Install (manual, no HACS)
+
+1. Clone or copy `apps/gridlock/` (this repo) into your AppDaemon
+   `apps/` folder (HAOS add-on:
+   `/addon_configs/a0d7b954_appdaemon/apps/`), so you end up with
+   `apps/gridlock/gridlock.py` + `gridlock.yaml`.
+2. Steps 4–7 above.
+
+Optional built-in self-updater (not needed if you installed via
+HACS): set `update_repo` + `update_token` in gridlock.yaml with a
+fine-grained PAT scoped to **Contents: Read only** on this repo,
+kept out of the file via AppDaemon `secrets.yaml`
+(`update_token: !secret gridlock_pat`). The engine checks every 6h,
+publishes `sensor.gridlock_version` (with `update_available`),
+notifies on a new version, and with `auto_update: true` pulls the
+new file, syntax-checks it, backs up the old one, and lets AppDaemon
+hot-reload it. Bump `VERSION` in gridlock.py and push to `main` to
+release.
 
 ## Entities published
 
@@ -30,41 +62,3 @@ HA-side watchdog.
 - `sensor.gridlock_calculated_net_cost_today`
 - `sensor.gridlock_ssen_local_outages`
 - `sensor.gridlock_heartbeat`
-
-## Deploying from a private GitHub repo ([REDACTED]-style)
-
-Repo layout = `gridlock.py`, `gridlock.yaml` etc at the repo **root**
-(this repo). Cloning it into `apps/` gives AppDaemon a `gridlock/`
-subfolder containing them, which it discovers automatically — no
-nesting needed inside the repo itself.
-
-**Initial deploy** — clone into AppDaemon's apps dir. Since the repo
-is private, use a fine-grained PAT scoped to **Contents: Read only**
-on this repo (a separate, minimal token from anything with write
-access — this one lives on the HA box):
-
-    cd /addon_configs/a0d7b954_appdaemon/apps
-    git clone https://<READ_ONLY_TOKEN>@github.com/james-autho-tech/gridlock.git
-
-This creates `apps/gridlock/gridlock.py` + `gridlock.yaml`, which
-AppDaemon picks up automatically. `dashboard.yaml` and
-`ha_support.yaml` also land in that folder but aren't AppDaemon
-apps — AppDaemon ignores YAML without a `module`/`class` key, so
-they're inert; move them out if you'd rather not see them there.
-
-**Updates** — two options:
-
-1. Built-in self-updater: set `update_repo` + `update_token` (same
-   read-only PAT works) in gridlock.yaml. The engine checks every 6h,
-   publishes `sensor.gridlock_version` (with `update_available`),
-   notifies on a new version, and with `auto_update: true` pulls the
-   new file, syntax-checks it, backs up the old one, and lets
-   AppDaemon hot-reload it. Bump the `VERSION` string in gridlock.py
-   and push to `main` to release. `update_path` defaults to
-   `gridlock.py`, matching this repo's root layout.
-2. Plain `git pull` (manually or via an HA shell_command) inside
-   `apps/gridlock/`.
-
-Do not commit your real `update_token` — keep gridlock.yaml with
-secrets out of the repo or use AppDaemon `secrets.yaml`
-(`update_token: !secret gridlock_pat`).
