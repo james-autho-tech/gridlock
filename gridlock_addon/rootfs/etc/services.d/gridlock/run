@@ -1,0 +1,37 @@
+#!/usr/bin/with-contenv bashio
+# ==============================================================================
+# Starts GridLock's bundled AppDaemon instance.
+# ==============================================================================
+
+CONFIG_DIR=/addon_config
+TZ="$(bashio::info.timezone)"
+
+mkdir -p "${CONFIG_DIR}/apps/gridlock"
+
+if [ ! -f "${CONFIG_DIR}/apps/gridlock/gridlock.yaml" ]; then
+    bashio::log.info "No gridlock.yaml in addon_config yet — copying the template."
+    bashio::log.warning "Edit ${CONFIG_DIR}/apps/gridlock/gridlock.yaml and ${CONFIG_DIR}/secrets.yaml before trusting the plan."
+    cp /opt/appdaemon/apps/gridlock/gridlock.yaml.example "${CONFIG_DIR}/apps/gridlock/gridlock.yaml"
+fi
+
+if [ ! -f "${CONFIG_DIR}/secrets.yaml" ]; then
+    touch "${CONFIG_DIR}/secrets.yaml"
+fi
+
+# gridlock.py always comes from the image (update by installing a new
+# add-on version), gridlock.yaml/secrets.yaml persist in addon_config.
+cp /opt/appdaemon/apps/gridlock/gridlock.py "${CONFIG_DIR}/apps/gridlock/gridlock.py"
+
+cat > "${CONFIG_DIR}/appdaemon.yaml" <<EOF
+appdaemon:
+  time_zone: ${TZ}
+  plugins:
+    HASS:
+      type: hass
+      ha_url: http://supervisor/core
+      token: ${SUPERVISOR_TOKEN}
+EOF
+
+bashio::log.info "Starting AppDaemon..."
+cd "${CONFIG_DIR}" || exit 1
+exec appdaemon -c "${CONFIG_DIR}"

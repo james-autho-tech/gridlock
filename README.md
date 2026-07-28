@@ -8,18 +8,28 @@ Watch (Met Office red warnings, SSEN Power Track outages, manual toggle),
 tariff comparison, safe-mode fault handling, and a heartbeat for the
 HA-side watchdog.
 
-## Install (HACS)
+## Install (Supervisor add-on — no AppDaemon add-on needed)
+
+Bundles its own AppDaemon runtime, same distribution model as
+[REDACTED]'s `[REDACTED]_addon`. Settings → Add-ons → Add-on Store → ⋮ →
+**Repositories** → add `https://github.com/james-autho-tech/gridlock`
+→ find "GridLock" → Install. Config lives in
+`/addon_configs/gridlock/` once started — see
+[gridlock_addon/DOCS.md](gridlock_addon/DOCS.md).
+
+This path is newer/less battle-tested than the HACS route below —
+if the build fails, check the add-on's Supervisor log first (likely
+a stale base-image tag in `gridlock_addon/build.yaml`).
+
+## Install (HACS + existing AppDaemon add-on)
 
 Requires the [AppDaemon](https://github.com/hassio-addons/addon-appdaemon)
 add-on and [HACS](https://hacs.xyz/) already installed.
 
 1. HACS → the three-dot menu (top right) → **Custom repositories**.
 2. Repository: `https://github.com/james-autho-tech/gridlock`,
-   category: **AppDaemon**. (Private repo — HACS needs its own
-   configured GitHub token to have read access to your account's
-   private repos, which it does by default since it's the same
-   account that set HACS up.)
-3. Find "GridLock" in HACS → AppDaemon and install. This places
+   category: **AppDaemon**.
+3. Find "GridLock" in HACS → Automation and install. This places
    `gridlock.py` + `gridlock.yaml` in AppDaemon's `apps/gridlock/`
    automatically. Updates then show up in HACS like any other
    integration.

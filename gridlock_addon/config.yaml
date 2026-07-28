@@ -1,0 +1,22 @@
+name: GridLock
+version: "2.2.1"
+slug: gridlock
+description: Battery optimisation engine for Sigenergy + Octopus IOG (bundled AppDaemon)
+url: https://github.com/james-autho-tech/gridlock
+arch:
+  - aarch64
+  - amd64
+  - armv7
+  - armhf
+  - i386
+startup: application
+boot: auto
+init: false
+hassio_api: true
+homeassistant_api: true
+hassio_role: default
+map:
+  - addon_config:rw
+  - ssl
+options: {}
+schema: {}

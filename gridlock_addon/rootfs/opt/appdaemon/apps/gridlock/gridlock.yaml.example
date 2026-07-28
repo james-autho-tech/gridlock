@@ -1,0 +1,100 @@
+gridlock:
+  module: gridlock
+  class: GridLock
+
+  # --- Hardware (Sigenergy) ---
+  sigen_mode: select.sigen_plant_remote_ems_control_mode
+  sigen_discharge_limit: number.sigen_plant_ess_max_discharging_limit
+  sigen_charge_limit: number.sigen_plant_ess_max_charging_limit
+  sigen_soc: sensor.sigen_inverter_battery_state_of_charge
+
+  # --- Inputs ---
+  # The Octopus entity IDs below embed your account/MPAN, so they're
+  # pulled from AppDaemon's own secrets.yaml (NOT the same file as HA
+  # core's /config/secrets.yaml — this is AppDaemon's, e.g.
+  # /addon_configs/a0d7b954_appdaemon/secrets.yaml) rather than typed
+  # here directly. Add entries there, full entity ID as the value, e.g.:
+  #   gridlock_import_rate_entity: sensor.octopus_energy_electricity_A-XXXXXXXX_1234567890123_current_rate
+  # (check exact ids under Developer Tools > States).
+  ev_charging: switch.hypervolt_charging          # your existing entity
+  octopus_dispatch: !secret gridlock_octopus_dispatch_entity
+  import_rate: !secret gridlock_import_rate_entity
+  export_rate: !secret gridlock_export_rate_entity
+  octopus_saving_events: !secret gridlock_saving_events_entity
+
+  # Rate curves (BottlecapDave rate events)
+  import_rates_previous: !secret gridlock_import_rates_previous_entity
+  import_rates_today: !secret gridlock_import_rates_today_entity
+  import_rates_tomorrow: !secret gridlock_import_rates_tomorrow_entity
+  export_rates_today: !secret gridlock_export_rates_today_entity
+  export_rates_tomorrow: !secret gridlock_export_rates_tomorrow_entity
+
+  # Daily financials (used for sensor.gridlock_calculated_net_cost_today)
+  daily_import_cost_entity: !secret gridlock_daily_import_cost_entity
+  daily_export_value_entity: sensor.solar_export_value_today_numeric
+  daily_standing_charge_entity: !secret gridlock_daily_standing_charge_entity
+
+  # Solcast half-hourly curves
+  solcast_detail_today: sensor.solcast_pv_forecast_forecast_today
+  solcast_detail_tomorrow: sensor.solcast_pv_forecast_forecast_tomorrow
+
+  # --- Model parameters ---
+  battery_capacity_kwh: 36.0
+  typical_daily_house_kwh: 12.0
+  inverter_efficiency: 0.90
+  battery_degradation_cost: 0.03      # £/kWh discharged
+  floor_soc: 10
+  charge_rate_kw: 10.0
+  discharge_rate_kw: 10.0
+  ev_concurrent_charge_kw: 5.0        # battery charge rate while Hypervolt active
+  default_import_rate: 0.2839
+  default_export_rate: 0.15
+  export_margin: 0.02
+  # Optional: 24 hourly load weights (relative). Uncomment to shape load:
+  # load_hourly_weights: [2,2,2,2,2,2,4,6,5,4,4,4,4,4,4,5,7,9,9,8,6,5,4,3]
+
+  # --- Tariff comparison ([REDACTED]-Compare style) ---
+  compare_tariffs:
+    - name: "Octopus Go"
+      import_default: 0.2662
+      import: [{ start: "00:30", end: "05:30", rate: 0.085 }]
+      export: 0.15
+    - name: "Flexible (SVT)"
+      import_default: 0.2703
+      export: 0.15
+    - name: "Cosy Octopus"
+      import_default: 0.2634
+      import:
+        - { start: "04:00", end: "07:00", rate: 0.1289 }
+        - { start: "13:00", end: "16:00", rate: 0.1289 }
+        - { start: "16:00", end: "19:00", rate: 0.3595 }
+        - { start: "22:00", end: "00:00", rate: 0.1289 }
+      export: 0.15
+    - name: "E7"
+      import_default: 0.2950
+      import: [{ start: "00:30", end: "07:30", rate: 0.13 }]
+      export: 0.04
+
+  # --- Storm Watch ---
+  # Charge to target and hold (no exports) while a weather alert is active.
+  # Works with MeteoAlarm (HA core integration, uses Met Office feed for UK):
+  storm_watch_entity:
+    - entity: binary_sensor.meteoalarm      # Met Office red warnings only
+      severity: ["Extreme"]
+  storm_watch_target_soc: 100
+  # SSEN Power Track — polled directly by the engine, no HA sensors needed.
+  # Postcode prefix (outward code + first digit of inward code, e.g.
+  # "SW1A 1") — also via AppDaemon secrets.yaml, e.g. gridlock_postcode: "SW1A 1".
+  # Leave commented out to disable SSEN polling.
+  # ssen_postcode: !secret gridlock_postcode
+
+  # --- Self-updater (optional; not needed if installed via HACS,
+  #     which handles updates through the HA UI instead) ---
+  # Fine-grained PAT with Contents:Read on this repo only — use a
+  # separate read-only token from anything with write access, and
+  # keep it out of this file: reference AppDaemon's secrets.yaml.
+  # update_repo: "james-autho-tech/gridlock"
+  # update_token: !secret gridlock_pat
+  # update_branch: main
+  # update_path: apps/gridlock/gridlock.py
+  # auto_update: false   # true = pull + hot-reload automatically
