@@ -3,7 +3,7 @@ import os
 import re
 import urllib.request
 
-VERSION = "2.2.1"
+VERSION = "2.4.0"
 
 import appdaemon.plugins.hass.hassapi as hass
 from datetime import datetime, timedelta, time as dtime
@@ -28,18 +28,46 @@ class GridLock(hass.Hass):
         self.ent_soc = a["sigen_soc"]
 
         # Inputs
-        self.ent_ev = a["ev_charging"]
-        self.ent_dispatch = a["octopus_dispatch"]
-        self.ent_import_rate = a.get("import_rate")
-        self.ent_export_rate = a.get("export_rate")
-        self.ent_saving_events = a.get("octopus_saving_events")
+        self.ent_ev = a.get("ev_charging") or self._find_hypervolt_charging()
 
-        # Rate curve sources (BottlecapDave rate events)
+        # Octopus entities embed your account/MPAN in the entity_id
+        # itself, so instead of requiring them in config, discover them
+        # from the entity registry by naming pattern (BottlecapDave's
+        # Octopus Energy integration convention). Explicit config (or a
+        # secrets.yaml !secret ref) still wins if you set one — needed
+        # if you have multiple Octopus accounts/meters and discovery
+        # would be ambiguous.
+        # Dispatch/saving-events naming varies by integration version —
+        # some setups use "octopus_energy_a_<account>_", newer/device-
+        # linked ones use "octopus_energy_<device-uuid>_" — so match
+        # broadly on the stable suffix and let the live-state tiebreak
+        # in _find_entity sort out any dead/restored duplicates.
+        self.ent_dispatch = a.get("octopus_dispatch") or self._find_entity(
+            prefix="binary_sensor.octopus_energy_", suffix="_intelligent_dispatching")
+        self.ent_import_rate = a.get("import_rate") or self._find_entity(
+            prefix="sensor.octopus_energy_electricity_", suffix="_current_rate", avoid="export")
+        self.ent_export_rate = a.get("export_rate") or self._find_entity(
+            prefix="sensor.octopus_energy_electricity_", suffix="_export_current_rate")
+        self.ent_saving_events = a.get("octopus_saving_events") or self._find_entity(
+            prefix="event.octopus_energy_", suffix="_octoplus_saving_session_events")
+
+        # Rate curve sources (BottlecapDave rate events) — derived from
+        # the import/export rate entities above so the account/MPAN
+        # always matches, rather than pattern-matched independently.
         self.ent_rates = [e for e in [
-            a.get("import_rates_previous"), a.get("import_rates_today"),
-            a.get("import_rates_tomorrow")] if e]
+            a.get("import_rates_previous") or self._derive(
+                self.ent_import_rate, "_current_rate", "event", "_previous_day_rates"),
+            a.get("import_rates_today") or self._derive(
+                self.ent_import_rate, "_current_rate", "event", "_current_day_rates"),
+            a.get("import_rates_tomorrow") or self._derive(
+                self.ent_import_rate, "_current_rate", "event", "_next_day_rates"),
+        ] if e]
         self.ent_export_rates = [e for e in [
-            a.get("export_rates_today"), a.get("export_rates_tomorrow")] if e]
+            a.get("export_rates_today") or self._derive(
+                self.ent_export_rate, "_export_current_rate", "event", "_current_day_rates"),
+            a.get("export_rates_tomorrow") or self._derive(
+                self.ent_export_rate, "_export_current_rate", "event", "_next_day_rates"),
+        ] if e]
 
         # Solcast detailed curves
         self.ent_solcast = [e for e in [
@@ -93,11 +121,14 @@ class GridLock(hass.Hass):
         # Comparison tariffs (see apps.yaml)
         self.compare_tariffs = a.get("compare_tariffs", [])
 
-        # Daily financials (Octopus Energy accumulative cost/standing
-        # charge sensors + a solar export value sensor if you have one)
-        self.ent_daily_import_cost = a.get("daily_import_cost_entity")
+        # Daily financials — also derived from the import rate entity;
+        # daily_export_value_entity has no fixed Octopus naming pattern
+        # (varies by inverter integration) so it stays explicit-only.
+        self.ent_daily_import_cost = a.get("daily_import_cost_entity") or self._derive(
+            self.ent_import_rate, "_current_rate", "sensor", "_current_accumulative_cost")
         self.ent_daily_export_value = a.get("daily_export_value_entity")
-        self.ent_daily_standing_charge = a.get("daily_standing_charge_entity")
+        self.ent_daily_standing_charge = a.get("daily_standing_charge_entity") or self._derive(
+            self.ent_import_rate, "_current_rate", "sensor", "_current_standing_charge")
 
         self.plan = []          # list of slot dicts after optimisation
         self.plan_built_at = None
@@ -110,8 +141,18 @@ class GridLock(hass.Hass):
             self.set_state("input_boolean.gridlock_enable", state="on")
 
         # Triggers
-        self.listen_state(self.on_trigger, self.ent_ev)
-        self.listen_state(self.on_trigger, self.ent_dispatch)
+        if self.ent_ev:
+            self.listen_state(self.on_trigger, self.ent_ev)
+        else:
+            self.log("Could not discover a Hypervolt charging switch — set "
+                      "ev_charging explicitly in gridlock.yaml if you have "
+                      "an EV charger to protect.", level="WARNING")
+        if self.ent_dispatch:
+            self.listen_state(self.on_trigger, self.ent_dispatch)
+        else:
+            self.log("Could not discover an octopus_dispatch entity — set it "
+                      "explicitly in gridlock.yaml if you use Intelligent "
+                      "Octopus Go.", level="WARNING")
         self.listen_state(self.on_trigger, "input_boolean.gridlock_enable")
         if self.entity_exists("input_boolean.gridlock_storm_watch"):
             self.listen_state(self.on_trigger, "input_boolean.gridlock_storm_watch")
@@ -147,6 +188,87 @@ class GridLock(hass.Hass):
     # ------------------------------------------------------------------
     # HELPERS
     # ------------------------------------------------------------------
+    def _all_states_flat(self):
+        """Flat {entity_id: state_dict} for every entity currently known
+        to HA, regardless of which shape self.get_state() returns."""
+        try:
+            states = self.get_state() or {}
+        except Exception:  # noqa: BLE001 — discovery is best-effort
+            return {}
+        flat = {}
+        for key, value in states.items():
+            if isinstance(value, dict) and "state" not in value:
+                flat.update(value)  # {domain: {entity_id: {...}}}
+            else:
+                flat[key] = value  # already flat {entity_id: {...}}
+        return flat
+
+    def _all_entity_ids(self):
+        return list(self._all_states_flat().keys())
+
+    @staticmethod
+    def _is_live(state_obj):
+        state = str((state_obj or {}).get("state", "")).lower()
+        return state not in ("", "unavailable", "unknown")
+
+    def _find_entity(self, prefix=None, suffix=None, contains=None, avoid=None):
+        """Discover a single entity_id by prefix/suffix/substring, e.g.
+        for the Octopus Energy integration's account/MPAN-in-entity_id
+        naming. Some setups end up with a dead/restored duplicate
+        alongside the live entity (e.g. after re-linking an integration)
+        — when multiple names match, prefer ones that aren't
+        unavailable/unknown before falling back to "just pick one"."""
+        flat = self._all_states_flat()
+        matches = [eid for eid in flat
+                   if (not prefix or eid.startswith(prefix))
+                   and (not suffix or eid.endswith(suffix))
+                   and (not contains or contains in eid)
+                   and (not avoid or avoid not in eid)]
+        if not matches:
+            return None
+        live = [eid for eid in matches if self._is_live(flat.get(eid))]
+        pool = live or matches
+        if len(pool) > 1:
+            self.log(f"Multiple entities match (prefix={prefix!r} "
+                     f"suffix={suffix!r} contains={contains!r}): {pool} — "
+                     "set it explicitly in gridlock.yaml/secrets.yaml to "
+                     "disambiguate.", level="WARNING")
+        return pool[0]
+
+    def _find_hypervolt_charging(self):
+        """Discover a Hypervolt charging switch — naming varies (some
+        installs suffix with a device id), so match loosely rather than
+        by a fixed prefix/suffix like the Octopus entities."""
+        flat = self._all_states_flat()
+        candidates = [eid for eid in flat
+                      if eid.startswith("switch.") and "hypervolt" in eid]
+        charging = [eid for eid in candidates if "charging" in eid]
+        pool = charging or candidates
+        live = [eid for eid in pool if self._is_live(flat.get(eid))]
+        pool = live or pool
+        if not pool:
+            return None
+        if len(pool) > 1:
+            self.log(f"Multiple Hypervolt charging switches found {pool} — "
+                     "set ev_charging explicitly in gridlock.yaml.",
+                     level="WARNING")
+            return pool[0]
+        if not charging:
+            self.log(f"No 'charging' switch found among Hypervolt entities; "
+                     f"using {pool[0]} as a best guess for ev_charging — "
+                     "verify this is correct.", level="WARNING")
+        return pool[0]
+
+    @staticmethod
+    def _derive(base_entity, old_suffix, new_domain, new_suffix):
+        """Build a sibling entity_id off an already-discovered one, e.g.
+        sensor.x_current_rate -> event.x_previous_day_rates, keeping the
+        same account/MPAN without re-guessing it."""
+        if not base_entity or not base_entity.endswith(old_suffix):
+            return None
+        stem = base_entity.split(".", 1)[1][: -len(old_suffix)]
+        return f"{new_domain}.{stem}{new_suffix}"
+
     def get_float_state(self, entity_id, default=0.0):
         if not entity_id:
             return default
@@ -644,7 +766,7 @@ class GridLock(hass.Hass):
                        attributes={"friendly_name": "GridLock Target SoC",
                                    "unit_of_measurement": "%"})
 
-        ev_active = self.get_state(self.ent_ev) == "on"
+        ev_active = bool(self.ent_ev) and self.get_state(self.ent_ev) == "on"
         session = self.active_saving_session(now)
         storm = self.storm_active()
 
@@ -719,4 +841,16 @@ class GridLock(hass.Hass):
                        attributes={"friendly_name": "GridLock Status",
                                    "icon": "mdi:brain",
                                    "action": reason, "reason": reason,
-                                   "plan_html": plan_html})
+                                   "plan_html": plan_html,
+                                   # published so the Ingress web UI (and
+                                   # anything else) can show/confirm the
+                                   # (possibly auto-discovered) source
+                                   # entities actually being used
+                                   "soc_entity": self.ent_soc,
+                                   "import_rate_entity": self.ent_import_rate,
+                                   "export_rate_entity": self.ent_export_rate,
+                                   "ev_entity": self.ent_ev,
+                                   "dispatch_entity": self.ent_dispatch,
+                                   "saving_events_entity": self.ent_saving_events,
+                                   "daily_import_cost_entity": self.ent_daily_import_cost,
+                                   "daily_standing_charge_entity": self.ent_daily_standing_charge})

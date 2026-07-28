@@ -33,26 +33,27 @@ add-on and [HACS](https://hacs.xyz/) already installed.
    `gridlock.py` + `gridlock.yaml` in AppDaemon's `apps/gridlock/`
    automatically. Updates then show up in HACS like any other
    integration.
-4. Edit `apps/gridlock/gridlock.yaml`: tariff rates, and add the
-   account-identifying entity IDs to AppDaemon's own `secrets.yaml`
+4. Edit `apps/gridlock/gridlock.yaml`: tariff rates and battery/model
+   parameters. Octopus (import/export rate, IOG dispatch, saving
+   sessions) and Hypervolt (EV charging) entities are **auto-discovered
+   by naming pattern at startup** — nothing to set for a single
+   account/meter/charger. Check the AppDaemon log (or the add-on's
+   Ingress web UI's "Discovered entities" panel) for "Multiple
+   entities match" warnings if you have more than one Octopus
+   account/meter; only then set the affected key explicitly — either
+   directly in `gridlock.yaml`, or via AppDaemon's own `secrets.yaml`
    (`/addon_configs/a0d7b954_appdaemon/secrets.yaml` — a different
-   file from HA core's `/config/secrets.yaml`), e.g.:
+   file from HA core's `/config/secrets.yaml`) with a `!secret` ref if
+   you'd rather not commit the value:
 
-       gridlock_octopus_dispatch_entity: binary_sensor.octopus_energy_a_AAAAAAAA_intelligent_dispatching
+       # in secrets.yaml:
        gridlock_import_rate_entity: sensor.octopus_energy_electricity_AAAAAAAA_1111111111111_current_rate
-       gridlock_export_rate_entity: sensor.octopus_energy_electricity_AAAAAAAA_2222222222222_export_current_rate
-       gridlock_saving_events_entity: event.octopus_energy_a_AAAAAAAA_octoplus_saving_session_events
-       gridlock_import_rates_previous_entity: event.octopus_energy_electricity_AAAAAAAA_1111111111111_previous_day_rates
-       gridlock_import_rates_today_entity: event.octopus_energy_electricity_AAAAAAAA_1111111111111_current_day_rates
-       gridlock_import_rates_tomorrow_entity: event.octopus_energy_electricity_AAAAAAAA_1111111111111_next_day_rates
-       gridlock_export_rates_today_entity: event.octopus_energy_electricity_AAAAAAAA_2222222222222_current_day_rates
-       gridlock_export_rates_tomorrow_entity: event.octopus_energy_electricity_AAAAAAAA_2222222222222_next_day_rates
-       gridlock_daily_import_cost_entity: sensor.octopus_energy_electricity_AAAAAAAA_1111111111111_current_accumulative_cost
-       gridlock_daily_standing_charge_entity: sensor.octopus_energy_electricity_AAAAAAAA_1111111111111_current_standing_charge
-       gridlock_postcode: "SW1A 1"   # optional, enables SSEN Power Track polling
+       # in gridlock.yaml:
+       import_rate: !secret gridlock_import_rate_entity
 
-   This file is local to the AppDaemon install and never touched by
-   git/HACS, so your account/MPAN/postcode never end up in the repo.
+   Optional postcode for SSEN Power Track (same secrets.yaml pattern):
+   `ssen_postcode: !secret gridlock_postcode` with
+   `gridlock_postcode: "SW1A 1"` in secrets.yaml.
 5. Copy `ha_support.yaml` (from the HACS-managed clone, or
    `/addon_configs/a0d7b954_appdaemon/apps/gridlock/ha_support.yaml`)
    to `/config/packages/gridlock.yaml` (helpers + fail-safe watchdog

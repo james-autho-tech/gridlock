@@ -4,14 +4,23 @@ On first start the add-on writes a template config to its persistent
 storage folder, `/addon_configs/gridlock/` (visible over Samba / the
 File editor / Studio Code Server add-ons):
 
-- `apps/gridlock/gridlock.yaml` — model parameters, tariff rates,
-  `!secret`-referenced entity IDs.
-- `secrets.yaml` — put the account-identifying entity IDs here (same
-  `!secret` pattern as Home Assistant core, but this file is separate
-  from `/config/secrets.yaml`). See the main repo README for the
-  exact keys expected (`gridlock_import_rate_entity`, etc).
+- `apps/gridlock/gridlock.yaml` — model parameters, tariff rates.
+  Octopus and Hypervolt entities are **auto-discovered by naming
+  pattern at startup** — nothing to set for a single account/meter/
+  charger.
+- `secrets.yaml` — only needed if discovery is ambiguous (multiple
+  Octopus accounts/meters) or you want the SSEN postcode kept out of
+  `gridlock.yaml`. Same `!secret` pattern as Home Assistant core, but
+  this file is separate from `/config/secrets.yaml`.
 
-Edit both, then **restart the add-on** to pick up changes.
+Open the add-on's sidebar panel (once Ingress is enabled via "Show in
+sidebar" on this add-on's Info page) — the "Discovered entities" card
+shows exactly which entity got picked for each field, with a red dot
+for anything not found. That's the fastest way to confirm discovery
+worked, or to see what to override if it picked the wrong one.
+
+Edit `gridlock.yaml`/`secrets.yaml` as needed, then **restart the
+add-on** to pick up changes.
 
 `gridlock.py` is reset from the add-on image on every start — don't
 hand-edit it in `addon_config`, it won't persist across restarts.

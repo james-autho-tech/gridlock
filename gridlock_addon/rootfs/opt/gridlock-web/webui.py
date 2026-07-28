@@ -9,43 +9,8 @@ import socketserver
 import urllib.error
 import urllib.request
 
-import yaml
-
-CONFIG_DIR = "/config"
 SUPERVISOR_TOKEN = os.environ["SUPERVISOR_TOKEN"]
 PORT = 8099
-
-
-def load_secrets():
-    path = os.path.join(CONFIG_DIR, "secrets.yaml")
-    if not os.path.exists(path):
-        return {}
-    with open(path) as f:
-        return yaml.safe_load(f) or {}
-
-
-def load_entity_ids():
-    secrets = load_secrets()
-
-    class SecretLoader(yaml.SafeLoader):
-        pass
-
-    def secret_constructor(loader, node):
-        return secrets.get(loader.construct_scalar(node), "")
-
-    SecretLoader.add_constructor("!secret", secret_constructor)
-
-    path = os.path.join(CONFIG_DIR, "apps", "gridlock", "gridlock.yaml")
-    if not os.path.exists(path):
-        return {}
-    with open(path) as f:
-        cfg = (yaml.load(f, Loader=SecretLoader) or {}).get("gridlock", {})
-
-    return {
-        "soc": cfg.get("sigen_soc"),
-        "import_rate": cfg.get("import_rate"),
-        "export_rate": cfg.get("export_rate"),
-    }
 
 
 def ha_get_state(entity_id):
@@ -69,11 +34,11 @@ def as_float(state_obj, default=0.0):
 
 
 def build_status():
-    ids = load_entity_ids()
-    soc = ha_get_state(ids.get("soc"))
-    imp = ha_get_state(ids.get("import_rate"))
-    exp = ha_get_state(ids.get("export_rate"))
     status = ha_get_state("sensor.gridlock_status") or {}
+    status_attrs = status.get("attributes", {})
+    soc = ha_get_state(status_attrs.get("soc_entity"))
+    imp = ha_get_state(status_attrs.get("import_rate_entity"))
+    exp = ha_get_state(status_attrs.get("export_rate_entity"))
     forecast = ha_get_state("sensor.gridlock_soc_forecast") or {}
     target = ha_get_state("sensor.gridlock_target_soc")
     compare = ha_get_state("sensor.gridlock_tariff_compare") or {}
@@ -85,12 +50,22 @@ def build_status():
         "import_p": as_float(imp) * 100,
         "export_p": as_float(exp) * 100,
         "state": status.get("state", "unknown"),
-        "reason": status.get("attributes", {}).get("reason") or "—",
-        "plan_html": status.get("attributes", {}).get("plan_html") or "",
+        "reason": status_attrs.get("reason") or "—",
+        "plan_html": status_attrs.get("plan_html") or "",
         "plan_cost_24h": forecast.get("attributes", {}).get("plan_cost_24h", 0),
         "net_today": net.get("state", "0.00"),
         "best_tariff": compare.get("state", "—"),
         "compare_html": compare.get("attributes", {}).get("compare_html") or "",
+        "entities": {
+            "Battery SoC": status_attrs.get("soc_entity"),
+            "Import rate": status_attrs.get("import_rate_entity"),
+            "Export rate": status_attrs.get("export_rate_entity"),
+            "EV charging": status_attrs.get("ev_entity"),
+            "IOG dispatch": status_attrs.get("dispatch_entity"),
+            "Saving sessions": status_attrs.get("saving_events_entity"),
+            "Daily import cost": status_attrs.get("daily_import_cost_entity"),
+            "Daily standing charge": status_attrs.get("daily_standing_charge_entity"),
+        },
     }
 
 
@@ -139,6 +114,12 @@ PAGE = """<!doctype html>
   .gl-h { font-size:12px; letter-spacing:1.6px; text-transform:uppercase;
           color:var(--dim); margin-bottom:10px; }
   .gl-scroll { max-height:520px; overflow-y:auto; }
+  .gl-ent-list { display:flex; flex-direction:column; gap:6px; }
+  .gl-ent-row { display:flex; align-items:baseline; gap:8px; font-size:13px;
+                padding:4px 0; border-bottom:1px solid #14203a; }
+  .gl-ent-dot { width:7px; height:7px; border-radius:50%; flex:0 0 auto; }
+  .gl-ent-label { color:var(--dim); flex:0 0 150px; }
+  .gl-ent-id { color:#cbd5e1; font-size:12px; word-break:break-all; }
   table.gridlock-plan { width:100%; border-collapse:collapse; font-size:13px;
           font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
   table.gridlock-plan th { position:sticky; top:0; background:var(--panel);
@@ -159,6 +140,18 @@ function dotColor(state) {
   if (state.includes('Export') || state.includes('Session')) return 'var(--cyan)';
   if (['Disabled','unavailable','unknown'].includes(state)) return 'var(--red)';
   return 'var(--violet)';
+}
+function esc(s) {
+  return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+}
+function renderEntities(entities) {
+  const rows = Object.entries(entities || {}).map(([label, eid]) => `
+    <div class="gl-ent-row">
+      <span class="gl-ent-dot" style="background:${eid ? 'var(--green)' : 'var(--red)'}"></span>
+      <span class="gl-ent-label">${esc(label)}</span>
+      <span class="gl-ent-id num">${eid ? esc(eid) : 'not found — set explicitly in gridlock.yaml'}</span>
+    </div>`).join('');
+  return `<div class="gl-ent-list">${rows}</div>`;
 }
 async function refresh() {
   let d;
@@ -189,6 +182,10 @@ async function refresh() {
           <div class="gl-target" style="left:${d.target}%"></div>
         </div>
       </div>
+    </div>
+    <div class="gl-wrap">
+      <div class="gl-h">Discovered entities</div>
+      ${renderEntities(d.entities)}
     </div>
     <div class="gl-wrap">
       <div class="gl-h">30-minute action tape</div>
