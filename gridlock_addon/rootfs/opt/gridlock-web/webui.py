@@ -61,16 +61,20 @@ def build_status():
     battery_kw = as_kw(ha_get_state(status_attrs.get("battery_power_entity")))
     grid_kw = as_kw(ha_get_state(status_attrs.get("grid_power_entity")))
     home_kw = as_kw(ha_get_state(status_attrs.get("load_power_entity")))
+    ev_kw = as_kw(ha_get_state(status_attrs.get("ev_power_entity")))
     flow = {
         "pv_kw": round(pv_kw, 2),
         "battery_kw": round(battery_kw, 2),
         "grid_kw": round(grid_kw, 2),
         "home_kw": round(home_kw, 2),
+        "ev_kw": round(ev_kw, 2),
         "pv_generating": is_on(ha_get_state(status_attrs.get("pv_generating_entity"))),
         "importing": is_on(ha_get_state(status_attrs.get("importing_entity"))),
         "exporting": is_on(ha_get_state(status_attrs.get("exporting_entity"))),
         "battery_charging": is_on(ha_get_state(status_attrs.get("battery_charging_entity"))),
         "battery_discharging": is_on(ha_get_state(status_attrs.get("battery_discharging_entity"))),
+        "ev_charging": is_on(ha_get_state(status_attrs.get("ev_entity"))),
+        "ev_protected": status.get("state") == "EV Protection",
     }
 
     return {
@@ -96,6 +100,11 @@ def build_status():
             "Saving sessions": status_attrs.get("saving_events_entity"),
             "Daily import cost": status_attrs.get("daily_import_cost_entity"),
             "Daily standing charge": status_attrs.get("daily_standing_charge_entity"),
+            "PV power": ", ".join(status_attrs.get("pv_power_entities") or []) or None,
+            "Grid power": status_attrs.get("grid_power_entity"),
+            "Battery power": status_attrs.get("battery_power_entity"),
+            "Load power": status_attrs.get("load_power_entity"),
+            "EV power": status_attrs.get("ev_power_entity"),
         },
     }
 
@@ -189,25 +198,29 @@ function esc(s) {
 }
 function renderFlow(f) {
   if (!f) return '';
-  // Everything routes through a virtual centre hub — keeps 4
-  // independent flows (solar/grid/battery/home) simple to animate
+  // Everything routes through a virtual centre hub — keeps 5
+  // independent flows (solar/grid/battery/home/ev) simple to animate
   // without modelling every real physical wiring path.
-  const CX = 200, CY = 165;
+  const CX = 210, CY = 195;
   const nodes = {
-    solar: { x: 200, y: 55,  icon: '☀️', label: 'Solar',   val: `${f.pv_kw.toFixed(2)} kW`,
-              color: 'var(--amber)', active: f.pv_generating },
-    grid:  { x: 65,  y: 165, icon: '⚡',  label: 'Grid',    val: `${f.grid_kw.toFixed(2)} kW`,
-              color: f.exporting ? 'var(--cyan)' : 'var(--amber)', active: f.importing || f.exporting },
-    home:  { x: 335, y: 165, icon: '🏠', label: 'Home',    val: `${f.home_kw.toFixed(2)} kW`,
-              color: 'var(--violet)', active: f.home_kw > 0.05 },
-    battery:{ x: 200, y: 275, icon: '🔋', label: 'Battery', val: `${f.battery_kw.toFixed(2)} kW`,
-              color: f.battery_charging ? 'var(--green)' : 'var(--cyan)',
-              active: f.battery_charging || f.battery_discharging },
+    solar:   { x: 210, y: 55,  icon: '☀️', label: 'Solar',   val: `${f.pv_kw.toFixed(2)} kW`,
+               color: 'var(--amber)', active: f.pv_generating },
+    grid:    { x: 55,  y: 195, icon: '⚡',  label: 'Grid',    val: `${f.grid_kw.toFixed(2)} kW`,
+               color: f.exporting ? 'var(--cyan)' : 'var(--amber)', active: f.importing || f.exporting },
+    ev:      { x: 365, y: 115, icon: '🚗', label: 'EV',      val: `${f.ev_kw.toFixed(2)} kW`,
+               color: f.ev_protected ? 'var(--violet)' : 'var(--green)',
+               active: f.ev_charging, badge: f.ev_protected ? '🛡️' : null },
+    home:    { x: 365, y: 275, icon: '🏠', label: 'Home',    val: `${f.home_kw.toFixed(2)} kW`,
+               color: 'var(--violet)', active: f.home_kw > 0.05 },
+    battery: { x: 210, y: 335, icon: '🔋', label: 'Battery', val: `${f.battery_kw.toFixed(2)} kW`,
+               color: f.battery_charging ? 'var(--green)' : 'var(--cyan)',
+               active: f.battery_charging || f.battery_discharging },
   };
   // [outward, dotColor] — outward = node -> hub; false = hub -> node
   const dirs = {
     solar: [true, 'var(--amber)'],
     grid: [f.importing, f.exporting ? 'var(--cyan)' : 'var(--amber)'],
+    ev: [false, f.ev_protected ? 'var(--violet)' : 'var(--green)'],
     home: [false, 'var(--violet)'],
     battery: [f.battery_discharging, f.battery_charging ? 'var(--green)' : 'var(--cyan)'],
   };
@@ -228,10 +241,11 @@ function renderFlow(f) {
       <text class="icon" y="-2">${n.icon}</text>
       <text class="val" style="fill:${n.active ? n.color : 'var(--dim)'}" y="42">${n.val}</text>
       <text class="label" y="-32">${n.label}</text>
+      ${n.badge ? `<text x="20" y="-16" style="font-size:14px">${n.badge}</text>` : ''}
     </g>`).join('');
-  return `<div class="flow-wrap"><svg class="flow-svg" viewBox="0 0 400 320">
+  return `<div class="flow-wrap"><svg class="flow-svg" viewBox="0 0 420 375">
     ${lines}${nodeEls}
-  </svg></div>`;
+  </svg></div>${f.ev_protected ? '<div style="text-align:center;color:var(--violet);font-size:12px;margin-top:6px">🛡️ EV Protection active — battery discharge clamped to 0</div>' : ''}`;
 }
 function renderEntities(entities) {
   const rows = Object.entries(entities || {}).map(([label, eid]) => `

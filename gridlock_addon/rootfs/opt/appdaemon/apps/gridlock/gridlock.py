@@ -3,7 +3,7 @@ import os
 import re
 import urllib.request
 
-VERSION = "2.7.0"
+VERSION = "2.8.0"
 
 import appdaemon.plugins.hass.hassapi as hass
 from datetime import datetime, timedelta, time as dtime
@@ -100,6 +100,8 @@ class GridLock(hass.Hass):
         self.ent_exporting = self._find_sigen_binary("exporting_to_grid")
         self.ent_battery_charging = self._find_sigen_binary("battery_charging")
         self.ent_battery_discharging = self._find_sigen_binary("battery_discharging")
+        self.ent_ev_power = a.get("ev_power_entity") or self._find_entity(
+            prefix="sensor.", contains="hypervolt_ev_power") or self._find_hypervolt_ev_power()
 
         # Parameters
         self.battery_kwh = float(a.get("battery_capacity_kwh", 10.0))
@@ -337,6 +339,23 @@ class GridLock(hass.Hass):
                       and keyword in eid]
         live = [eid for eid in candidates if self._is_live(flat.get(eid))]
         pool = live or candidates
+        return pool[0] if pool else None
+
+    def _find_hypervolt_ev_power(self):
+        """Fallback if the exact "hypervolt_ev_power" name doesn't match
+        (e.g. a device-id infix) — Hypervolt also exposes several other
+        power sensors (ct/generation/grid/house/session), so require
+        both "ev" and "power" rather than "power" alone."""
+        flat = self._all_states_flat()
+        candidates = [eid for eid in flat
+                      if eid.startswith("sensor.") and "hypervolt" in eid
+                      and "power" in eid and "ev" in eid]
+        live = [eid for eid in candidates if self._is_live(flat.get(eid))]
+        pool = live or candidates
+        if len(pool) > 1:
+            self.log(f"Multiple candidate EV power entities found {pool} "
+                     "— set ev_power_entity explicitly in apps.yaml.",
+                     level="WARNING")
         return pool[0] if pool else None
 
     def _load_profile_path(self):
@@ -1057,4 +1076,5 @@ class GridLock(hass.Hass):
                                    "importing_entity": self.ent_importing,
                                    "exporting_entity": self.ent_exporting,
                                    "battery_charging_entity": self.ent_battery_charging,
-                                   "battery_discharging_entity": self.ent_battery_discharging})
+                                   "battery_discharging_entity": self.ent_battery_discharging,
+                                   "ev_power_entity": self.ent_ev_power})
