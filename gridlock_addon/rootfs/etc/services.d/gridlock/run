@@ -4,7 +4,6 @@
 # ==============================================================================
 
 CONFIG_DIR=/addon_config
-TZ="$(bashio::info.timezone)"
 
 mkdir -p "${CONFIG_DIR}/apps/gridlock"
 
@@ -22,15 +21,55 @@ fi
 # add-on version), gridlock.yaml/secrets.yaml persist in addon_config.
 cp /opt/appdaemon/apps/gridlock/gridlock.py "${CONFIG_DIR}/apps/gridlock/gridlock.py"
 
-cat > "${CONFIG_DIR}/appdaemon.yaml" <<EOF
-appdaemon:
-  time_zone: ${TZ}
+# AppDaemon requires latitude/longitude/elevation/time_zone up front —
+# pull them from HA core's own config via the Supervisor API proxy
+# rather than hardcoding, with a short retry in case core isn't ready.
+python3 - "${CONFIG_DIR}" <<'PYEOF'
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+
+config_dir = sys.argv[1]
+token = os.environ["SUPERVISOR_TOKEN"]
+req = urllib.request.Request(
+    "http://supervisor/core/api/config",
+    headers={"Authorization": f"Bearer {token}"})
+
+core = None
+for attempt in range(12):
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            core = json.load(resp)
+        break
+    except (urllib.error.URLError, TimeoutError) as exc:
+        print(f"Waiting for HA core API ({exc})...", file=sys.stderr)
+        time.sleep(5)
+
+if core is None:
+    print("Could not reach HA core API after 60s", file=sys.stderr)
+    sys.exit(1)
+
+appdaemon_yaml = f"""appdaemon:
+  latitude: {core['latitude']}
+  longitude: {core['longitude']}
+  elevation: {core['elevation']}
+  time_zone: {core['time_zone']}
   plugins:
     HASS:
       type: hass
       ha_url: http://supervisor/core
-      token: ${SUPERVISOR_TOKEN}
-EOF
+      token: {token}
+"""
+with open(os.path.join(config_dir, "appdaemon.yaml"), "w") as f:
+    f.write(appdaemon_yaml)
+PYEOF
+if [ $? -ne 0 ]; then
+    bashio::log.error "Failed to fetch HA core config — cannot start AppDaemon."
+    exit 1
+fi
 
 bashio::log.info "Starting AppDaemon..."
 cd "${CONFIG_DIR}" || exit 1
