@@ -3,7 +3,7 @@ import os
 import re
 import urllib.request
 
-VERSION = "2.6.0"
+VERSION = "2.7.0"
 
 import appdaemon.plugins.hass.hassapi as hass
 from datetime import datetime, timedelta, time as dtime
@@ -85,6 +85,21 @@ class GridLock(hass.Hass):
         # remain the fallback for slots not learned yet.
         self.ent_load_power = a.get("load_power_entity") or self._find_load_entity()
         self.load_profile = self._load_load_profile()
+
+        # Live power-flow entities (Solar/Grid/Battery/Home diagram in
+        # the Ingress web UI) — magnitude from power sensors, direction
+        # from the boolean sensors rather than trusting a sign
+        # convention we can't verify across inverter integrations.
+        self.ent_pv_power_entities = self._find_sigen_power_list("pv")
+        self.ent_grid_power = self._find_sigen_power("grid")
+        self.ent_battery_power = self._find_sibling(
+            self._mpan_stem(self.ent_soc, "_state_of_charge"), "sensor", ["_power"]
+        ) or self._find_sigen_power("battery")
+        self.ent_pv_generating = self._find_sigen_binary("pv_generating")
+        self.ent_importing = self._find_sigen_binary("importing_from_grid")
+        self.ent_exporting = self._find_sigen_binary("exporting_to_grid")
+        self.ent_battery_charging = self._find_sigen_binary("battery_charging")
+        self.ent_battery_discharging = self._find_sigen_binary("battery_discharging")
 
         # Parameters
         self.battery_kwh = float(a.get("battery_capacity_kwh", 10.0))
@@ -292,6 +307,37 @@ class GridLock(hass.Hass):
                      "— set load_power_entity explicitly in apps.yaml.",
                      level="WARNING")
         return pool[0]
+
+    def _find_sigen_power(self, keyword):
+        """Single sigen sensor whose entity_id contains "power" +
+        keyword — for the flow diagram's grid/battery power readings."""
+        flat = self._all_states_flat()
+        candidates = [eid for eid in flat
+                      if eid.startswith("sensor.") and "sigen" in eid
+                      and "power" in eid and keyword in eid]
+        live = [eid for eid in candidates if self._is_live(flat.get(eid))]
+        pool = live or candidates
+        return pool[0] if pool else None
+
+    def _find_sigen_power_list(self, keyword):
+        """All matching sigen power sensors (e.g. per-string PV1-4) —
+        summed live rather than assuming a single "total" exists."""
+        flat = self._all_states_flat()
+        return [eid for eid in flat
+                if eid.startswith("sensor.") and "sigen" in eid
+                and "power" in eid and keyword in eid]
+
+    def _find_sigen_binary(self, keyword):
+        """Single sigen binary_sensor matching keyword — used for flow
+        direction (charging/discharging, importing/exporting) instead
+        of trusting a power sensor's sign convention."""
+        flat = self._all_states_flat()
+        candidates = [eid for eid in flat
+                      if eid.startswith("binary_sensor.") and "sigen" in eid
+                      and keyword in eid]
+        live = [eid for eid in candidates if self._is_live(flat.get(eid))]
+        pool = live or candidates
+        return pool[0] if pool else None
 
     def _load_profile_path(self):
         return os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -1001,4 +1047,14 @@ class GridLock(hass.Hass):
                                    "dispatch_entity": self.ent_dispatch,
                                    "saving_events_entity": self.ent_saving_events,
                                    "daily_import_cost_entity": self.ent_daily_import_cost,
-                                   "daily_standing_charge_entity": self.ent_daily_standing_charge})
+                                   "daily_standing_charge_entity": self.ent_daily_standing_charge,
+                                   # power-flow diagram entities
+                                   "pv_power_entities": self.ent_pv_power_entities,
+                                   "grid_power_entity": self.ent_grid_power,
+                                   "battery_power_entity": self.ent_battery_power,
+                                   "load_power_entity": self.ent_load_power,
+                                   "pv_generating_entity": self.ent_pv_generating,
+                                   "importing_entity": self.ent_importing,
+                                   "exporting_entity": self.ent_exporting,
+                                   "battery_charging_entity": self.ent_battery_charging,
+                                   "battery_discharging_entity": self.ent_battery_discharging})

@@ -33,6 +33,17 @@ def as_float(state_obj, default=0.0):
         return default
 
 
+def as_kw(state_obj, default=0.0):
+    """abs value, normalised to kW if the sensor reports W."""
+    v = abs(as_float(state_obj, default))
+    unit = (state_obj or {}).get("attributes", {}).get("unit_of_measurement", "kW")
+    return v / 1000 if str(unit).lower() == "w" else v
+
+
+def is_on(state_obj):
+    return bool(state_obj) and state_obj.get("state") == "on"
+
+
 def build_status():
     status = ha_get_state("sensor.gridlock_status") or {}
     status_attrs = status.get("attributes", {})
@@ -45,7 +56,25 @@ def build_status():
     net = ha_get_state("sensor.gridlock_calculated_net_cost_today") or {}
     ev_dispatch = ha_get_state("sensor.gridlock_ev_dispatch_kwh") or {}
 
+    pv_kw = sum(as_kw(ha_get_state(e))
+                for e in (status_attrs.get("pv_power_entities") or []))
+    battery_kw = as_kw(ha_get_state(status_attrs.get("battery_power_entity")))
+    grid_kw = as_kw(ha_get_state(status_attrs.get("grid_power_entity")))
+    home_kw = as_kw(ha_get_state(status_attrs.get("load_power_entity")))
+    flow = {
+        "pv_kw": round(pv_kw, 2),
+        "battery_kw": round(battery_kw, 2),
+        "grid_kw": round(grid_kw, 2),
+        "home_kw": round(home_kw, 2),
+        "pv_generating": is_on(ha_get_state(status_attrs.get("pv_generating_entity"))),
+        "importing": is_on(ha_get_state(status_attrs.get("importing_entity"))),
+        "exporting": is_on(ha_get_state(status_attrs.get("exporting_entity"))),
+        "battery_charging": is_on(ha_get_state(status_attrs.get("battery_charging_entity"))),
+        "battery_discharging": is_on(ha_get_state(status_attrs.get("battery_discharging_entity"))),
+    }
+
     return {
+        "flow": flow,
         "soc": as_float(soc),
         "target": as_float(target),
         "import_p": as_float(imp) * 100,
@@ -116,6 +145,18 @@ PAGE = """<!doctype html>
   .gl-h { font-size:12px; letter-spacing:1.6px; text-transform:uppercase;
           color:var(--dim); margin-bottom:10px; }
   .gl-scroll { max-height:520px; overflow-y:auto; }
+  .flow-wrap { display:flex; justify-content:center; }
+  .flow-svg { width:100%; max-width:440px; height:auto; }
+  .flow-line { fill:none; stroke:#1e293b; stroke-width:2; }
+  .flow-line.active { stroke-width:2.5; }
+  .flow-dot { filter:drop-shadow(0 0 4px currentColor); }
+  .flow-node circle.ring { fill:var(--panel); stroke:var(--line); stroke-width:1.5; }
+  .flow-node.active circle.ring { stroke-width:2; }
+  .flow-node text.icon { font-size:20px; text-anchor:middle; dominant-baseline:central; }
+  .flow-node text.label { font-size:9px; letter-spacing:1px; text-transform:uppercase;
+                           fill:var(--dim); text-anchor:middle; }
+  .flow-node text.val { font-size:12px; font-weight:700; text-anchor:middle;
+                         font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
   .gl-ent-list { display:flex; flex-direction:column; gap:6px; }
   .gl-ent-row { display:flex; align-items:baseline; gap:8px; font-size:13px;
                 padding:4px 0; border-bottom:1px solid #14203a; }
@@ -145,6 +186,52 @@ function dotColor(state) {
 }
 function esc(s) {
   return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+}
+function renderFlow(f) {
+  if (!f) return '';
+  // Everything routes through a virtual centre hub — keeps 4
+  // independent flows (solar/grid/battery/home) simple to animate
+  // without modelling every real physical wiring path.
+  const CX = 200, CY = 165;
+  const nodes = {
+    solar: { x: 200, y: 55,  icon: '☀️', label: 'Solar',   val: `${f.pv_kw.toFixed(2)} kW`,
+              color: 'var(--amber)', active: f.pv_generating },
+    grid:  { x: 65,  y: 165, icon: '⚡',  label: 'Grid',    val: `${f.grid_kw.toFixed(2)} kW`,
+              color: f.exporting ? 'var(--cyan)' : 'var(--amber)', active: f.importing || f.exporting },
+    home:  { x: 335, y: 165, icon: '🏠', label: 'Home',    val: `${f.home_kw.toFixed(2)} kW`,
+              color: 'var(--violet)', active: f.home_kw > 0.05 },
+    battery:{ x: 200, y: 275, icon: '🔋', label: 'Battery', val: `${f.battery_kw.toFixed(2)} kW`,
+              color: f.battery_charging ? 'var(--green)' : 'var(--cyan)',
+              active: f.battery_charging || f.battery_discharging },
+  };
+  // [outward, dotColor] — outward = node -> hub; false = hub -> node
+  const dirs = {
+    solar: [true, 'var(--amber)'],
+    grid: [f.importing, f.exporting ? 'var(--cyan)' : 'var(--amber)'],
+    home: [false, 'var(--violet)'],
+    battery: [f.battery_discharging, f.battery_charging ? 'var(--green)' : 'var(--cyan)'],
+  };
+  const lines = Object.entries(nodes).map(([key, n]) => {
+    const [outward, dotColor] = dirs[key];
+    const path = outward ? `M${n.x},${n.y} L${CX},${CY}` : `M${CX},${CY} L${n.x},${n.y}`;
+    const dur = n.active ? '1.6s' : '0s';
+    return `
+      <path class="flow-line ${n.active ? 'active' : ''}" d="M${n.x},${n.y} L${CX},${CY}"
+            stroke="${n.active ? n.color : '#1e293b'}" />
+      ${n.active ? `<circle r="3.5" class="flow-dot" fill="${dotColor}" style="color:${dotColor}">
+        <animateMotion dur="${dur}" repeatCount="indefinite" path="${path}" />
+      </circle>` : ''}`;
+  }).join('');
+  const nodeEls = Object.values(nodes).map(n => `
+    <g class="flow-node ${n.active ? 'active' : ''}" transform="translate(${n.x},${n.y})">
+      <circle class="ring" r="26" style="stroke:${n.active ? n.color : 'var(--line)'}" />
+      <text class="icon" y="-2">${n.icon}</text>
+      <text class="val" style="fill:${n.active ? n.color : 'var(--dim)'}" y="42">${n.val}</text>
+      <text class="label" y="-32">${n.label}</text>
+    </g>`).join('');
+  return `<div class="flow-wrap"><svg class="flow-svg" viewBox="0 0 400 320">
+    ${lines}${nodeEls}
+  </svg></div>`;
 }
 function renderEntities(entities) {
   const rows = Object.entries(entities || {}).map(([label, eid]) => `
@@ -185,6 +272,10 @@ async function refresh() {
           <div class="gl-target" style="left:${d.target}%"></div>
         </div>
       </div>
+    </div>
+    <div class="gl-wrap">
+      <div class="gl-h">Live power flow</div>
+      ${renderFlow(d.flow)}
     </div>
     <div class="gl-wrap">
       <div class="gl-h">Discovered entities</div>
