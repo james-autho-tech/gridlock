@@ -3,7 +3,7 @@ import os
 import re
 import urllib.request
 
-VERSION = "2.8.0"
+VERSION = "2.8.1"
 
 import appdaemon.plugins.hass.hassapi as hass
 from datetime import datetime, timedelta, time as dtime
@@ -90,7 +90,7 @@ class GridLock(hass.Hass):
         # the Ingress web UI) — magnitude from power sensors, direction
         # from the boolean sensors rather than trusting a sign
         # convention we can't verify across inverter integrations.
-        self.ent_pv_power_entities = self._find_sigen_power_list("pv")
+        self.ent_pv_power_entities = a.get("pv_power_entities") or self._find_sigen_pv_power()
         self.ent_grid_power = self._find_sigen_power("grid")
         self.ent_battery_power = self._find_sibling(
             self._mpan_stem(self.ent_soc, "_state_of_charge"), "sensor", ["_power"]
@@ -321,13 +321,27 @@ class GridLock(hass.Hass):
         pool = live or candidates
         return pool[0] if pool else None
 
-    def _find_sigen_power_list(self, keyword):
-        """All matching sigen power sensors (e.g. per-string PV1-4) —
-        summed live rather than assuming a single "total" exists."""
+    def _find_sigen_pv_power(self):
+        """PV power entities to sum for the flow diagram. Real-world
+        find: Sigenergy exposes BOTH an aggregate (sigen_plant_pv_power
+        / sigen_inverter_pv_power) AND per-string pv1-4_power sensors
+        simultaneously — summing everything double/triple-counts, so
+        prefer a single aggregate (no digit before "_power") and only
+        fall back to summing per-string ones if no aggregate exists."""
         flat = self._all_states_flat()
-        return [eid for eid in flat
-                if eid.startswith("sensor.") and "sigen" in eid
-                and "power" in eid and keyword in eid]
+        candidates = [eid for eid in flat
+                      if eid.startswith("sensor.") and "sigen" in eid
+                      and "pv" in eid and "power" in eid]
+        aggregates = [eid for eid in candidates if not re.search(r"pv\d_power", eid)]
+        if not aggregates:
+            return candidates  # only per-string sensors exist — sum them
+        plant = [eid for eid in aggregates if "plant" in eid]
+        pool = plant or aggregates
+        if len(pool) > 1:
+            self.log(f"Multiple aggregate PV power entities found {pool} — "
+                     f"using {pool[0]}; set pv_power_entities explicitly "
+                     "in apps.yaml if wrong.", level="WARNING")
+        return [pool[0]]
 
     def _find_sigen_binary(self, keyword):
         """Single sigen binary_sensor matching keyword — used for flow
