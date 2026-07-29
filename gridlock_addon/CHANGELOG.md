@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.14.0
+- Decision log now drops in a "Still: ..." check-in once an hour even
+  when nothing's changed, instead of going completely silent for
+  however long the plan stays steady — a long quiet stretch is normal
+  (most ticks change nothing) but looked identical to the engine
+  having stopped.
+- New **System temperature** panel on the Forecast tab — auto-discovers
+  the Sigenergy inverter and battery-cell temperature sensors, shown
+  as colour-coded tiles (green/amber/red). Solar and battery
+  efficiency both fall off in high heat; this is a sanity check on the
+  forecast, not a factor fed into it (no reliable derating curve to
+  calculate that from).
+- The 24h plan table now has **Cost** (this slot's £ cost/saving) and
+  **Total** (running total through that slot) columns, like [REDACTED]'s
+  plan table — makes it possible to see which slots are actually
+  moving the needle rather than just the 24h total.
+- Plan rows are now tinted by action (green charge, cyan export/
+  session, amber hold/EV-protection, grey eco) instead of just the
+  Action column text, for a faster scan down 48 rows.
+
 ## 2.13.1
 - Merged the Forecast tab's Solar forecast and Battery forecast charts
   into one **Energy forecast** chart — solar generation as bars against

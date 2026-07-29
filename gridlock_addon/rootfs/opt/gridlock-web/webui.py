@@ -109,7 +109,10 @@ def build_status():
         "log_entries": list(reversed(decision_log.get("attributes", {}).get("entries") or [])),
         "solar_today_kwh": solar.get("attributes", {}).get("today_kwh", 0),
         "solar_tomorrow_kwh": solar.get("attributes", {}).get("tomorrow_kwh", 0),
-        "combined_forecast": forecast.get("attributes", {}).get("combined_forecast") or [],
+        "inverter_temp": as_float(get(status_attrs.get("inverter_temp_entity")), None),
+        "battery_temp": as_float(get(status_attrs.get("battery_temp_entity")), None),
+        "solar_forecast_data": solar.get("attributes", {}).get("forecast_data") or [],
+        "soc_forecast_data": forecast.get("attributes", {}).get("forecast_data") or [],
         "learned_load_profile": forecast.get("attributes", {}).get("learned_load_profile") or [],
         "storm_state": storm.get("state", "Clear"),
         "storm_reason": storm.get("attributes", {}).get("reason") or "No active alerts",
@@ -285,6 +288,13 @@ function dotColor(state) {
 function esc(s) {
   return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 }
+function renderTempTile(label, value, amberAt, redAt) {
+  if (value === null || value === undefined) {
+    return `<div class="gl-tile"><div class="lbl">${esc(label)}</div><div class="val" style="color:var(--dim);font-size:14px">not found</div></div>`;
+  }
+  const color = value >= redAt ? 'var(--red)' : value >= amberAt ? 'var(--amber)' : 'var(--green)';
+  return `<div class="gl-tile"><div class="lbl">${esc(label)}</div><div class="val num" style="color:${color}">${Number(value).toFixed(1)}°C</div></div>`;
+}
 function renderFlow(f) {
   if (!f) return '';
   // Everything routes through a virtual centre hub — keeps 5
@@ -378,31 +388,36 @@ function renderLog(entries) {
     </div>`).join('');
   return `<div class="gl-log-list">${rows}</div>`;
 }
-function renderEnergyChart(data) {
-  if (!data || !data.length) {
-    return '<div style="color:var(--dim)">No forecast yet — computes once the first 24h plan has run.</div>';
+function renderEnergyChart(solarData, socData) {
+  // Two independent sensors merged by timestamp — solar comes straight
+  // from Solcast and doesn't need a plan to exist yet, so it still
+  // renders even if the battery-% line (which needs a computed plan)
+  // isn't available yet, and vice versa.
+  const pvByX = {};
+  (solarData || []).forEach(p => { pvByX[p.x] = Number(p.y) || 0; });
+  const socByX = {};
+  (socData || []).forEach(p => { socByX[p.x] = Number(p.y); });
+  const xs = Array.from(new Set([...Object.keys(pvByX), ...Object.keys(socByX)])).sort();
+  if (!xs.length) {
+    return '<div style="color:var(--dim)">No forecast data yet.</div>';
   }
   const W = 900, H = 200;
-  const n = data.length;
-  const bw = W / n;
-  const maxPv = Math.max(...data.map(p => Number(p.pv) || 0), 0.1);
-  const bars = data.map((p, i) => {
-    const pv = Number(p.pv) || 0;
+  const bw = W / xs.length;
+  const maxPv = Math.max(...xs.map(x => pvByX[x] || 0), 0.1);
+  const bars = xs.map((x, i) => {
+    const pv = pvByX[x] || 0;
+    if (pv <= 0) return '';
     const h = Math.max(1, (pv / maxPv) * (H - 24));
-    const x = i * bw;
-    return `<rect x="${x.toFixed(1)}" y="${(H - h).toFixed(1)}" width="${Math.max(0.5, bw - 1).toFixed(1)}" height="${h.toFixed(1)}" fill="var(--amber)" opacity="0.5">`
-      + `<title>${esc(fmtDate(p.x))}: ${pv.toFixed(2)} kWh solar, ${Math.round(Math.min(100, Math.max(0, Number(p.soc))))}% battery</title></rect>`;
+    const bx = i * bw;
+    return `<rect x="${bx.toFixed(1)}" y="${(H - h).toFixed(1)}" width="${Math.max(0.5, bw - 1).toFixed(1)}" height="${h.toFixed(1)}" fill="var(--amber)" opacity="0.5">`
+      + `<title>${esc(fmtDate(x))}: ${pv.toFixed(2)} kWh solar</title></rect>`;
   }).join('');
-  const pts = data.map((p, i) => {
-    const x = i * bw + bw / 2;
-    const pct = Math.min(100, Math.max(0, Number(p.soc)));
-    const y = H - (pct / 100) * (H - 10) - 5;
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  }).join(' ');
-  return `<svg viewBox="0 0 ${W} ${H}" class="gl-combo-svg" preserveAspectRatio="none">
-      ${bars}
-      <polyline points="${pts}" fill="none" stroke="var(--cyan)" stroke-width="2.5" />
-    </svg>
+  const pts = xs.map((x, i) => (socByX[x] === undefined ? null : { i, pct: Math.min(100, Math.max(0, socByX[x])) }))
+    .filter(Boolean)
+    .map(({ i, pct }) => `${(i * bw + bw / 2).toFixed(1)},${(H - (pct / 100) * (H - 10) - 5).toFixed(1)}`)
+    .join(' ');
+  const line = pts ? `<polyline points="${pts}" fill="none" stroke="var(--cyan)" stroke-width="2.5" />` : '';
+  return `<svg viewBox="0 0 ${W} ${H}" class="gl-combo-svg" preserveAspectRatio="none">${bars}${line}</svg>
     <div class="gl-combo-legend">
       <span><span class="gl-legend-dot" style="background:var(--amber)"></span>Solar (kWh, bars)</span>
       <span><span class="gl-legend-dot" style="background:var(--cyan)"></span>Battery % (line)</span>
@@ -499,7 +514,15 @@ async function refresh() {
           <div class="gl-tile"><div class="lbl">Solar today</div><div class="val num" style="color:var(--amber)">${Number(d.solar_today_kwh).toFixed(1)} kWh</div></div>
           <div class="gl-tile"><div class="lbl">Solar tomorrow</div><div class="val num" style="color:var(--amber)">${Number(d.solar_tomorrow_kwh).toFixed(1)} kWh</div></div>
         </div>
-        ${renderEnergyChart(d.combined_forecast)}
+        ${renderEnergyChart(d.solar_forecast_data, d.soc_forecast_data)}
+      </div>
+      <div class="gl-wrap">
+        <div class="gl-h">System temperature</div>
+        <div class="gl-sub">Solar and battery efficiency both drop off in high heat — a sanity check on the forecast above, not a factor in it (no reliable derating curve to calculate that from).</div>
+        <div class="gl-grid">
+          ${renderTempTile('Inverter', d.inverter_temp, 60, 75)}
+          ${renderTempTile('Battery cells', d.battery_temp, 40, 55)}
+        </div>
       </div>
       <div class="gl-wrap">
         <div class="gl-h">Learned house usage</div>

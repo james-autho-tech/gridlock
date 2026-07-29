@@ -3,7 +3,7 @@ import os
 import re
 import urllib.request
 
-VERSION = "2.13.1"
+VERSION = "2.14.0"
 
 import appdaemon.plugins.hass.hassapi as hass
 from datetime import datetime, timedelta, time as dtime
@@ -127,6 +127,10 @@ class GridLock(hass.Hass):
                              or self.overrides.get("ev_power_entity_override")
                              or self._find_entity(prefix="sensor.", contains="hypervolt_ev_power")
                              or self._find_hypervolt_ev_power())
+        self.ent_inverter_temp = (a.get("inverter_temp_entity")
+                                  or self._find_sigen_temp("inverter"))
+        self.ent_battery_temp = (a.get("battery_temp_entity")
+                                 or self._find_sigen_temp("cell"))
 
         # Parameters
         self.battery_kwh = float(a.get("battery_capacity_kwh", 10.0))
@@ -370,6 +374,20 @@ class GridLock(hass.Hass):
                      "in apps.yaml if wrong.", level="WARNING")
         return [pool[0]]
 
+    def _find_sigen_temp(self, keyword):
+        """Single sigen temperature sensor matching keyword — inverter
+        and battery efficiency both fall off at high temperature, so
+        this is shown alongside the solar forecast as a sanity check
+        on it, not fed into the forecast numbers themselves (no solid
+        derating curve to calculate that from)."""
+        flat = self._all_states_flat()
+        candidates = [eid for eid in flat
+                      if eid.startswith("sensor.") and "sigen" in eid
+                      and "temperature" in eid and keyword in eid]
+        live = [eid for eid in candidates if self._is_live(flat.get(eid))]
+        pool = live or candidates
+        return pool[0] if pool else None
+
     def _find_sigen_binary(self, keyword):
         """Single sigen binary_sensor matching keyword — used for flow
         direction (charging/discharging, importing/exporting) instead
@@ -464,11 +482,20 @@ class GridLock(hass.Hass):
         — a running log of state changes (not every 5-min tick, only
         when the decision actually changes), so someone can look back
         over hours/days and see the reasoning rather than just the
-        current status."""
+        current status. When nothing's changed for a while, still drops
+        in a "still X" check-in every hour at most — otherwise a long
+        quiet stretch (which is normal; most ticks change nothing) looks
+        indistinguishable from the engine having silently stopped."""
         last = self.decision_log[-1] if self.decision_log else None
-        if last and last["state"] == state and last["reason"] == reason:
-            return
-        self.decision_log.append({"ts": self.get_now().isoformat(),
+        now = self.get_now()
+        if last:
+            last_reason = (last["reason"][len("Still: "):]
+                           if last["reason"].startswith("Still: ") else last["reason"])
+            if last["state"] == state and last_reason == reason:
+                if now - self._iso(last["ts"]) < timedelta(hours=1):
+                    return
+                reason = f"Still: {reason}"
+        self.decision_log.append({"ts": now.isoformat(),
                                    "state": state, "reason": reason})
         self.decision_log = self.decision_log[-200:]
         try:
@@ -747,8 +774,15 @@ class GridLock(hass.Hass):
         """Solcast curve as its own sensor, for the web UI's Forecast
         page — not otherwise exposed anywhere outside the 24h plan."""
         curve = self._pv_curve()
+        # today_kwh/tomorrow_kwh use the full curve, but the chart data
+        # is capped to the plan's own 24h horizon — some Solcast
+        # accounts return a week or more of detailedForecast, and
+        # charting all of it let a handful of far-future days dwarf
+        # the scale so every near-term bar rounded down to nothing.
+        horizon_end = now + timedelta(minutes=SLOT_MIN * HORIZON_SLOTS)
         fc = sorted(({"x": t.isoformat(), "y": round(kwh, 3)}
-                     for t, kwh in curve.items()), key=lambda p: p["x"])
+                     for t, kwh in curve.items() if now <= t < horizon_end),
+                    key=lambda p: p["x"])
         today_kwh = sum(kwh for t, kwh in curve.items() if t.date() == now.date())
         tomorrow_kwh = sum(kwh for t, kwh in curve.items()
                            if t.date() == (now + timedelta(days=1)).date())
@@ -828,8 +862,14 @@ class GridLock(hass.Hass):
     # ------------------------------------------------------------------
     # SIMULATION + OPTIMISER
     # ------------------------------------------------------------------
-    def simulate(self, slots, soc0, imp_override=None, exp_override=None):
-        """Per-slot energy balance. Returns (soc_trace, cost, violation_idx)."""
+    def simulate(self, slots, soc0, imp_override=None, exp_override=None, want_trace=False):
+        """Per-slot energy balance. Returns (soc_trace, cost, violation_idx,
+        cost_trace). cost_trace (only built when want_trace=True — this
+        runs thousands of times inside optimise()'s hill-climb, so
+        skipping it there avoids building a throwaway list on every
+        candidate step) is [{"delta": <this slot's cost>, "total":
+        <running total through this slot>}, ...], for the plan table's
+        cost/running-total columns."""
         eff = self.efficiency
         cap = self.battery_kwh
         floor_kwh = self.floor_soc / 100.0 * cap
@@ -837,8 +877,10 @@ class GridLock(hass.Hass):
         max_d = self.discharge_kw / 2.0
         soc = soc0
         trace, cost, violation = [], 0.0, None
+        cost_trace = [] if want_trace else None
 
         for i, s in enumerate(slots):
+            cost_before = cost
             imp = imp_override[i] if imp_override else s["imp"]
             exp = exp_override[i] if exp_override else s["exp"]
             batt = soc / 100.0 * cap
@@ -888,7 +930,10 @@ class GridLock(hass.Hass):
                 violation = i
             cost += grid_in * imp - grid_out * exp
             trace.append(round(soc, 1))
-        return trace, round(cost, 4), violation
+            if want_trace:
+                cost_trace.append({"delta": round(cost - cost_before, 4),
+                                    "total": round(cost, 4)})
+        return trace, round(cost, 4), violation, cost_trace
 
     def optimise(self, slots, soc0):
         """Cost-greedy allocation: keep any 0.5 kWh charge/export step that
@@ -896,7 +941,7 @@ class GridLock(hass.Hass):
         max_c = self.charge_kw / 2.0
         max_d = self.discharge_kw / 2.0
         step = 0.5
-        _, best, base_v = self.simulate(slots, soc0)
+        _, best, base_v, _ = self.simulate(slots, soc0)
         guard, improved = 0, True
         while improved and guard < 3000:
             improved = False
@@ -905,7 +950,7 @@ class GridLock(hass.Hass):
                 while s["charge"] < max_c and guard < 3000:
                     guard += 1
                     s["charge"] += step
-                    _, c, v = self.simulate(slots, soc0)
+                    _, c, v, _ = self.simulate(slots, soc0)
                     if (v is None or v == base_v) and c < best - 1e-6:
                         best, improved = c, True
                     else:
@@ -919,14 +964,14 @@ class GridLock(hass.Hass):
                 while s["export"] < max_d and guard < 3000:
                     guard += 1
                     s["export"] += step
-                    _, c, v = self.simulate(slots, soc0)
+                    _, c, v, _ = self.simulate(slots, soc0)
                     if (v is None or v == base_v) and c < best - 1e-6:
                         best, improved = c, True
                     else:
                         s["export"] -= step
                         break
-        trace, cost, _ = self.simulate(slots, soc0)
-        return slots, trace, cost
+        trace, cost, _, cost_trace = self.simulate(slots, soc0, want_trace=True)
+        return slots, trace, cost, cost_trace
 
     # ------------------------------------------------------------------
     # OUTPUT
@@ -939,7 +984,7 @@ class GridLock(hass.Hass):
             return "EXPORT"
         return "ECO"
 
-    def publish_plan(self, slots, trace, cost, soc0, live_label=None):
+    def publish_plan(self, slots, trace, cost, cost_trace, soc0, live_label=None):
         """live_label overrides row 0's displayed action — the optimiser
         plan is theoretical (doesn't model EV/Storm/Session events), so
         when a live override (e.g. "EV Protection") is actually being
@@ -947,13 +992,6 @@ class GridLock(hass.Hass):
         showing what the battery-only plan would otherwise have done."""
         fc = [{"x": s["start"].isoformat(), "y": trace[i]}
               for i, s in enumerate(slots)]
-        # Same 48 half-hour slots already used for the plan, so this is
-        # exactly aligned with the SoC trace with no separate lookup —
-        # one chart's worth of data for the web UI's Forecast tab,
-        # rather than two independently-scaled/independently-windowed
-        # series that don't share an x-axis.
-        combined = [{"x": s["start"].isoformat(), "soc": trace[i],
-                     "pv": round(s["pv"], 3)} for i, s in enumerate(slots)]
         learned = [{"x": f"{i // 2:02d}:{'30' if i % 2 else '00'}", "y": round(kwh, 3)}
                    for i, kwh in sorted(((int(k), v) for k, v in self.load_profile.items()),
                                         key=lambda p: p[0])]
@@ -962,29 +1000,48 @@ class GridLock(hass.Hass):
                                    "unit_of_measurement": "%",
                                    "forecast_data": fc,
                                    "plan_cost_24h": cost,
-                                   "combined_forecast": combined,
                                    "learned_load_profile": learned})
 
         rows = []
         for i, s in enumerate(slots):
             if i == 0 and live_label:
-                act, colour = live_label, "#a78bfa"
+                act = live_label
+                ll = live_label.lower()
+                if "hold" in ll or "protection" in ll:
+                    colour = "#fbbf24"     # amber — battery held, not actively charging/exporting
+                elif "charg" in ll:
+                    colour = "#22c55e"     # green
+                elif "export" in ll or "session" in ll:
+                    colour = "#38bdf8"     # cyan
+                else:
+                    colour = "#a78bfa"     # violet — other live override (e.g. Storm Watch)
             else:
                 act = self._action(s)
                 colour = {"CHARGE": "#22c55e", "EXPORT": "#38bdf8",
                           "ECO": "#9ca3af"}[act]
             ev_cell = (f"<span style='color:#38bdf8'>⚡ {s['ev_kwh']:.2f}</span>"
                        if s["dispatch"] else "—")
+            delta_p = cost_trace[i]["delta"] * 100
+            delta_colour = "#22c55e" if delta_p <= 0 else "#fbbf24"
+            delta_sign = "+" if delta_p > 0 else ""
+            # Whole row gets a faint tint of the action's colour — a
+            # quicker "what's happening in this slot" scan than reading
+            # the Action column text alone, especially scrolling fast
+            # through 48 rows.
             rows.append(
-                f"<tr><td>{s['start'].astimezone().strftime('%a %H:%M')}</td>"
+                f"<tr style='background:{colour}1a'>"
+                f"<td>{s['start'].astimezone().strftime('%a %H:%M')}</td>"
                 f"<td>{s['imp']*100:.1f}p</td><td>{s['exp']*100:.1f}p</td>"
                 f"<td>{s['pv']:.2f}</td><td>{s['load']:.2f}</td>"
                 f"<td style='color:{colour};font-weight:600'>{act}</td>"
                 f"<td>{ev_cell}</td>"
-                f"<td>{trace[i]:.0f}%</td></tr>")
+                f"<td>{trace[i]:.0f}%</td>"
+                f"<td style='color:{delta_colour}'>{delta_sign}{delta_p:.1f}p</td>"
+                f"<td>£{cost_trace[i]['total']:.2f}</td></tr>")
         html = ("<table class='gridlock-plan'><tr><th>Slot</th><th>Import</th>"
                 "<th>Export</th><th>PV kWh</th><th>Load kWh</th><th>Action</th>"
-                "<th>EV kWh</th><th>SoC</th></tr>" + "".join(rows) + "</table>")
+                "<th>EV kWh</th><th>SoC</th><th>Cost</th><th>Total</th></tr>"
+                + "".join(rows) + "</table>")
         return html
 
     def publish_compare(self, slots, soc0, live_cost):
@@ -1006,7 +1063,7 @@ class GridLock(hass.Hass):
             # Re-optimise a copy of the raw slots under this tariff
             cp = [dict(s, charge=0.0, export=0.0, imp=imp[i], exp=exp[i])
                   for i, s in enumerate(slots)]
-            cp, _, c = self.optimise(cp, soc0)
+            cp, _, c, _ = self.optimise(cp, soc0)
             c += float(t.get("standing", 0.0))
             rows.append((t.get("name", "tariff"), c))
 
@@ -1087,7 +1144,7 @@ class GridLock(hass.Hass):
         self.publish_storm_status()
 
         slots = self.build_slots(now)
-        slots, trace, cost = self.optimise(slots, soc0)
+        slots, trace, cost, cost_trace = self.optimise(slots, soc0)
 
         cur = slots[0]
         action = self._action(cur)
@@ -1109,7 +1166,7 @@ class GridLock(hass.Hass):
         else:
             live_label = None
 
-        plan_html = self.publish_plan(slots, trace, cost, soc0, live_label)
+        plan_html = self.publish_plan(slots, trace, cost, cost_trace, soc0, live_label)
         self.publish_compare(self.build_slots(now), soc0, cost)
         self.plan = slots
 
@@ -1218,5 +1275,7 @@ class GridLock(hass.Hass):
                                    "battery_charging_entity": self.ent_battery_charging,
                                    "battery_discharging_entity": self.ent_battery_discharging,
                                    "ev_power_entity": self.ent_ev_power,
+                                   "inverter_temp_entity": self.ent_inverter_temp,
+                                   "battery_temp_entity": self.ent_battery_temp,
                                    "storm_watch_entities": [e for e, _ in self.storm_sources if e] or None,
                                    "ssen_postcode": self.ssen_postcode or None})

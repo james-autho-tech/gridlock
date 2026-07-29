@@ -95,7 +95,7 @@ release.
 ## Entities published
 
 - `sensor.gridlock_status` (plan_html, action, reason)
-- `sensor.gridlock_soc_forecast` (forecast_data, combined_forecast, plan_cost_24h, learned_load_profile)
+- `sensor.gridlock_soc_forecast` (forecast_data, plan_cost_24h, learned_load_profile)
 - `sensor.gridlock_target_soc`
 - `sensor.gridlock_tariff_compare` (compare_html)
 - `sensor.gridlock_calculated_net_cost_today`
