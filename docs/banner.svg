@@ -57,12 +57,6 @@
     <circle cx="40" cy="160" r="21" fill="#0f1526" stroke="#a78bfa" stroke-width="2"/>
     <text x="40" y="168" font-size="20" text-anchor="middle">🏠</text>
 
-    <circle cx="160" cy="160" r="3" fill="#38bdf8">
-      <animateMotion dur="2.2s" repeatCount="indefinite" path="M150,60 L160,160" />
-    </circle>
-    <circle cx="160" cy="160" r="3" fill="#34d399">
-      <animateMotion dur="1.8s" repeatCount="indefinite" path="M160,160 L150,260" />
-    </circle>
   </g>
 
   <!-- left: mark + wordmark -->
@@ -77,14 +71,14 @@
           fill="#94a3b8" letter-spacing="0.5">Battery optimisation for Sigenergy + Octopus Intelligent Go</text>
 
     <g font-family="'Segoe UI', Arial, sans-serif" font-size="14" font-weight="600" letter-spacing="0.5">
-      <rect x="118" y="95" width="150" height="30" rx="15" fill="none" stroke="#34d399" stroke-width="1.5"/>
-      <text x="193" y="115" fill="#34d399" text-anchor="middle">Cost-aware planning</text>
+      <rect x="118" y="95" width="230" height="30" rx="15" fill="none" stroke="#34d399" stroke-width="1.5"/>
+      <text x="233" y="115" fill="#34d399" text-anchor="middle">Cost-aware planning</text>
 
-      <rect x="280" y="95" width="130" height="30" rx="15" fill="none" stroke="#fbbf24" stroke-width="1.5"/>
-      <text x="345" y="115" fill="#fbbf24" text-anchor="middle">Solar-forecast smart</text>
+      <rect x="373" y="95" width="239" height="30" rx="15" fill="none" stroke="#fbbf24" stroke-width="1.5"/>
+      <text x="492" y="115" fill="#fbbf24" text-anchor="middle">Solar-forecast smart</text>
 
-      <rect x="422" y="95" width="140" height="30" rx="15" fill="none" stroke="#a78bfa" stroke-width="1.5"/>
-      <text x="492" y="115" fill="#a78bfa" text-anchor="middle">Home Assistant add-on</text>
+      <rect x="637" y="95" width="248" height="30" rx="15" fill="none" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="761" y="115" fill="#a78bfa" text-anchor="middle">Home Assistant add-on</text>
     </g>
   </g>
 </svg>
