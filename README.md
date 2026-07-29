@@ -106,7 +106,12 @@ add-on and [HACS](https://hacs.xyz/) already installed.
 - `sensor.gridlock_savings` (today, week, month, all_time — £ actually
   saved vs a self-consumption-only baseline; daily_cost_history —
   last 28 days' real spend; plan_accuracy — most recent day's morning
-  forecast vs actual outcome)
+  forecast vs actual outcome; profile_comparison_history/_totals —
+  what each battery_risk_profile's own morning plan predicts, day by
+  day and summed)
+- `sensor.gridlock_carbon_intensity` (GB grid carbon intensity, gCO2/kWh,
+  from National Grid ESO's public API — informational only, not
+  factored into cost planning)
 
 ## License
 

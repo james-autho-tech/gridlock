@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.21.0
+- New **carbon intensity** tracking (Forecast tab) — GB grid
+  gCO2/kWh from National Grid ESO's free public API, 30-min blocks
+  matching GridLock's own slot size, colour-coded by the API's own
+  very-low/low/moderate/high/very-high bands. Informational only,
+  not fed into cost planning — no solid basis to pick a £-per-gCO2
+  conversion rate, so it's shown, not decided on.
+- New **risk profile comparison** (Forecast tab) — once a day,
+  alongside the existing plan-accuracy forecast snapshot, also
+  computes what `eco`/`balanced`/`max_profit` would each have
+  predicted for that day using the same real rates/PV/load, then
+  sums across every day recorded. Not a real-outcome backtest (that
+  would mean running all three profiles continuously rather than
+  just the active one — too expensive to do every 5 minutes) but a
+  genuine forecast-vs-forecast comparison building up over time,
+  cheap since it only runs once daily.
+- Fixed a bug in the day-rollover logic that would have silently
+  wiped the "forecast" (plan accuracy) and any profile-comparison
+  data recorded earlier that day — it was replacing the whole day's
+  history entry instead of merging into it. Caught before it could
+  lose real data, verified with a multi-day rollover test.
+
 ## 2.20.1
 - Bumped the `balanced` risk profile's degradation cost from 3p/kWh
   to 5p/kWh — 3p meant the optimiser would actively discharge the

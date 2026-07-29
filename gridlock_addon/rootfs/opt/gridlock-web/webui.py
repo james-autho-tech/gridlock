@@ -68,6 +68,7 @@ def build_status():
     decision_log = get("sensor.gridlock_decision_log") or {}
     solar = get("sensor.gridlock_solar_forecast") or {}
     storm = get("sensor.gridlock_storm_status") or {}
+    carbon = get("sensor.gridlock_carbon_intensity") or {}
     ssen = get("sensor.gridlock_ssen_local_outages") or {}
     saving_raw = get(status_attrs.get("saving_events_entity")) or {}
     saving_attrs = saving_raw.get("attributes", {})
@@ -111,6 +112,11 @@ def build_status():
         "savings_month": savings.get("attributes", {}).get("month"),
         "daily_cost_history": savings.get("attributes", {}).get("daily_cost_history") or [],
         "plan_accuracy": savings.get("attributes", {}).get("plan_accuracy"),
+        "profile_comparison_history": savings.get("attributes", {}).get("profile_comparison_history") or [],
+        "profile_comparison_totals": savings.get("attributes", {}).get("profile_comparison_totals") or {},
+        "carbon_now": as_float(carbon, None),
+        "carbon_index": carbon.get("attributes", {}).get("index"),
+        "carbon_forecast_data": carbon.get("attributes", {}).get("forecast_data") or [],
         "best_tariff": compare.get("state", "—"),
         "compare_html": compare.get("attributes", {}).get("compare_html") or "",
         "ev_planned_kwh": ev_dispatch.get("state", "0.00"),
@@ -496,6 +502,46 @@ function renderDailyCostChart(data) {
       <span><span class="gl-legend-dot" style="background:var(--amber)"></span>Cost day</span>
     </div>`;
 }
+function carbonColor(index) {
+  if (index === 'very low' || index === 'low') return 'var(--green)';
+  if (index === 'moderate') return 'var(--amber)';
+  return 'var(--red)'; // high, very high
+}
+function renderCarbonChart(data) {
+  if (!data || !data.length) {
+    return '<div style="color:var(--dim)">No forecast yet.</div>';
+  }
+  const max = Math.max(...data.map(p => Number(p.y)), 1);
+  const bars = data.map(p => {
+    const h = Math.max(2, Math.round((Number(p.y) / max) * 100));
+    return `<div class="gl-bar-col" title="${esc(fmtDate(p.x))}: ${p.y} gCO2/kWh (${esc(p.index || '')})">
+      <div class="gl-bar-fill" style="height:${h}%;background:linear-gradient(180deg,${carbonColor(p.index)},transparent)"></div>
+    </div>`;
+  }).join('');
+  return `<div class="gl-bars">${bars}</div>`;
+}
+function renderProfileComparison(totals) {
+  totals = totals || {};
+  const names = ['eco', 'balanced', 'max_profit'];
+  const labels = { eco: 'Eco', balanced: 'Balanced', max_profit: 'Max profit' };
+  const vals = names.map(n => totals[n]).filter(v => v !== undefined && v !== null);
+  if (!vals.length) {
+    return '<div style="color:var(--dim)">Building up history — one comparison point gets added each day, check back after a few days.</div>';
+  }
+  const best = Math.min(...vals);
+  const tiles = names.map(n => {
+    const v = totals[n];
+    if (v === undefined || v === null) {
+      return `<div class="gl-tile"><div class="lbl">${labels[n]}</div><div class="val" style="color:var(--dim);font-size:14px">—</div></div>`;
+    }
+    const isBest = v === best;
+    return `<div class="gl-tile"${isBest ? ' style="outline:1px solid var(--green)"' : ''}>
+      <div class="lbl">${labels[n]}${isBest ? ' 🏆' : ''}</div>
+      <div class="val num" style="color:${v <= 0 ? 'var(--green)' : 'var(--amber)'}">£${v.toFixed(2)}</div>
+    </div>`;
+  }).join('');
+  return `<div class="gl-grid">${tiles}</div>`;
+}
 function renderSavingSessions(joined, available) {
   const parts = [];
   if (available && available.length) {
@@ -606,6 +652,20 @@ async function refresh() {
         <div class="gl-sub">Real grid spend per day (last 28) — green bars are days you netted a credit, amber are days you paid, companion to the Saved (7d) tile on Overview.</div>
         ${renderDailyCostChart(d.daily_cost_history)}
         ${d.plan_accuracy ? `<div class="gl-sub" style="margin-top:10px">Plan accuracy (${esc(d.plan_accuracy.date)}): predicted <b style="color:var(--ink)">£${Number(d.plan_accuracy.forecast).toFixed(2)}</b>, actual <b style="color:var(--ink)">£${Number(d.plan_accuracy.actual).toFixed(2)}</b> — the plan's own morning forecast against what actually happened, no invented score.</div>` : ''}
+      </div>
+      <div class="gl-wrap">
+        <div class="gl-h">Risk profile comparison</div>
+        <div class="gl-sub">What each risk profile's own morning plan predicted, summed across every day recorded — not a real-outcome backtest (that would need running all three profiles continuously), but a genuine forecast-vs-forecast comparison building up over time.</div>
+        ${renderProfileComparison(d.profile_comparison_totals)}
+      </div>
+      <div class="gl-wrap">
+        <div class="gl-h">Carbon intensity</div>
+        <div class="gl-sub">GB grid carbon intensity, next 24h (National Grid ESO) — informational only, not factored into the cost plan (no solid basis to convert gCO2/kWh into a £ trade-off).</div>
+        <div class="gl-grid" style="margin-bottom:4px">
+          <div class="gl-tile"><div class="lbl">Right now</div><div class="val num" style="color:${carbonColor(d.carbon_index)}">${d.carbon_now === null || d.carbon_now === undefined ? '—' : Math.round(d.carbon_now)}${d.carbon_now === null || d.carbon_now === undefined ? '' : ' gCO2/kWh'}</div></div>
+          <div class="gl-tile"><div class="lbl">Band</div><div class="val" style="font-size:16px;color:${carbonColor(d.carbon_index)}">${esc(d.carbon_index || '—')}</div></div>
+        </div>
+        ${renderCarbonChart(d.carbon_forecast_data)}
       </div>
       <div class="gl-wrap">
         <div class="gl-h">Learned house usage</div>

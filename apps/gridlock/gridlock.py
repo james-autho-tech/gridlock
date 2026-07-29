@@ -9,10 +9,11 @@ import urllib.request
 VERSION = os.environ.get("GL_VERSION") or "dev"
 
 import appdaemon.plugins.hass.hassapi as hass
-from datetime import datetime, timedelta, time as dtime
+from datetime import datetime, timedelta, timezone, time as dtime
 
 SLOT_MIN = 30
 HORIZON_SLOTS = 48  # 24h
+RISK_PROFILES = {"eco": 0.09, "balanced": 0.05, "max_profit": 0.01}
 
 
 class GridLock(hass.Hass):
@@ -175,14 +176,13 @@ class GridLock(hass.Hass):
         # profile if both are set. These are reasoned defaults, not a
         # real wear model — there's no solid Sigenergy degradation-vs-
         # cycle-depth data to build a genuine SoH-driven one from.
-        risk_profiles = {"eco": 0.09, "balanced": 0.05, "max_profit": 0.01}
         self.battery_risk_profile = str(a.get("battery_risk_profile", "balanced")).lower()
-        if self.battery_risk_profile not in risk_profiles:
+        if self.battery_risk_profile not in RISK_PROFILES:
             self.log(f"Unknown battery_risk_profile {self.battery_risk_profile!r} "
                      "— falling back to 'balanced'.", level="WARNING")
             self.battery_risk_profile = "balanced"
         self.degradation = float(a.get("battery_degradation_cost",
-                                       risk_profiles[self.battery_risk_profile]))
+                                       RISK_PROFILES[self.battery_risk_profile]))
         self.floor_soc = float(a.get("floor_soc", 20.0))
         self.charge_kw = float(a.get("charge_rate_kw", 10.0))
         self.discharge_kw = float(a.get("discharge_rate_kw", 10.0))
@@ -301,6 +301,13 @@ class GridLock(hass.Hass):
 
         if self.ssen_postcode:
             self.run_every(self.poll_ssen, "now", 300)
+
+        # National Grid ESO's carbon intensity API — free, public, no
+        # postcode/auth needed, so always on. Informational only (shown
+        # on the Forecast tab), not fed into cost planning: turning a
+        # gCO2/kWh figure into a £ trade-off would need an arbitrary
+        # conversion rate with no solid basis to pick one from.
+        self.run_every(self.poll_carbon_intensity, "now", 1800)
 
         # Re-plan every 5 min, financials piggyback on the same tick
         self.run_every(self.tick, "now", 300)
@@ -612,9 +619,12 @@ class GridLock(hass.Hass):
         # whatever the real net-cost sensor last read before midnight,
         # then start today fresh (baseline SoC reseeded from the real
         # SoC so a shadow-simulation error can't compound forever).
-        self.savings_history[self.savings_day] = {
+        # Merge rather than replace — _track_plan_accuracy/_track_
+        # profile_comparison may already have written a "forecast" or
+        # "profile_comparison" key for this same date earlier today.
+        self.savings_history.setdefault(self.savings_day, {}).update({
             "actual": round(self._last_actual_energy_cost, 4),
-            "baseline": round(self.baseline_cost_today, 4)}
+            "baseline": round(self.baseline_cost_today, 4)})
         self.savings_history = dict(list(self.savings_history.items())[-400:])
         self._save_savings_history()
         self.savings_day = today_iso
@@ -690,7 +700,33 @@ class GridLock(hass.Hass):
             self._save_savings_history()
         self.plan_accuracy_day = today_iso
         self.day_start_forecast = grid_cost
+        self._track_profile_comparison(now)
         self._save_savings_state()
+
+    def _track_profile_comparison(self, now):
+        """Once daily: what each risk profile's own morning plan
+        predicts for today, using the same real rates/PV/load. Not a
+        real-outcome backtest — that would mean running the full
+        optimiser continuously for all three profiles rather than just
+        the active one, too expensive to do every 5 minutes — but a
+        genuine same-morning comparison rather than a guess, and cheap
+        since it only runs once a day."""
+        real_degradation = self.degradation
+        soc0 = self.get_float_state(self.ent_soc, 50.0)
+        comparison = {}
+        for name, deg in RISK_PROFILES.items():
+            self.degradation = deg
+            try:
+                slots = self.build_slots(now)
+                _, _, _, _, gc = self.optimise(slots, soc0)
+                comparison[name] = round(gc, 2)
+            except Exception as exc:  # noqa: BLE001 — one profile failing shouldn't break the tick
+                self.log(f"Profile comparison failed for {name!r}: {exc!r}", level="WARNING")
+            finally:
+                self.degradation = real_degradation
+        today_iso = now.date().isoformat()
+        self.savings_history.setdefault(today_iso, {})["profile_comparison"] = comparison
+        self._save_savings_history()
 
     def _publish_savings(self, now):
         today, week, month, all_time = self._savings_totals(now)
@@ -711,6 +747,21 @@ class GridLock(hass.Hass):
                 accuracy = {"date": d, "forecast": round(v["forecast"], 2),
                            "actual": round(v["actual"], 2)}
                 break
+        # Profile comparison: each risk profile's own morning forecast,
+        # day by day, plus a running total across every recorded day —
+        # which one actually trends best isn't obvious from a single
+        # day, this is what answers that over time.
+        profile_days = sorted(
+            ((d, v["profile_comparison"]) for d, v in self.savings_history.items()
+             if "profile_comparison" in v),
+            key=lambda p: p[0])
+        profile_totals = {}
+        for _, pc in profile_days:
+            for name, val in pc.items():
+                profile_totals[name] = profile_totals.get(name, 0.0) + val
+        profile_totals = {k: round(v, 2) for k, v in profile_totals.items()}
+        profile_history = [{"date": d, **pc} for d, pc in profile_days[-28:]]
+
         self.set_state("sensor.gridlock_savings", state=f"{today:.2f}",
                        attributes={"friendly_name": "GridLock Savings",
                                    "unit_of_measurement": "£",
@@ -718,7 +769,9 @@ class GridLock(hass.Hass):
                                    "today": today, "week": week,
                                    "month": month, "all_time": all_time,
                                    "daily_cost_history": history,
-                                   "plan_accuracy": accuracy})
+                                   "plan_accuracy": accuracy,
+                                   "profile_comparison_history": profile_history,
+                                   "profile_comparison_totals": profile_totals})
 
     def _cost_tracking_path(self):
         return os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -963,6 +1016,34 @@ class GridLock(hass.Hass):
                         "the battery at 100%.")
         if bool(self.ssen_state["local"]) != bool(prev["local"]):
             self.tick({})  # react immediately on outage appear/clear
+
+    def poll_carbon_intensity(self, kwargs):
+        """National Grid ESO's public carbon intensity API — GB
+        national average, gCO2/kWh, 30-min blocks matching GridLock's
+        own slot size. https://carbonintensity.org.uk, no key/postcode
+        needed."""
+        try:
+            now_iso = self.get_now().astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
+            req = urllib.request.Request(
+                f"https://api.carbonintensity.org.uk/intensity/{now_iso}/fw24h",
+                headers={"Accept": "application/json", "User-Agent": "GridLock/2"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.load(resp)["data"]
+        except Exception as exc:  # noqa: BLE001 — network is best-effort
+            self.log(f"Carbon intensity poll failed: {exc!r}", level="WARNING")
+            return
+        curve = [{"x": self._iso(p["from"]).isoformat(),
+                  "y": p["intensity"]["forecast"],
+                  "index": p["intensity"]["index"]}
+                 for p in data if p.get("intensity", {}).get("forecast") is not None]
+        current = curve[0] if curve else None
+        self.set_state("sensor.gridlock_carbon_intensity",
+                       state=str(current["y"]) if current else "unknown",
+                       attributes={"friendly_name": "GridLock Carbon Intensity",
+                                   "unit_of_measurement": "gCO2/kWh",
+                                   "icon": "mdi:molecule-co2",
+                                   "index": current["index"] if current else None,
+                                   "forecast_data": curve})
 
     def storm_active(self):
         """Returns a reason string if Storm Watch should be active, else None."""
