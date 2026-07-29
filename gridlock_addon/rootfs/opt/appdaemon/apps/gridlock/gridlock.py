@@ -1293,8 +1293,17 @@ class GridLock(hass.Hass):
                 batt += pv_c * eff
                 grid_out += pv - pv_c
                 grid_in += load
-            elif s["export"] > 0:
-                d = min(s["export"], max_d, max(0.0, batt - floor_kwh))
+            elif s["export"] > 0 and batt > floor_kwh:
+                # Genuine battery discharge for export — PV surplus
+                # sold alongside it. If the battery's already at the
+                # floor (this slot's "export" was only ever a planned
+                # target, not something actually achievable), there's
+                # nothing to discharge — fall through to the self-
+                # consumption branch below instead of still selling
+                # the PV: an empty battery with free PV to absorb
+                # should charge from it, not sell it cheap, regardless
+                # of what this slot's own rate happens to be.
+                d = min(s["export"], max_d, batt - floor_kwh)
                 batt -= d
                 ac = d * eff
                 serve = min(ac, load)

@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.22.1
+- **Fixed a real planning bug**, caught from a user-reported full 24h
+  plan: once the battery hit its floor, EXPORT slots kept selling PV
+  surplus at whatever that slot's rate happened to be, instead of
+  charging the empty battery — traced one exact figure (a reported
+  "-20.5p" cost with SoC flat at the floor) to precisely 1.60kWh PV
+  surplus × 12.8p, confirming zero battery discharge was actually
+  involved despite the row being labelled EXPORT. Now, when there's
+  nothing left to discharge, the slot falls back to self-consumption
+  instead of still selling the PV.
+- End-to-end effect (verified against a scenario shaped like the
+  reported data): the optimiser now holds the battery back through
+  mediocre-rate morning/midday windows — still capturing PV-overflow
+  revenue automatically whenever the battery's already full, same as
+  before — and concentrates the actual battery discharge into the
+  genuinely best rate window later in the day, instead of squandering
+  charge early at a fraction of the price it could fetch a few hours
+  on.
+
 ## 2.22.0
 - New **thermal derating**: once the inverter's temperature reads
   above 60°C, every charge/discharge command GridLock sends now gets
