@@ -3,7 +3,7 @@ import os
 import re
 import urllib.request
 
-VERSION = "2.14.0"
+VERSION = "2.14.1"
 
 import appdaemon.plugins.hass.hassapi as hass
 from datetime import datetime, timedelta, time as dtime
@@ -128,8 +128,11 @@ class GridLock(hass.Hass):
                              or self._find_entity(prefix="sensor.", contains="hypervolt_ev_power")
                              or self._find_hypervolt_ev_power())
         self.ent_inverter_temp = (a.get("inverter_temp_entity")
-                                  or self._find_sigen_temp("inverter"))
+                                  or self.overrides.get("inverter_temp_entity_override")
+                                  or self._find_sigen_temp("pcs", exclude=["cell", "battery"])
+                                  or self._find_sigen_temp("inverter", exclude=["cell", "battery"]))
         self.ent_battery_temp = (a.get("battery_temp_entity")
+                                 or self.overrides.get("battery_temp_entity_override")
                                  or self._find_sigen_temp("cell"))
 
         # Parameters
@@ -374,16 +377,22 @@ class GridLock(hass.Hass):
                      "in apps.yaml if wrong.", level="WARNING")
         return [pool[0]]
 
-    def _find_sigen_temp(self, keyword):
+    def _find_sigen_temp(self, keyword, exclude=None):
         """Single sigen temperature sensor matching keyword — inverter
         and battery efficiency both fall off at high temperature, so
         this is shown alongside the solar forecast as a sanity check
         on it, not fed into the forecast numbers themselves (no solid
-        derating curve to calculate that from)."""
+        derating curve to calculate that from). Real-world find: every
+        Sigenergy entity is namespaced "sigen_inverter_..." regardless
+        of which subsystem it's actually about (e.g. battery SoC is
+        "sigen_inverter_battery_state_of_charge"), so "inverter" alone
+        matches everything and isn't a useful filter — exclude lets a
+        caller rule out keywords from a different sensor's search."""
         flat = self._all_states_flat()
         candidates = [eid for eid in flat
                       if eid.startswith("sensor.") and "sigen" in eid
-                      and "temperature" in eid and keyword in eid]
+                      and "temperature" in eid and keyword in eid
+                      and not any(x in eid for x in (exclude or []))]
         live = [eid for eid in candidates if self._is_live(flat.get(eid))]
         pool = live or candidates
         return pool[0] if pool else None

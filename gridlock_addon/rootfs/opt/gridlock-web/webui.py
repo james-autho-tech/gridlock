@@ -135,6 +135,8 @@ def build_status():
             "Battery power": status_attrs.get("battery_power_entity"),
             "Load power": status_attrs.get("load_power_entity"),
             "EV power": status_attrs.get("ev_power_entity"),
+            "Inverter temp": status_attrs.get("inverter_temp_entity"),
+            "Battery temp": status_attrs.get("battery_temp_entity"),
             "Storm Watch": ", ".join(status_attrs.get("storm_watch_entities") or []) or None,
             "SSEN postcode": status_attrs.get("ssen_postcode"),
         },

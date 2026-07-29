@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.14.1
+- Fix Inverter/Battery cells in the System temperature panel showing
+  the identical value — every Sigenergy entity is namespaced
+  "sigen_inverter_..." regardless of which subsystem it's actually
+  about (battery SoC is literally "sigen_inverter_battery_state_of_
+  charge"), so matching on "inverter" as a keyword matched everything
+  and both discoveries landed on the same sensor. Now matches "pcs"
+  (Power Conversion System — the actual inverter internals) first,
+  explicitly excluding anything with "cell"/"battery" in the name.
+- Inverter temp / Battery cell temp now show up in the Discovered
+  Entities panel like every other auto-discovered entity, plus new
+  Configuration tab overrides (`inverter_temp_entity_override`,
+  `battery_temp_entity_override`) and apps.yaml keys, for setups where
+  the "pcs"/"cell" keywords still pick the wrong sensor.
+
 ## 2.14.0
 - Decision log now drops in a "Still: ..." check-in once an hour even
   when nothing's changed, instead of going completely silent for
