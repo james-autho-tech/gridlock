@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.27.0
+- **Self-consumption no longer rations available battery charge by
+  default.** If there's charge above the floor, it's now spent
+  covering the load in front of it, immediately — not held back for a
+  hypothetically-better-value slot later in the same stretch. This
+  reverts the default behaviour from the pacing/weighting work in
+  2.23.0/2.24.1 for the ECO branch specifically; that logic never
+  touched EXPORT decisions (a separate part of the optimiser) and
+  still doesn't. The old behaviour (ration self-consumption toward a
+  future off-peak window, and leave the battery alone during an
+  already-cheap slot) is still available as an opt-in via
+  `conserve_battery_for_peak: true` in `apps.yaml`, off by default.
+
 ## 2.26.0
 - New **"Grid kWh" column** on the plan table, next to "Load kWh" —
   shows exactly how much of that slot's load actually came from the

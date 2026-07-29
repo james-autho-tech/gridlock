@@ -87,6 +87,15 @@ gridlock:
   # contiguous export block below the threshold gets dropped back to
   # self-consumption; a genuinely good export window is untouched.
   min_export_pct: 5.0
+  # Default (false): use whatever's in the battery for self-consumption
+  # immediately, slot by slot - if there's charge above the floor, it
+  # spends it on the load in front of it rather than rationing it for
+  # a later slot the maths says is worth more. Set true to instead
+  # hold some back during an already-cheap slot, or ration it across a
+  # stretch heading toward a future off-peak window, spending it only
+  # where it's worth the most - cheaper in total, but can mean a slot
+  # with charge sitting right there still shows some grid cost.
+  # conserve_battery_for_peak: false
   # Optional: 24 hourly load weights (relative), used only for slots
   # the learned load profile above doesn't have data for yet:
   # load_hourly_weights: [2,2,2,2,2,2,4,6,5,4,4,4,4,4,4,5,7,9,9,8,6,5,4,3]

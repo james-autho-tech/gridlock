@@ -192,6 +192,16 @@ class GridLock(hass.Hass):
         self.ev_concurrent_charge_kw = float(a.get("ev_concurrent_charge_kw", 5.0))
         self.cheap_rate = float(a.get("cheap_rate_threshold", 0.10))
         self.min_export_pct = float(a.get("min_export_pct", 5.0))
+        # Default (False): use whatever's in the battery for self-
+        # consumption immediately, slot by slot - if there's charge
+        # above the floor, spend it on this slot's load rather than
+        # rationing it for a hypothetically-better-value slot later.
+        # Set True to instead hold some back during an already-cheap
+        # slot / ration it across a stretch heading toward a future
+        # off-peak window, spending it only where the math says it's
+        # worth the most - cheaper in aggregate, but means slots with
+        # charge sitting right there can still show a grid cost.
+        self.conserve_battery = bool(a.get("conserve_battery_for_peak", False))
         self.default_import = float(a.get("default_import_rate", 0.2839))
         self.default_export = float(a.get("default_export_rate", 0.15))
         self.export_margin = float(a.get("export_margin", 0.02))
@@ -1370,6 +1380,11 @@ class GridLock(hass.Hass):
                 if load > 0:
                     headroom = max(0.0, batt - floor_kwh)
                     next_cheap = s.get("next_cheap_idx")
+                    if not self.conserve_battery:
+                        # User override: just drain whatever's there,
+                        # slot by slot, regardless of whether a later
+                        # slot would get more value out of it.
+                        avail = min(max_d, headroom)
                     # No export candidate beat the cheap-import gate for
                     # this slot (that branch already runs flat-out — see
                     # above), so this is genuinely a "meh, just keep the
@@ -1384,7 +1399,7 @@ class GridLock(hass.Hass):
                     # Recomputed fresh every slot from the actual battery
                     # level, so it self-corrects if PV covers some slots
                     # along the way instead of committing to a stale plan.
-                    if next_cheap is not None and next_cheap > i:
+                    elif next_cheap is not None and next_cheap > i:
                         total_deficit = s.get("remaining_deficit", 0.0)
                         this_deficit = max(0.0, s["load"] - s["pv"])
                         if total_deficit > 0:
