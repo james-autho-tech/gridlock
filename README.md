@@ -15,7 +15,10 @@ Bundles its own AppDaemon runtime, same distribution model as
 **Repositories** → add `https://github.com/james-autho-tech/gridlock`
 → find "GridLock" → Install. Config lives in
 `/addon_configs/gridlock/` once started — see
-[gridlock_addon/DOCS.md](gridlock_addon/DOCS.md).
+[gridlock_addon/DOCS.md](gridlock_addon/DOCS.md). If auto-discovery
+picks the wrong entity for something (check the web UI's "Discovered
+entities" panel), the add-on's own **Configuration** tab has override
+fields for it — no YAML editing needed.
 
 This path is newer/less battle-tested than the HACS route below —
 if the build fails, check the add-on's Supervisor log first (likely

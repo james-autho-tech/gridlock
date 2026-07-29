@@ -3,7 +3,7 @@ import os
 import re
 import urllib.request
 
-VERSION = "2.11.0"
+VERSION = "2.12.0"
 
 import appdaemon.plugins.hass.hassapi as hass
 from datetime import datetime, timedelta, time as dtime
@@ -21,6 +21,13 @@ class GridLock(hass.Hass):
         self.log(f"=== GRIDLOCK {VERSION} PLANNING ENGINE STARTING ===")
 
         a = self.args
+        # Entity overrides from the Supervisor add-on's Configuration
+        # tab (written by run to addon_overrides.json) — a UI form for
+        # the fields most likely to need fixing if auto-discovery picks
+        # the wrong entity, without hand-editing apps.yaml. Checked
+        # after apps.yaml's own explicit values, before discovery.
+        self.overrides = self._load_addon_overrides()
+
         # Hardware
         self.ent_mode = a["sigen_mode"]
         self.ent_disch_limit = a["sigen_discharge_limit"]
@@ -28,7 +35,8 @@ class GridLock(hass.Hass):
         self.ent_soc = a["sigen_soc"]
 
         # Inputs
-        self.ent_ev = a.get("ev_charging") or self._find_hypervolt_charging()
+        self.ent_ev = (a.get("ev_charging") or self.overrides.get("ev_charging_override")
+                       or self._find_hypervolt_charging())
 
         # Octopus entities embed your account/MPAN in the entity_id
         # itself, so instead of requiring them in config, discover them
@@ -42,14 +50,22 @@ class GridLock(hass.Hass):
         # linked ones use "octopus_energy_<device-uuid>_" — so match
         # broadly on the stable suffix and let the live-state tiebreak
         # in _find_entity sort out any dead/restored duplicates.
-        self.ent_dispatch = a.get("octopus_dispatch") or self._find_entity(
-            prefix="binary_sensor.octopus_energy_", suffix="_intelligent_dispatching")
-        self.ent_import_rate = a.get("import_rate") or self._find_entity(
-            prefix="sensor.octopus_energy_electricity_", suffix="_current_rate", avoid="export")
-        self.ent_export_rate = a.get("export_rate") or self._find_entity(
-            prefix="sensor.octopus_energy_electricity_", suffix="_export_current_rate")
-        self.ent_saving_events = a.get("octopus_saving_events") or self._find_entity(
-            prefix="event.octopus_energy_", suffix="_octoplus_saving_session_events")
+        self.ent_dispatch = (a.get("octopus_dispatch")
+                             or self.overrides.get("octopus_dispatch_override")
+                             or self._find_entity(
+            prefix="binary_sensor.octopus_energy_", suffix="_intelligent_dispatching"))
+        self.ent_import_rate = (a.get("import_rate")
+                                or self.overrides.get("import_rate_override")
+                                or self._find_entity(
+            prefix="sensor.octopus_energy_electricity_", suffix="_current_rate", avoid="export"))
+        self.ent_export_rate = (a.get("export_rate")
+                                or self.overrides.get("export_rate_override")
+                                or self._find_entity(
+            prefix="sensor.octopus_energy_electricity_", suffix="_export_current_rate"))
+        self.ent_saving_events = (a.get("octopus_saving_events")
+                                  or self.overrides.get("octopus_saving_events_override")
+                                  or self._find_entity(
+            prefix="event.octopus_energy_", suffix="_octoplus_saving_session_events"))
 
         # Rate curve sources (BottlecapDave rate events) — matched off
         # the import/export rate entities' account/MPAN stem, trying
@@ -83,7 +99,9 @@ class GridLock(hass.Hass):
         # profile (persisted to disk), which _load_kwh() prefers once a
         # slot has data. typical_daily_house_kwh / load_hourly_weights
         # remain the fallback for slots not learned yet.
-        self.ent_load_power = a.get("load_power_entity") or self._find_load_entity()
+        self.ent_load_power = (a.get("load_power_entity")
+                               or self.overrides.get("load_power_entity_override")
+                               or self._find_load_entity())
         self.load_profile = self._load_load_profile()
         self.decision_log = self._load_decision_log()
 
@@ -92,17 +110,23 @@ class GridLock(hass.Hass):
         # from the boolean sensors rather than trusting a sign
         # convention we can't verify across inverter integrations.
         self.ent_pv_power_entities = a.get("pv_power_entities") or self._find_sigen_pv_power()
-        self.ent_grid_power = self._find_sigen_power("grid")
-        self.ent_battery_power = self._find_sibling(
-            self._mpan_stem(self.ent_soc, "_state_of_charge"), "sensor", ["_power"]
-        ) or self._find_sigen_power("battery")
+        self.ent_grid_power = (a.get("grid_power_entity")
+                               or self.overrides.get("grid_power_entity_override")
+                               or self._find_sigen_power("grid"))
+        self.ent_battery_power = (a.get("battery_power_entity")
+                                  or self.overrides.get("battery_power_entity_override")
+                                  or self._find_sibling(
+            self._mpan_stem(self.ent_soc, "_state_of_charge"), "sensor", ["_power"])
+                                  or self._find_sigen_power("battery"))
         self.ent_pv_generating = self._find_sigen_binary("pv_generating")
         self.ent_importing = self._find_sigen_binary("importing_from_grid")
         self.ent_exporting = self._find_sigen_binary("exporting_to_grid")
         self.ent_battery_charging = self._find_sigen_binary("battery_charging")
         self.ent_battery_discharging = self._find_sigen_binary("battery_discharging")
-        self.ent_ev_power = a.get("ev_power_entity") or self._find_entity(
-            prefix="sensor.", contains="hypervolt_ev_power") or self._find_hypervolt_ev_power()
+        self.ent_ev_power = (a.get("ev_power_entity")
+                             or self.overrides.get("ev_power_entity_override")
+                             or self._find_entity(prefix="sensor.", contains="hypervolt_ev_power")
+                             or self._find_hypervolt_ev_power())
 
         # Parameters
         self.battery_kwh = float(a.get("battery_capacity_kwh", 10.0))
@@ -138,7 +162,9 @@ class GridLock(hass.Hass):
         self.storm_target_soc = float(a.get("storm_watch_target_soc", 100.0))
 
         # SSEN Power Track — engine polls the open API directly
-        self.ssen_postcode = str(a.get("ssen_postcode", "")).upper().strip()
+        self.ssen_postcode = str(
+            a.get("ssen_postcode") or self.overrides.get("ssen_postcode_override") or ""
+        ).upper().strip()
         self.ssen_url = a.get(
             "ssen_api_url",
             "https://external.distribution.prd.ssen.co.uk"
@@ -418,6 +444,20 @@ class GridLock(hass.Hass):
                 return json.load(f)
         except (OSError, ValueError):
             return []
+
+    def _load_addon_overrides(self):
+        """Entity overrides set via the Supervisor add-on's
+        Configuration tab (written by run to addon_overrides.json,
+        next to this file). Empty/missing entirely for the HACS/manual
+        AppDaemon-app install path, which has no such UI — falls back
+        to {} there, same as if nothing were overridden."""
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "addon_overrides.json")
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {}
 
     def _log_decision(self, state, reason):
         """Human-readable history of what GridLock actually did and why

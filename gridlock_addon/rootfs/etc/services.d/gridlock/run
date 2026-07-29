@@ -45,6 +45,34 @@ fi
 # add-on version), apps.yaml/secrets.yaml persist in addon_config.
 cp /opt/appdaemon/apps/gridlock/gridlock.py "${CONFIG_DIR}/apps/gridlock/gridlock.py"
 
+# Entity overrides from the add-on's Configuration tab — written as a
+# small JSON file gridlock.py reads as an extra fallback source,
+# rather than ever touching apps.yaml. Passed to python via env vars
+# (not string-interpolated into the script) to avoid any quoting
+# issues with whatever a user types into the config form.
+for f in ev_charging_override octopus_dispatch_override import_rate_override \
+         export_rate_override octopus_saving_events_override \
+         load_power_entity_override ev_power_entity_override \
+         grid_power_entity_override battery_power_entity_override \
+         ssen_postcode_override; do
+    val="$(bashio::config "$f" 2>/dev/null)" || val=""
+    if [ "$val" != "null" ] && [ -n "$val" ]; then
+        export "GL_OVR_${f}=${val}"
+    fi
+done
+python3 - "${CONFIG_DIR}" <<'PYEOF' || true
+import json
+import os
+import sys
+
+config_dir = sys.argv[1]
+prefix = "GL_OVR_"
+overrides = {k[len(prefix):]: v for k, v in os.environ.items() if k.startswith(prefix)}
+path = os.path.join(config_dir, "apps", "gridlock", "addon_overrides.json")
+with open(path, "w") as f:
+    json.dump(overrides, f)
+PYEOF
+
 # AppDaemon requires latitude/longitude/elevation/time_zone up front —
 # pull them from HA core's own config via the Supervisor API proxy
 # rather than hardcoding, with a short retry in case core isn't ready.

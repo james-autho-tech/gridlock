@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.12.0
+- Add a Configuration tab (Supervisor add-on's native UI) exposing
+  entity overrides for anything auto-discovery might get wrong:
+  EV charging/power, IOG dispatch, import/export rate, saving
+  events, grid/battery/load power, SSEN postcode. Written to
+  addon_overrides.json, read as a fallback between apps.yaml's own
+  values and auto-discovery — apps.yaml itself is never touched.
+  Not a "select your inverter/EV brand" system (that would need real
+  entity-naming data from other hardware brands to build reliably,
+  which isn't available) — a form-based way to fix discovery misses
+  without hand-editing YAML, for the hardware GridLock already
+  supports.
+- grid_power_entity / battery_power_entity are now also overridable
+  directly in apps.yaml (previously had no override path at all).
+
 ## 2.11.0
 - Add a **Forecast** tab: Solcast solar forecast as a bar chart
   (today/tomorrow totals + hourly breakdown), Storm Watch status,
