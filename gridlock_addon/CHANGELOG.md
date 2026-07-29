@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.29.0
+- **Extended the planning horizon from 24h to 28h.** Root cause of
+  the battery still hitting empty (and bypass) before the next
+  off-peak window, even after the export-reserve fix in 2.28.0: for
+  slots late in the evening (e.g. the export event, or the tail after
+  it), the *next* off-peak window sometimes fell just past the exact
+  24h boundary — invisible to `next_cheap_idx`/`remaining_deficit`,
+  so there was nothing to ration EXPORT or self-consumption against.
+  Confirmed directly: a slot at Thu 18:00 (from a plan built at Wed
+  23:00) couldn't see the following off-peak window at all under the
+  old 24h horizon; under 28h it's visible 5.5h ahead, exactly where
+  the reserve logic needs it. The extra 4h always lands in the small
+  hours of the next day (PV is correctly ~0 there regardless), and
+  stays within Octopus's day-ahead rates and Solcast's forecast
+  window for all but the very latest "now" times. ~22ms per plan
+  recompute in testing (up from ~16ms), negligible against the
+  5-minute tick; plan_table payload grows from ~8KB to ~9.3KB, still
+  well under HA's ~16KB attribute limit.
+
 ## 2.28.1
 - **Bypass mode now shows in the plan table itself**, not just the
   live status line. It was only ever computed inside `apply()` for

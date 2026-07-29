@@ -12,7 +12,18 @@ import appdaemon.plugins.hass.hassapi as hass
 from datetime import datetime, timedelta, timezone, time as dtime
 
 SLOT_MIN = 30
-HORIZON_SLOTS = 48  # 24h
+# 28h, not a clean 24h — a plan built late in the evening needs to see
+# past the *next* off-peak window, not just to the same clock time
+# tomorrow. With exactly 24h, a slot near the end of the horizon (e.g.
+# during an evening export event) can find the next off-peak window
+# sitting just past the boundary, invisible to next_cheap_idx/
+# remaining_deficit — so EXPORT and self-consumption pacing have
+# nothing to ration against and can leave too little reserve to reach
+# it. The extra 4h always lands in the small hours of the following
+# day (PV is correctly ~0 there regardless of forecast availability),
+# and stays within Octopus's day-ahead published rates and Solcast's
+# today/tomorrow forecast for all but the very latest "now" times.
+HORIZON_SLOTS = 56  # 28h
 RISK_PROFILES = {"eco": 0.09, "balanced": 0.05, "max_profit": 0.01}
 
 
@@ -1667,7 +1678,7 @@ class GridLock(hass.Hass):
             # Whole row gets a faint tint of the action's colour — a
             # quicker "what's happening in this slot" scan than reading
             # the Action column text alone, especially scrolling fast
-            # through 48 rows.
+            # through the whole horizon's rows.
             grid_kwh = cost_trace[i]["grid_in"]
             rows.append(
                 f"<tr style='background:{colour}1a'>"
@@ -1681,7 +1692,7 @@ class GridLock(hass.Hass):
                 f"<td style='color:{delta_colour}'>{delta_sign}{delta_p:.1f}p</td>"
                 f"<td>£{cost_trace[i]['total']:.2f}</td></tr>")
             # Array-of-arrays, not array-of-objects — field names would
-            # otherwise repeat 48 times and eat most of HA's ~16KB
+            # otherwise repeat once per row and eat most of HA's ~16KB
             # attribute-size limit for no reason.
             plan_table.append([
                 s["start"].astimezone().strftime("%a %H:%M"),
