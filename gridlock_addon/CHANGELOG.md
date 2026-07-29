@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.10.0
+- Surface Storm Watch (MeteoAlarm) and SSEN postcode config in the
+  Discovered Entities panel — previously invisible there since
+  they're user-configured, not auto-discovered.
+- Split the action tape: a compact "Next up" preview stays on
+  Overview, full 24h detail moves to its own **Plan** tab.
+
 ## 2.9.3
 - Fix the actual "Loading…" root cause, found via the browser console
   (Firefox): `Uncaught SyntaxError: unexpected token: identifier` at

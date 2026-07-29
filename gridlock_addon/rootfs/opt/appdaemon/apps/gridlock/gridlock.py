@@ -3,7 +3,7 @@ import os
 import re
 import urllib.request
 
-VERSION = "2.9.0"
+VERSION = "2.10.0"
 
 import appdaemon.plugins.hass.hassapi as hass
 from datetime import datetime, timedelta, time as dtime
@@ -1136,4 +1136,6 @@ class GridLock(hass.Hass):
                                    "exporting_entity": self.ent_exporting,
                                    "battery_charging_entity": self.ent_battery_charging,
                                    "battery_discharging_entity": self.ent_battery_discharging,
-                                   "ev_power_entity": self.ent_ev_power})
+                                   "ev_power_entity": self.ent_ev_power,
+                                   "storm_watch_entities": [e for e, _ in self.storm_sources if e] or None,
+                                   "ssen_postcode": self.ssen_postcode or None})

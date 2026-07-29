@@ -116,6 +116,8 @@ def build_status():
             "Battery power": status_attrs.get("battery_power_entity"),
             "Load power": status_attrs.get("load_power_entity"),
             "EV power": status_attrs.get("ev_power_entity"),
+            "Storm Watch": ", ".join(status_attrs.get("storm_watch_entities") or []) or None,
+            "SSEN postcode": status_attrs.get("ssen_postcode"),
         },
     }
 
@@ -173,6 +175,12 @@ PAGE = """<!doctype html>
   .gl-h { font-size:12px; letter-spacing:1.6px; text-transform:uppercase;
           color:var(--dim); margin-bottom:10px; }
   .gl-scroll { max-height:520px; overflow-y:auto; }
+  .gl-scroll-mini { max-height:230px; overflow-y:hidden; }
+  .gl-more-btn { display:block; width:100%; margin-top:12px; padding:9px;
+                 background:none; border:1px solid var(--line); border-radius:8px;
+                 color:var(--cyan); font-size:12px; font-weight:600; letter-spacing:.3px;
+                 cursor:pointer; font-family:inherit; transition:background .15s; }
+  .gl-more-btn:hover { background:rgba(56,189,248,.08); }
   .flow-wrap { display:flex; justify-content:center; padding:12px 0; }
   .flow-svg { width:100%; max-width:920px; height:auto; }
   .flow-line { fill:none; stroke:#1e293b; stroke-width:2; }
@@ -220,6 +228,7 @@ PAGE = """<!doctype html>
 <nav class="gl-nav">
   <button class="gl-nav-btn" data-tab="overview">Overview</button>
   <button class="gl-nav-btn" data-tab="entities">Entities</button>
+  <button class="gl-nav-btn" data-tab="plan">Plan</button>
   <button class="gl-nav-btn" data-tab="tariffs">Tariffs</button>
   <button class="gl-nav-btn" data-tab="log">Log</button>
 </nav>
@@ -366,14 +375,21 @@ async function refresh() {
         ${renderFlow(d.flow)}
       </div>
       <div class="gl-wrap">
-        <div class="gl-h">30-minute action tape</div>
-        <div class="gl-scroll">${d.plan_html || '<div style="color:var(--dim)">Waiting for first plan — computes every 5 minutes.</div>'}</div>
+        <div class="gl-h">Next up</div>
+        <div class="gl-scroll gl-scroll-mini">${d.plan_html || '<div style="color:var(--dim)">Waiting for first plan — computes every 5 minutes.</div>'}</div>
+        <button class="gl-more-btn" onclick="selectTab('plan')">Full 24h plan →</button>
       </div>
     </div>
     <div class="tab-page" data-tab="entities">
       <div class="gl-wrap">
         <div class="gl-h">Discovered entities</div>
         ${renderEntities(d.entities)}
+      </div>
+    </div>
+    <div class="tab-page" data-tab="plan">
+      <div class="gl-wrap">
+        <div class="gl-h">30-minute action tape — full 24h plan</div>
+        <div class="gl-scroll">${d.plan_html || '<div style="color:var(--dim)">Waiting for first plan — computes every 5 minutes.</div>'}</div>
       </div>
     </div>
     <div class="tab-page" data-tab="tariffs">
