@@ -1447,12 +1447,77 @@ class GridLock(hass.Hass):
             return "EXPORT"
         return "ECO"
 
-    def publish_plan(self, slots, trace, cost_trace, grid_cost, soc0, live_label=None):
+    @staticmethod
+    def _fmt_hours(h):
+        if h < 0.05:
+            return "now"
+        return f"in {h:.0f}h" if abs(h - round(h)) < 0.05 else f"in {h:.1f}h"
+
+    def _plan_summary(self, slots, trace, soc0, now):
+        """One-sentence digest of the plan already computed above — every
+        figure here is read straight off `slots`/`trace`/`next_cheap_idx`,
+        not an invented explanation of why the optimiser chose anything
+        (it doesn't record that anywhere, so there's nothing honest to
+        say beyond what these numbers already show)."""
+        n = len(slots)
+        if n == 0:
+            return ""
+        actions = [self._action(s) for s in slots]
+        parts = []
+
+        dominant = max(set(actions), key=actions.count)
+        label = {"ECO": "self-consumption", "CHARGE": "grid charging",
+                  "EXPORT": "export"}[dominant]
+        ev_note = ", pausing if your EV starts charging" if (dominant == "ECO" and self.ent_ev) else ""
+        parts.append(f"Running mainly on {label}{ev_note}")
+
+        export_idxs = [i for i, a in enumerate(actions) if a == "EXPORT"]
+        if export_idxs:
+            best_i = max(export_idxs, key=lambda i: slots[i]["exp"])
+            start = best_i
+            while start > 0 and actions[start - 1] == "EXPORT":
+                start -= 1
+            end = best_i
+            while end + 1 < n and actions[end + 1] == "EXPORT":
+                end += 1
+            kwh_sold = sum(slots[i]["export"] for i in range(start, end + 1))
+            pct_batt = (kwh_sold / self.battery_kwh * 100) if self.battery_kwh else 0
+            parts.append(f"export looks good {self._fmt_hours(start * 0.5)} "
+                         f"({slots[best_i]['exp'] * 100:.0f}p) — sells "
+                         f"~{pct_batt:.0f}% of battery capacity then")
+
+        next_cheap = slots[0].get("next_cheap_idx")
+        if next_cheap is not None and next_cheap > 0:
+            parts.append(f"import drops to off-peak {self._fmt_hours(next_cheap * 0.5)}")
+        elif next_cheap == 0:
+            parts.append("already in the cheap import window")
+
+        if next_cheap is not None:
+            c_start = next_cheap
+            while c_start < n and actions[c_start] != "CHARGE":
+                c_start += 1
+            if c_start < n:
+                c_end = c_start
+                while c_end + 1 < n and actions[c_end + 1] == "CHARGE":
+                    c_end += 1
+                soc_before = trace[c_start - 1] if c_start > 0 else soc0
+                delta = max(0.0, trace[c_end] - soc_before)
+                if delta > 0.5:
+                    tomorrow = now.date() + timedelta(days=1)
+                    tomorrow_pv = sum(s["pv"] for s in slots if s["start"].date() == tomorrow)
+                    solar_note = (f" — tomorrow's forecast ({tomorrow_pv:.0f}kWh solar) covers the rest"
+                                  if tomorrow_pv >= self.daily_house_kwh else "")
+                    parts.append(f"only a {delta:.0f}% top-up planned then{solar_note}")
+
+        return ". ".join(parts) + "."
+
+    def publish_plan(self, slots, trace, cost_trace, grid_cost, soc0, now, live_label=None):
         """live_label overrides row 0's displayed action — the optimiser
         plan is theoretical (doesn't model EV/Storm/Session events), so
         when a live override (e.g. "EV Protection") is actually being
         applied for right now, the table should say so instead of
         showing what the battery-only plan would otherwise have done."""
+        summary = self._plan_summary(slots, trace, soc0, now)
         fc = [{"x": s["start"].isoformat(), "y": trace[i]}
               for i, s in enumerate(slots)]
         learned = [{"x": f"{i // 2:02d}:{'30' if i % 2 else '00'}", "y": round(kwh, 3)}
@@ -1527,6 +1592,7 @@ class GridLock(hass.Hass):
                                    "unit_of_measurement": "%",
                                    "forecast_data": fc,
                                    "plan_cost_24h": grid_cost,
+                                   "plan_summary": summary,
                                    "learned_load_profile": learned,
                                    "plan_table": {"columns": plan_table_cols,
                                                   "rows": plan_table,
@@ -1685,7 +1751,7 @@ class GridLock(hass.Hass):
         else:
             live_label = None
 
-        plan_html = self.publish_plan(slots, trace, cost_trace, grid_cost, soc0, live_label)
+        plan_html = self.publish_plan(slots, trace, cost_trace, grid_cost, soc0, now, live_label)
         self.publish_compare(self.build_slots(now), soc0, grid_cost)
         self.plan = slots
 

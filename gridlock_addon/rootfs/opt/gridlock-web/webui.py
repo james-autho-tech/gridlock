@@ -103,6 +103,7 @@ def build_status():
         "state": status.get("state", "unknown"),
         "reason": status_attrs.get("reason") or "—",
         "plan_html": status_attrs.get("plan_html") or "",
+        "plan_summary": forecast.get("attributes", {}).get("plan_summary") or "",
         "plan_cost_24h": forecast.get("attributes", {}).get("plan_cost_24h", 0),
         "plan_table": forecast.get("attributes", {}).get("plan_table") or {"columns": [], "rows": []},
         "net_today": net.get("state", "0.00"),
@@ -653,6 +654,7 @@ async function refresh() {
       </div>
       <div class="gl-wrap">
         <div class="gl-h">Next up</div>
+        ${d.plan_summary ? `<div class="gl-sub" style="margin-top:-2px">${esc(d.plan_summary)}</div>` : ''}
         <div class="gl-scroll gl-scroll-mini">${d.plan_html || '<div style="color:var(--dim)">Waiting for first plan — computes every 5 minutes.</div>'}</div>
         <button class="gl-more-btn" onclick="selectTab('plan')">Full 24h plan →</button>
       </div>
@@ -663,6 +665,7 @@ async function refresh() {
           <div class="gl-h" style="margin:0">30-minute action tape — full 24h plan</div>
           <button class="gl-more-btn" style="width:auto;padding:8px 16px;margin:0" onclick="downloadPlanCsv()" ${(d.plan_table && d.plan_table.rows || []).length ? '' : 'disabled'}>⬇ Download CSV</button>
         </div>
+        ${d.plan_summary ? `<div class="gl-sub">${esc(d.plan_summary)}</div>` : ''}
         <div class="gl-scroll">${d.plan_html || '<div style="color:var(--dim)">Waiting for first plan — computes every 5 minutes.</div>'}</div>
       </div>
     </div>

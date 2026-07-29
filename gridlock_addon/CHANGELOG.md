@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.24.0
+- New **plan summary** — a one-sentence digest above the plan table
+  (Overview and Plan tabs), e.g. *"Running mainly on self-consumption,
+  pausing if your EV starts charging. export looks good in 9h (35p) —
+  sells ~10% of battery capacity then. import drops to off-peak in
+  12h. only a 10% top-up planned then — tomorrow's forecast (18kWh
+  solar) covers the rest."* Every figure in it is read straight off
+  the plan already computed each tick (dominant action, best export
+  slot and its rate/volume, next off-peak window, the planned
+  grid-charge top-up and tomorrow's solar forecast next to it) — not
+  an invented explanation of the optimiser's reasoning, since it
+  doesn't record one anywhere to honestly report.
+
 ## 2.23.2
 - **Fixed the whole ingress page's `<script>` block silently breaking**
   in the browser ("Uncaught SyntaxError: unterminated regular
