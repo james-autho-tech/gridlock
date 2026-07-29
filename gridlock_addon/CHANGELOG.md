@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.20.1
+- Bumped the `balanced` risk profile's degradation cost from 3p/kWh
+  to 5p/kWh — 3p meant the optimiser would actively discharge the
+  battery for margins that barely covered assumed wear, especially on
+  cheaply-acquired overnight charge. `eco` (9p) and `max_profit` (1p)
+  unchanged.
+
 ## 2.20.0
 - Storm Watch panel redesigned to match the SSEN/Battery health tile
   style, for visual consistency across the Forecast tab.

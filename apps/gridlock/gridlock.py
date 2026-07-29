@@ -175,7 +175,7 @@ class GridLock(hass.Hass):
         # profile if both are set. These are reasoned defaults, not a
         # real wear model — there's no solid Sigenergy degradation-vs-
         # cycle-depth data to build a genuine SoH-driven one from.
-        risk_profiles = {"eco": 0.09, "balanced": 0.03, "max_profit": 0.01}
+        risk_profiles = {"eco": 0.09, "balanced": 0.05, "max_profit": 0.01}
         self.battery_risk_profile = str(a.get("battery_risk_profile", "balanced")).lower()
         if self.battery_risk_profile not in risk_profiles:
             self.log(f"Unknown battery_risk_profile {self.battery_risk_profile!r} "
