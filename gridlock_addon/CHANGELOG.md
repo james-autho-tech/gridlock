@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.15.0
+- Live power flow diagram is now Sankey-style: each line's thickness
+  scales to that flow's actual kW, relative to whichever flow is
+  biggest right now, instead of every line being the same width. The
+  centre hub also grows/shrinks with total flow. Makes it obvious at a
+  glance where most of the power's actually going, not just that it's
+  flowing.
+- Dropped the self-updater block from apps.yaml's template — it's
+  only relevant to the older HACS/manual install path, not this
+  Supervisor add-on (which updates through the HA Add-on Store), and
+  was just clutter in the config every add-on user sees. Still fully
+  documented in the README for HACS installs, and the code itself is
+  unchanged.
+
 ## 2.14.2
 - SSEN Power Track no longer shows a misleading "0 local fault(s)"
   when no postcode is set (polling is off until one's configured, so

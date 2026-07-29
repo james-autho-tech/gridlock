@@ -326,14 +326,23 @@ function renderFlow(f) {
     home: [false, 'var(--violet)'],
     battery: [f.battery_discharging, f.battery_charging ? 'var(--green)' : 'var(--cyan)'],
   };
+  // Sankey-style: line thickness scales with that flow's actual kW,
+  // relative to whichever flow is biggest right now — thin lines mean
+  // "barely anything moving here", thick means "this is where most of
+  // the power's going", at a glance rather than reading five numbers.
+  const mags = { solar: f.pv_kw, grid: f.grid_kw, ev: f.ev_kw, home: f.home_kw, battery: f.battery_kw };
+  const maxMag = Math.max(...Object.values(mags), 0.3);
+  const widthFor = v => Math.max(2, Math.min(16, 2 + (v / maxMag) * 14));
   const lines = Object.entries(nodes).map(([key, n]) => {
     const [outward, dotColor] = dirs[key];
     const path = outward ? `M${n.x},${n.y} L${CX},${CY}` : `M${CX},${CY} L${n.x},${n.y}`;
     const dur = n.active ? '1.6s' : '0s';
+    const w = n.active ? widthFor(mags[key]) : 2;
     return `
       <path class="flow-line ${n.active ? 'active' : ''}" d="M${n.x},${n.y} L${CX},${CY}"
-            stroke="${n.active ? n.color : '#1e293b'}" />
-      ${n.active ? `<circle r="3.5" class="flow-dot" fill="${dotColor}" style="color:${dotColor}">
+            stroke="${n.active ? n.color : '#1e293b'}"
+            style="stroke-width:${w.toFixed(1)}px" stroke-linecap="round" />
+      ${n.active ? `<circle r="${Math.max(3.5, w * 0.4).toFixed(1)}" class="flow-dot" fill="${dotColor}" style="color:${dotColor}">
         <animateMotion dur="${dur}" repeatCount="indefinite" path="${path}" />
       </circle>` : ''}`;
   }).join('');
@@ -346,9 +355,12 @@ function renderFlow(f) {
       ${n.badge ? `<text x="22" y="-20" style="font-size:16px">${n.badge}</text>` : ''}
     </g>`).join('');
   const anyActive = Object.values(nodes).some(n => n.active);
+  const hubR = anyActive
+    ? Math.max(5, Math.min(13, 5 + (Object.values(mags).reduce((a, b) => a + b, 0) / (maxMag * 4)) * 8))
+    : 4;
   return `<div class="flow-wrap"><svg class="flow-svg" viewBox="0 0 420 375">
     ${lines}
-    <circle class="flow-hub ${anyActive ? 'active' : ''}" cx="${CX}" cy="${CY}" r="4" />
+    <circle class="flow-hub ${anyActive ? 'active' : ''}" cx="${CX}" cy="${CY}" r="${hubR.toFixed(1)}" />
     ${nodeEls}
   </svg></div>${f.ev_protected ? '<div style="text-align:center;color:var(--violet);font-size:13px;margin-top:8px">🛡️ EV Protection active — battery discharge clamped to 0</div>' : ''}`;
 }

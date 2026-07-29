@@ -104,13 +104,7 @@ gridlock:
   # inverter_temp_entity: sensor.sigen_inverter_pcs_internal_temperature
   # battery_temp_entity: sensor.sigen_plant_ess_average_cell_temperature
 
-  # --- Self-updater (optional; not needed via the Supervisor add-on,
-  #     which handles updates through the HA UI instead) ---
-  # Fine-grained PAT with Contents:Read on this repo only — use a
-  # separate read-only token from anything with write access. Literal
-  # value only (!secret doesn't work in this file — see note above).
-  # update_repo: "james-autho-tech/gridlock"
-  # update_token: "github_pat_..."
-  # update_branch: main
-  # update_path: apps/gridlock/gridlock.py
-  # auto_update: false   # true = pull + hot-reload automatically
+  # Self-updater (update_repo/update_token/auto_update): only relevant
+  # to the HACS/manual install path, not this Supervisor add-on — see
+  # README's "Install (HACS + existing AppDaemon add-on)" section if
+  # you're on that path and want it.

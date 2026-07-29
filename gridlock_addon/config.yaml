@@ -1,5 +1,5 @@
 name: GridLock
-version: "2.14.2"
+version: "2.15.0"
 slug: gridlock
 description: Battery optimisation engine for Sigenergy + Octopus IOG (bundled AppDaemon)
 url: https://github.com/james-autho-tech/gridlock
