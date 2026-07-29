@@ -109,6 +109,8 @@ def build_status():
         "savings_today": savings.get("attributes", {}).get("today"),
         "savings_week": savings.get("attributes", {}).get("week"),
         "savings_month": savings.get("attributes", {}).get("month"),
+        "daily_cost_history": savings.get("attributes", {}).get("daily_cost_history") or [],
+        "plan_accuracy": savings.get("attributes", {}).get("plan_accuracy"),
         "best_tariff": compare.get("state", "—"),
         "compare_html": compare.get("attributes", {}).get("compare_html") or "",
         "ev_planned_kwh": ev_dispatch.get("state", "0.00"),
@@ -469,6 +471,31 @@ function renderLoadProfileChart(data) {
   }).join('');
   return `<div class="gl-bars">${bars}</div>`;
 }
+function renderDailyCostChart(data) {
+  if (!data || !data.length) {
+    return '<div style="color:var(--dim)">No history yet — builds up a day at a time.</div>';
+  }
+  const W = 900, H = 160, mid = H / 2;
+  const maxAbs = Math.max(...data.map(p => Math.abs(Number(p.cost))), 0.5);
+  const scale = (mid - 10) / maxAbs;
+  const bw = W / data.length;
+  const bars = data.map((p, i) => {
+    const v = Number(p.cost);
+    const h = Math.max(1, Math.abs(v) * scale);
+    const x = i * bw;
+    const y = v >= 0 ? mid : mid - h;
+    const color = v >= 0 ? 'var(--amber)' : 'var(--green)';
+    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${Math.max(0.5, bw - 2).toFixed(1)}" height="${h.toFixed(1)}" fill="${color}" opacity="0.75"><title>${esc(p.date)}: £${v.toFixed(2)}</title></rect>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" class="gl-combo-svg" preserveAspectRatio="none" style="height:170px">
+      <line x1="0" y1="${mid}" x2="${W}" y2="${mid}" stroke="var(--line)" stroke-width="1" />
+      ${bars}
+    </svg>
+    <div class="gl-combo-legend">
+      <span><span class="gl-legend-dot" style="background:var(--green)"></span>Credit day</span>
+      <span><span class="gl-legend-dot" style="background:var(--amber)"></span>Cost day</span>
+    </div>`;
+}
 function renderSavingSessions(joined, available) {
   const parts = [];
   if (available && available.length) {
@@ -575,24 +602,32 @@ async function refresh() {
         <div class="gl-sub" style="margin-top:12px">Cycling protection: <b style="color:var(--ink)">${esc(d.battery_risk_profile)}</b>${d.battery_degradation_cost === null || d.battery_degradation_cost === undefined ? '' : ` — needs at least ${(Number(d.battery_degradation_cost) * 100).toFixed(1)}p/kWh spread before exporting/discharging the battery`}. Set <code>battery_risk_profile</code> (eco / balanced / max_profit) in apps.yaml.</div>
       </div>
       <div class="gl-wrap">
+        <div class="gl-h">Daily cost history</div>
+        <div class="gl-sub">Real grid spend per day (last 28) — green bars are days you netted a credit, amber are days you paid, companion to the Saved (7d) tile on Overview.</div>
+        ${renderDailyCostChart(d.daily_cost_history)}
+        ${d.plan_accuracy ? `<div class="gl-sub" style="margin-top:10px">Plan accuracy (${esc(d.plan_accuracy.date)}): predicted <b style="color:var(--ink)">£${Number(d.plan_accuracy.forecast).toFixed(2)}</b>, actual <b style="color:var(--ink)">£${Number(d.plan_accuracy.actual).toFixed(2)}</b> — the plan's own morning forecast against what actually happened, no invented score.</div>` : ''}
+      </div>
+      <div class="gl-wrap">
         <div class="gl-h">Learned house usage</div>
         <div class="gl-sub">Your typical household draw by time of day, learned from live readings — used to plan ahead instead of assuming a flat average.</div>
         ${renderLoadProfileChart(d.learned_load_profile)}
       </div>
       <div class="gl-wrap">
         <div class="gl-h">Storm Watch</div>
-        <div class="gl-status-row">
-          <span class="gl-status-dot" style="background:${d.storm_state === 'Active' ? 'var(--red)' : 'var(--green)'}"></span>
-          <span style="font-weight:700;color:${d.storm_state === 'Active' ? 'var(--red)' : 'var(--green)'}">${esc(d.storm_state)}</span>
-          <span style="color:var(--dim)">${esc(d.storm_reason)}</span>
+        <div class="gl-grid">
+          <div class="gl-tile" style="grid-column:1/-1">
+            <div class="lbl">Status</div>
+            <div class="val" style="font-size:18px;color:${d.storm_state === 'Active' ? 'var(--red)' : 'var(--green)'}">${esc(d.storm_state)}</div>
+            <div style="color:var(--dim);font-size:12px;margin-top:4px">${esc(d.storm_reason)}</div>
+          </div>
         </div>
       </div>
       <div class="gl-wrap">
         <div class="gl-h">SSEN Power Track</div>
-        ${d.ssen_postcode ? `<div class="gl-status-row">
-          <span class="gl-status-dot" style="background:${Number(d.ssen_count) > 0 ? 'var(--red)' : 'var(--green)'}"></span>
-          <span style="font-weight:700">${d.ssen_count} local fault(s)</span>
-          <span style="color:var(--dim)">${d.ssen_planned} planned · ${d.ssen_severe ? 'severe weather flagged' : 'no severe weather flag'}</span>
+        ${d.ssen_postcode ? `<div class="gl-grid">
+          <div class="gl-tile"><div class="lbl">Local faults</div><div class="val num" style="color:${Number(d.ssen_count) > 0 ? 'var(--red)' : 'var(--green)'}">${d.ssen_count}</div></div>
+          <div class="gl-tile"><div class="lbl">Planned outages</div><div class="val num" style="color:${Number(d.ssen_planned) > 0 ? 'var(--amber)' : 'var(--green)'}">${d.ssen_planned}</div></div>
+          <div class="gl-tile"><div class="lbl">Severe weather</div><div class="val" style="font-size:16px;color:${d.ssen_severe ? 'var(--red)' : 'var(--green)'}">${d.ssen_severe ? 'Flagged' : 'Clear'}</div></div>
         </div>` : `<div style="color:var(--dim)">No postcode set — SSEN polling is off until you add one. Set <code>ssen_postcode</code> in apps.yaml, or "SSEN Postcode Override" in the add-on's Configuration tab (e.g. "SW1A 1").</div>`}
       </div>
       <div class="gl-wrap">

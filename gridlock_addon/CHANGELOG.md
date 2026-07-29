@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.20.0
+- Storm Watch panel redesigned to match the SSEN/Battery health tile
+  style, for visual consistency across the Forecast tab.
+- Ran a full audit of apps.yaml against the four-piece override
+  wiring (gridlock.py fallback chain, Configuration tab options +
+  schema, run script) — all 15 overrides now confirmed consistent
+  across every piece, closing the gap where the schema bug slipped
+  through last release.
+- New **Daily cost history** chart (Forecast tab) — real grid spend
+  per day over the last 28 days, reusing the same data already
+  persisted for the Savings feature.
+- New **plan accuracy** tracking: snapshots the plan's own 24h cost
+  forecast at the start of each day, then compares it against what
+  actually happened once the day ends — shown as plain "predicted £X,
+  actual £Y" figures, not an invented accuracy score.
+- New **proactive notifications** for Storm Watch starting/clearing, a
+  Saving Session being joined, and EV Protection engaging — always to
+  HA's persistent_notification (no setup needed), and optionally also
+  to a specific `notify_service` (e.g. your phone) if configured.
+  Fires once per event, not every 5-minute tick it continues.
+
 ## 2.19.1
 - Fixed the plan table's Cost/Total columns (and "Plan cost 24h")
   showing rising cost during pure self-consumption slots, before any

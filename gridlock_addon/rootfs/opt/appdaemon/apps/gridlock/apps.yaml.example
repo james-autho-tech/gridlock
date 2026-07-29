@@ -110,6 +110,13 @@ gridlock:
   # here). Leave commented out to disable SSEN polling.
   # ssen_postcode: "SW1A 1"
 
+  # --- Notifications ---
+  # Storm Watch starting/clearing, a Saving Session being joined, and
+  # EV Protection engaging always create a persistent_notification in
+  # HA (Settings > Notifications) — no setup needed. Optionally also
+  # send to a specific notify service (e.g. your phone):
+  # notify_service: notify.mobile_app_yourphone
+
   # --- Battery health (Forecast tab, informational only) ---
   # Auto-discovered by default (Sigenergy "pcs"/"cell"/
   # "state_of_health" sensors) — only set these if the Discovered

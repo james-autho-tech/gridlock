@@ -97,7 +97,9 @@ add-on and [HACS](https://hacs.xyz/) already installed.
 - `sensor.gridlock_solar_forecast` (forecast_data, today_kwh, tomorrow_kwh)
 - `sensor.gridlock_storm_status` (reason)
 - `sensor.gridlock_savings` (today, week, month, all_time — £ actually
-  saved vs a self-consumption-only baseline)
+  saved vs a self-consumption-only baseline; daily_cost_history —
+  last 28 days' real spend; plan_accuracy — most recent day's morning
+  forecast vs actual outcome)
 
 ## License
 

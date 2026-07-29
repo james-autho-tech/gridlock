@@ -120,6 +120,14 @@ class GridLock(hass.Hass):
         self.baseline_soc = None
         self.baseline_cost_today = 0.0
         self.savings_history = self._load_savings_history()
+        # Plan accuracy: snapshot the freshly-computed plan's 24h grid
+        # cost forecast on the first tick of each day, then once that
+        # day ends, file it alongside the real outcome already in
+        # savings_history — "here's what the plan predicted that
+        # morning vs what actually happened", no invented accuracy
+        # score, just the two real numbers side by side.
+        self.plan_accuracy_day = None
+        self.day_start_forecast = 0.0
         self._load_savings_state()
 
         # Live power-flow entities (Solar/Grid/Battery/Home diagram in
@@ -201,6 +209,15 @@ class GridLock(hass.Hass):
             else:
                 self.storm_sources.append((item, default_sev))
         self.storm_target_soc = float(a.get("storm_watch_target_soc", 100.0))
+
+        # Proactive notifications — always to HA's persistent_notification
+        # (works for everyone, no setup), and also to a specific notify
+        # service (e.g. notify.mobile_app_yourphone) if configured. Only
+        # on genuine transitions (event just started), not every 5-min
+        # tick it continues.
+        self.notify_service = a.get("notify_service")
+        self._prev_storm_active = False
+        self._prev_ev_protection = False
 
         # SSEN Power Track — engine polls the open API directly
         self.ssen_postcode = str(
@@ -532,6 +549,8 @@ class GridLock(hass.Hass):
             self.savings_day = state.get("day")
             self.baseline_soc = state.get("baseline_soc")
             self.baseline_cost_today = state.get("baseline_cost_today", 0.0)
+            self.plan_accuracy_day = state.get("plan_accuracy_day")
+            self.day_start_forecast = state.get("day_start_forecast", 0.0)
         except (OSError, ValueError):
             pass
 
@@ -540,7 +559,9 @@ class GridLock(hass.Hass):
             with open(self._savings_state_path(), "w") as f:
                 json.dump({"day": self.savings_day,
                            "baseline_soc": self.baseline_soc,
-                           "baseline_cost_today": self.baseline_cost_today}, f)
+                           "baseline_cost_today": self.baseline_cost_today,
+                           "plan_accuracy_day": self.plan_accuracy_day,
+                           "day_start_forecast": self.day_start_forecast}, f)
         except OSError:
             pass
 
@@ -660,14 +681,44 @@ class GridLock(hass.Hass):
                 month += net
         return today, round(week, 2), round(month, 2), round(all_time, 2)
 
+    def _track_plan_accuracy(self, now, grid_cost):
+        today_iso = now.date().isoformat()
+        if self.plan_accuracy_day == today_iso:
+            return
+        if self.plan_accuracy_day is not None and self.plan_accuracy_day in self.savings_history:
+            self.savings_history[self.plan_accuracy_day]["forecast"] = round(self.day_start_forecast, 4)
+            self._save_savings_history()
+        self.plan_accuracy_day = today_iso
+        self.day_start_forecast = grid_cost
+        self._save_savings_state()
+
     def _publish_savings(self, now):
         today, week, month, all_time = self._savings_totals(now)
+        # Last 28 finalised days' real spend, for the Forecast tab's
+        # daily cost chart — today's still-in-progress figure isn't
+        # included (it's a partial day, not comparable to full ones).
+        history = sorted(
+            ({"date": d, "cost": round(v.get("actual", 0.0), 2)}
+             for d, v in self.savings_history.items()),
+            key=lambda p: p["date"])[-28:]
+        # Most recent finished day with both a morning forecast and a
+        # real outcome on record — plain numbers side by side, not an
+        # invented accuracy score.
+        accuracy = None
+        for d in sorted(self.savings_history.keys(), reverse=True):
+            v = self.savings_history[d]
+            if "forecast" in v and "actual" in v:
+                accuracy = {"date": d, "forecast": round(v["forecast"], 2),
+                           "actual": round(v["actual"], 2)}
+                break
         self.set_state("sensor.gridlock_savings", state=f"{today:.2f}",
                        attributes={"friendly_name": "GridLock Savings",
                                    "unit_of_measurement": "£",
                                    "icon": "mdi:piggy-bank",
                                    "today": today, "week": week,
-                                   "month": month, "all_time": all_time})
+                                   "month": month, "all_time": all_time,
+                                   "daily_cost_history": history,
+                                   "plan_accuracy": accuracy})
 
     def _cost_tracking_path(self):
         return os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -847,6 +898,11 @@ class GridLock(hass.Hass):
                     "octopus_energy/join_octoplus_saving_session_event",
                     target={"entity_id": self.ent_saving_events},
                     event_code=code)
+                start = ev.get("start", "")
+                end = ev.get("end", "")
+                rate = ev.get("octopoints_per_kwh", "?")
+                self._notify("GridLock: Saving Session joined",
+                            f"Joined {start} – {end} at {rate} pts/kWh.")
 
     def active_saving_session(self, now):
         for ev in self._attr_list(self.ent_saving_events, "joined_events"):
@@ -871,6 +927,16 @@ class GridLock(hass.Hass):
                             "restore": f.get("estimatedRestorationTimeUtc")}
                            for f in local]}
 
+    def _notify(self, title, message):
+        self.call_service("persistent_notification/create",
+                          title=title, message=message)
+        if self.notify_service:
+            try:
+                self.call_service(self.notify_service.replace(".", "/", 1),
+                                  title=title, message=message)
+            except Exception as exc:  # noqa: BLE001 — a bad notify_service shouldn't break the tick
+                self.log(f"notify_service call failed: {exc!r}", level="WARNING")
+
     def poll_ssen(self, kwargs):
         try:
             req = urllib.request.Request(
@@ -891,12 +957,10 @@ class GridLock(hass.Hass):
                                        self.ssen_state["severe"],
                                    "faults": self.ssen_state["faults"]})
         if self.ssen_state["planned"] and not prev["planned"]:
-            self.call_service(
-                "persistent_notification/create",
-                title="SSEN planned power cut",
-                message=(f"SSEN lists a planned interruption for "
-                         f"{self.ssen_postcode}. Storm Watch will hold "
-                         "the battery at 100%."))
+            self._notify("GridLock: SSEN planned power cut",
+                        f"SSEN lists a planned interruption for "
+                        f"{self.ssen_postcode}. Storm Watch will hold "
+                        "the battery at 100%.")
         if bool(self.ssen_state["local"]) != bool(prev["local"]):
             self.tick({})  # react immediately on outage appear/clear
 
@@ -1387,12 +1451,28 @@ class GridLock(hass.Hass):
 
         slots = self.build_slots(now)
         slots, trace, _, cost_trace, grid_cost = self.optimise(slots, soc0)
+        self._track_plan_accuracy(now, grid_cost)
 
         cur = slots[0]
         action = self._action(cur)
         ev_active = bool(self.ent_ev) and self.get_state(self.ent_ev) == "on"
         session = self.active_saving_session(now)
         storm = self.storm_active()
+
+        if bool(storm) != self._prev_storm_active:
+            if storm:
+                self._notify("GridLock: Storm Watch active", storm)
+            else:
+                self._notify("GridLock: Storm Watch cleared",
+                            "Back to normal cost-optimised planning.")
+        self._prev_storm_active = bool(storm)
+
+        ev_protection_now = ev_active and action != "CHARGE"
+        if ev_protection_now and not self._prev_ev_protection:
+            self._notify("GridLock: EV Protection engaged",
+                        "Battery discharge clamped to 0 while your EV "
+                        "is charging concurrently.")
+        self._prev_ev_protection = ev_protection_now
 
         # The optimiser's plan doesn't model EV/Storm/Session events, so
         # for "now" specifically (row 0), show what will actually be
