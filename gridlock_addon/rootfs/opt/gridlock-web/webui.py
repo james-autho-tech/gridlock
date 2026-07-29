@@ -110,6 +110,8 @@ def build_status():
         "solar_forecast_data": solar.get("attributes", {}).get("forecast_data") or [],
         "solar_today_kwh": solar.get("attributes", {}).get("today_kwh", 0),
         "solar_tomorrow_kwh": solar.get("attributes", {}).get("tomorrow_kwh", 0),
+        "soc_forecast_data": forecast.get("attributes", {}).get("forecast_data") or [],
+        "learned_load_profile": forecast.get("attributes", {}).get("learned_load_profile") or [],
         "storm_state": storm.get("state", "Clear"),
         "storm_reason": storm.get("attributes", {}).get("reason") or "No active alerts",
         "ssen_count": ssen.get("state", "0"),
@@ -201,6 +203,9 @@ PAGE = """<!doctype html>
   .gl-bar-col { flex:1; height:100%; display:flex; align-items:flex-end; min-width:2px; }
   .gl-bar-fill { width:100%; min-height:2px; border-radius:2px 2px 0 0;
                  background:linear-gradient(180deg,var(--amber),rgba(251,191,36,.15)); }
+  .gl-bar-fill-soc { background:linear-gradient(180deg,var(--cyan),rgba(56,189,248,.15)); }
+  .gl-bar-fill-load { background:linear-gradient(180deg,var(--violet),rgba(167,139,250,.15)); }
+  .gl-sub { color:var(--dim); font-size:12px; margin:-4px 0 10px; }
   .gl-status-row { display:flex; align-items:center; gap:10px; }
   .gl-status-dot { width:10px; height:10px; border-radius:50%; flex:0 0 auto; }
   .gl-sess-row { display:flex; justify-content:space-between; gap:12px; font-size:13px;
@@ -252,11 +257,11 @@ PAGE = """<!doctype html>
 <body>
 <nav class="gl-nav">
   <button class="gl-nav-btn" data-tab="overview">Overview</button>
-  <button class="gl-nav-btn" data-tab="entities">Entities</button>
   <button class="gl-nav-btn" data-tab="plan">Plan</button>
-  <button class="gl-nav-btn" data-tab="tariffs">Tariffs</button>
-  <button class="gl-nav-btn" data-tab="log">Log</button>
   <button class="gl-nav-btn" data-tab="forecast">Forecast</button>
+  <button class="gl-nav-btn" data-tab="tariffs">Tariffs</button>
+  <button class="gl-nav-btn" data-tab="entities">Entities</button>
+  <button class="gl-nav-btn" data-tab="log">Log</button>
 </nav>
 <div id="app">Loading…</div>
 <script>
@@ -336,7 +341,7 @@ function renderEntities(entities) {
     <div class="gl-ent-row">
       <span class="gl-ent-dot" style="background:${eid ? 'var(--green)' : 'var(--red)'}"></span>
       <span class="gl-ent-label">${esc(label)}</span>
-      <span class="gl-ent-id num">${eid ? esc(eid) : 'not found — set explicitly in apps.yaml'}</span>
+      <span class="gl-ent-id num">${eid ? esc(eid) : 'not found — set in the add-on’s Configuration tab, or apps.yaml'}</span>
     </div>`).join('');
   return `<div class="gl-ent-list">${rows}</div>`;
 }
@@ -344,6 +349,17 @@ function fmtTs(iso) {
   try {
     return new Date(iso).toLocaleString(undefined, {
       weekday: 'short', hour: '2-digit', minute: '2-digit' });
+  } catch (e) { return iso; }
+}
+function fmtDate(iso) {
+  try {
+    return new Date(iso).toLocaleString(undefined, {
+      day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+  } catch (e) { return iso; }
+}
+function fmtTime(iso) {
+  try {
+    return new Date(iso).toLocaleString(undefined, { hour: '2-digit', minute: '2-digit' });
   } catch (e) { return iso; }
 }
 function renderLog(entries) {
@@ -379,6 +395,32 @@ function renderSolarChart(data) {
   }).join('');
   return `<div class="gl-bars">${bars}</div>`;
 }
+function renderSocChart(data) {
+  if (!data || !data.length) {
+    return '<div style="color:var(--dim)">No forecast yet — computes once the first 24h plan has run.</div>';
+  }
+  const bars = data.map(p => {
+    const pct = Math.min(100, Math.max(0, Number(p.y)));
+    const h = Math.max(2, Math.round(pct));
+    return `<div class="gl-bar-col" title="${esc(fmtDate(p.x))}: ${pct.toFixed(0)}%">
+      <div class="gl-bar-fill gl-bar-fill-soc" style="height:${h}%"></div>
+    </div>`;
+  }).join('');
+  return `<div class="gl-bars">${bars}</div>`;
+}
+function renderLoadProfileChart(data) {
+  if (!data || !data.length) {
+    return '<div style="color:var(--dim)">Still learning your usage pattern — builds up over the first few days and gets more accurate over time.</div>';
+  }
+  const max = Math.max(...data.map(p => Number(p.y)), 0.01);
+  const bars = data.map(p => {
+    const h = Math.max(2, Math.round((Number(p.y) / max) * 100));
+    return `<div class="gl-bar-col" title="${esc(p.x)}: ${Number(p.y).toFixed(2)} kWh">
+      <div class="gl-bar-fill gl-bar-fill-load" style="height:${h}%"></div>
+    </div>`;
+  }).join('');
+  return `<div class="gl-bars">${bars}</div>`;
+}
 function renderSavingSessions(joined, available) {
   const parts = [];
   if (available && available.length) {
@@ -389,7 +431,7 @@ function renderSavingSessions(joined, available) {
   } else {
     const rows = joined.slice(-8).reverse().map(s => `
       <div class="gl-sess-row">
-        <span>${esc(fmtTs(s.start))} – ${esc(fmtTs(s.end))}</span>
+        <span>${esc(fmtDate(s.start))} – ${esc(fmtTime(s.end))}</span>
         <span class="code">${esc(s.code || '')} · ${s.octopoints_per_kwh || 0} pts/kWh</span>
       </div>`).join('');
     parts.push(`<div>${rows}</div>`);
@@ -420,8 +462,8 @@ async function refresh() {
         <div class="gl-grid">
           <div class="gl-tile"><div class="lbl">Import</div><div class="val num" style="color:var(--amber)">${d.import_p.toFixed(1)}p</div></div>
           <div class="gl-tile"><div class="lbl">Export</div><div class="val num" style="color:var(--cyan)">${d.export_p.toFixed(1)}p</div></div>
-          <div class="gl-tile"><div class="lbl">Today net</div><div class="val num">£${d.net_today}</div></div>
-          <div class="gl-tile"><div class="lbl">Plan cost 24h</div><div class="val num" style="color:var(--violet)">£${Number(d.plan_cost_24h).toFixed(2)}</div></div>
+          <div class="gl-tile"><div class="lbl">Today net</div><div class="val num" style="color:${Number(d.net_today) <= 0 ? 'var(--green)' : 'var(--amber)'}">£${d.net_today}</div></div>
+          <div class="gl-tile"><div class="lbl">Plan cost 24h</div><div class="val num" style="color:${Number(d.plan_cost_24h) <= 0 ? 'var(--green)' : 'var(--amber)'}">£${Number(d.plan_cost_24h).toFixed(2)}</div></div>
           <div class="gl-tile"><div class="lbl">Best tariff</div><div class="val" style="font-size:16px">${d.best_tariff}</div></div>
           <div class="gl-tile"><div class="lbl">EV planned</div><div class="val num" style="color:var(--cyan)">${d.ev_planned_kwh} kWh</div></div>
         </div>
@@ -443,38 +485,31 @@ async function refresh() {
         <button class="gl-more-btn" onclick="selectTab('plan')">Full 24h plan →</button>
       </div>
     </div>
-    <div class="tab-page" data-tab="entities">
-      <div class="gl-wrap">
-        <div class="gl-h">Discovered entities</div>
-        ${renderEntities(d.entities)}
-      </div>
-    </div>
     <div class="tab-page" data-tab="plan">
       <div class="gl-wrap">
         <div class="gl-h">30-minute action tape — full 24h plan</div>
         <div class="gl-scroll">${d.plan_html || '<div style="color:var(--dim)">Waiting for first plan — computes every 5 minutes.</div>'}</div>
       </div>
     </div>
-    <div class="tab-page" data-tab="tariffs">
-      <div class="gl-wrap">
-        <div class="gl-h">Tariff comparison</div>
-        ${d.compare_html || '<div style="color:var(--dim)">Waiting for first comparison run.</div>'}
-      </div>
-    </div>
-    <div class="tab-page" data-tab="log">
-      <div class="gl-wrap">
-        <div class="gl-h">Decision log — what changed, and why</div>
-        <div class="gl-scroll">${renderLog(d.log_entries)}</div>
-      </div>
-    </div>
     <div class="tab-page" data-tab="forecast">
       <div class="gl-wrap">
         <div class="gl-h">Solar forecast</div>
+        <div class="gl-sub">How much your panels are expected to generate, from your Solcast forecast — each bar is one hour, today then tomorrow.</div>
         <div class="gl-grid" style="margin-bottom:4px">
           <div class="gl-tile"><div class="lbl">Today</div><div class="val num" style="color:var(--amber)">${Number(d.solar_today_kwh).toFixed(1)} kWh</div></div>
           <div class="gl-tile"><div class="lbl">Tomorrow</div><div class="val num" style="color:var(--amber)">${Number(d.solar_tomorrow_kwh).toFixed(1)} kWh</div></div>
         </div>
         ${renderSolarChart(d.solar_forecast_data)}
+      </div>
+      <div class="gl-wrap">
+        <div class="gl-h">Battery forecast</div>
+        <div class="gl-sub">GridLock's planned battery % over the next 24 hours — this is the "battery calculator": the charge/export plan simulated forward slot by slot.</div>
+        ${renderSocChart(d.soc_forecast_data)}
+      </div>
+      <div class="gl-wrap">
+        <div class="gl-h">Learned house usage</div>
+        <div class="gl-sub">Your typical household draw by time of day, learned from live readings (like [REDACTED]'s load profile) — used to plan ahead instead of assuming a flat average.</div>
+        ${renderLoadProfileChart(d.learned_load_profile)}
       </div>
       <div class="gl-wrap">
         <div class="gl-h">Storm Watch</div>
@@ -495,6 +530,24 @@ async function refresh() {
       <div class="gl-wrap">
         <div class="gl-h">Saving sessions</div>
         ${renderSavingSessions(d.saving_joined, d.saving_available)}
+      </div>
+    </div>
+    <div class="tab-page" data-tab="tariffs">
+      <div class="gl-wrap">
+        <div class="gl-h">Tariff comparison</div>
+        ${d.compare_html || '<div style="color:var(--dim)">Waiting for first comparison run.</div>'}
+      </div>
+    </div>
+    <div class="tab-page" data-tab="entities">
+      <div class="gl-wrap">
+        <div class="gl-h">Discovered entities</div>
+        ${renderEntities(d.entities)}
+      </div>
+    </div>
+    <div class="tab-page" data-tab="log">
+      <div class="gl-wrap">
+        <div class="gl-h">Decision log — what changed, and why</div>
+        <div class="gl-scroll">${renderLog(d.log_entries)}</div>
       </div>
     </div>
   `;

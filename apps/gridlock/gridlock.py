@@ -3,7 +3,7 @@ import os
 import re
 import urllib.request
 
-VERSION = "2.12.0"
+VERSION = "2.13.0"
 
 import appdaemon.plugins.hass.hassapi as hass
 from datetime import datetime, timedelta, time as dtime
@@ -151,7 +151,7 @@ class GridLock(hass.Hass):
         # Storm Watch — accepts a single entity, or a list of
         # {entity, severity: [...]} dicts for per-source severity filters
         default_sev = a.get("storm_watch_severity", ["Extreme"])
-        raw = a.get("storm_watch_entity")
+        raw = a.get("storm_watch_entity") or self.overrides.get("storm_watch_entity_override")
         self.storm_sources = []
         for item in (raw if isinstance(raw, list) else [raw] if raw else []):
             if isinstance(item, dict):
@@ -947,11 +947,15 @@ class GridLock(hass.Hass):
         showing what the battery-only plan would otherwise have done."""
         fc = [{"x": s["start"].isoformat(), "y": trace[i]}
               for i, s in enumerate(slots)]
+        learned = [{"x": f"{i // 2:02d}:{'30' if i % 2 else '00'}", "y": round(kwh, 3)}
+                   for i, kwh in sorted(((int(k), v) for k, v in self.load_profile.items()),
+                                        key=lambda p: p[0])]
         self.set_state("sensor.gridlock_soc_forecast", state=str(trace[0]),
                        attributes={"friendly_name": "GridLock SoC Forecast",
                                    "unit_of_measurement": "%",
                                    "forecast_data": fc,
-                                   "plan_cost_24h": cost})
+                                   "plan_cost_24h": cost,
+                                   "learned_load_profile": learned})
 
         rows = []
         for i, s in enumerate(slots):

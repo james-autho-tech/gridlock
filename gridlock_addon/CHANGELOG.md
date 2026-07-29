@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.13.0
+- Saving Sessions now show real dates (e.g. "29 Jul, 18:00") instead
+  of just a weekday, which was ambiguous across months.
+- New `storm_watch_entity_override` Configuration tab field, matching
+  the existing `ssen_postcode_override` pattern — Storm Watch can now
+  be set from apps.yaml (`storm_watch_entity:`) or the add-on's
+  Configuration tab, whichever's easier.
+- Clearer "not found" message in the Discovered Entities panel,
+  pointing at the Configuration tab as well as apps.yaml.
+- Nav bar reordered by how often each tab actually gets used:
+  Overview, Plan, Forecast, Tariffs, Entities, Log (Entities/Log are
+  mostly one-time setup/diagnostic, so they moved to the end).
+- "Plan cost 24h" and "Today net" tiles are now colour-coded — green
+  when the plan nets you money (zero or negative cost), amber when
+  it's going to cost you, so it's readable at a glance.
+- New **Battery forecast** chart on the Forecast tab — the planned
+  battery % over the next 24h, i.e. the actual "battery calculator"
+  behind the plan (was already computed for the optimiser, just never
+  shown).
+- New **Learned house usage** chart on the Forecast tab, showing the
+  per-half-hour load profile GridLock has learned from live readings
+  (same idea as [REDACTED]'s load learning) — previously tracked
+  internally but invisible in the UI.
+
 ## 2.12.0
 - Add a Configuration tab (Supervisor add-on's native UI) exposing
   entity overrides for anything auto-discovery might get wrong:
