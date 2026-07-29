@@ -63,6 +63,7 @@ def build_status():
     target = get("sensor.gridlock_target_soc")
     compare = get("sensor.gridlock_tariff_compare") or {}
     net = get("sensor.gridlock_calculated_net_cost_today") or {}
+    savings = get("sensor.gridlock_savings") or {}
     ev_dispatch = get("sensor.gridlock_ev_dispatch_kwh") or {}
     decision_log = get("sensor.gridlock_decision_log") or {}
     solar = get("sensor.gridlock_solar_forecast") or {}
@@ -103,6 +104,9 @@ def build_status():
         "plan_html": status_attrs.get("plan_html") or "",
         "plan_cost_24h": forecast.get("attributes", {}).get("plan_cost_24h", 0),
         "net_today": net.get("state", "0.00"),
+        "savings_today": savings.get("attributes", {}).get("today"),
+        "savings_week": savings.get("attributes", {}).get("week"),
+        "savings_month": savings.get("attributes", {}).get("month"),
         "best_tariff": compare.get("state", "—"),
         "compare_html": compare.get("attributes", {}).get("compare_html") or "",
         "ev_planned_kwh": ev_dispatch.get("state", "0.00"),
@@ -505,6 +509,9 @@ async function refresh() {
           <div class="gl-tile"><div class="lbl">Import</div><div class="val num" style="color:var(--amber)">${d.import_p.toFixed(1)}p</div></div>
           <div class="gl-tile"><div class="lbl">Export</div><div class="val num" style="color:var(--cyan)">${d.export_p.toFixed(1)}p</div></div>
           <div class="gl-tile"><div class="lbl">Today net</div><div class="val num" style="color:${Number(d.net_today) <= 0 ? 'var(--green)' : 'var(--amber)'}">£${d.net_today}</div></div>
+          <div class="gl-tile" title="${d.savings_today === null || d.savings_today === undefined ? '' : `Today: £${Number(d.savings_today).toFixed(2)} · Month: £${Number(d.savings_month).toFixed(2)}`}"><div class="lbl">Saved (7d)</div>${d.savings_week === null || d.savings_week === undefined
+            ? '<div class="val" style="color:var(--dim);font-size:14px">learning…</div>'
+            : `<div class="val num" style="color:${Number(d.savings_week) >= 0 ? 'var(--green)' : 'var(--amber)'}">£${Number(d.savings_week).toFixed(2)}</div>`}</div>
           <div class="gl-tile"><div class="lbl">Plan cost 24h</div><div class="val num" style="color:${Number(d.plan_cost_24h) <= 0 ? 'var(--green)' : 'var(--amber)'}">£${Number(d.plan_cost_24h).toFixed(2)}</div></div>
           <div class="gl-tile"><div class="lbl">Best tariff</div><div class="val" style="font-size:16px">${d.best_tariff}</div></div>
           <div class="gl-tile"><div class="lbl">EV planned</div><div class="val num" style="color:var(--cyan)">${d.ev_planned_kwh} kWh</div></div>

@@ -1,3 +1,12 @@
 *.pyc
 __pycache__/
 *.bak
+
+# Runtime state gridlock.py writes next to itself (addon_overrides.json
+# comes from the add-on's Configuration tab, the rest is learned/logged
+# at runtime) — never part of the template, only ever local state.
+load_profile.json
+decision_log.json
+savings_state.json
+savings_history.json
+addon_overrides.json

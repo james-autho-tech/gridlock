@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.17.0
+- New **savings tracking**: GridLock now runs a shadow
+  self-consumption-only battery alongside the real one, tick by tick,
+  using the same real PV/load/rate readings — the gap between what
+  that hypothetical would have cost and what was actually paid (from
+  the existing real net-cost sensor) is what the active plan is
+  actually worth. New `sensor.gridlock_savings` (today/week/month/
+  all_time), plus a "Saved (7d)" tile on the Overview page. History is
+  persisted so week/month totals survive restarts; resets daily so a
+  bad day can't compound forever into a misleading baseline.
+
 ## 2.16.1
 - Saving Sessions now shows actual Octopoints earned per session
   (`rewarded_octopoints`, already in the Octopus integration's own

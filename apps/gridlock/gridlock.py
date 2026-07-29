@@ -108,6 +108,20 @@ class GridLock(hass.Hass):
         self.load_profile = self._load_load_profile()
         self.decision_log = self._load_decision_log()
 
+        # Savings tracking: a shadow self-consumption-only "baseline"
+        # battery, run tick-by-tick alongside the real one using the
+        # same real PV/load/rate readings — the gap between what that
+        # baseline would have cost and what actually got paid (from the
+        # existing real net-cost sensor) is what GridLock's active
+        # scheduling is worth. Resets daily; history persisted so
+        # week/month totals survive restarts.
+        self._last_actual_energy_cost = 0.0
+        self.savings_day = None
+        self.baseline_soc = None
+        self.baseline_cost_today = 0.0
+        self.savings_history = self._load_savings_history()
+        self._load_savings_state()
+
         # Live power-flow entities (Solar/Grid/Battery/Home diagram in
         # the Ingress web UI) — magnitude from power sensors, direction
         # from the boolean sensors rather than trusting a sign
@@ -453,6 +467,157 @@ class GridLock(hass.Hass):
         self.load_profile[slot_idx] = (observed_slot_kwh if prev is None
                                         else prev * (1 - alpha) + observed_slot_kwh * alpha)
         self._save_load_profile()
+
+    def _savings_state_path(self):
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "savings_state.json")
+
+    def _load_savings_state(self):
+        """Today-in-progress baseline accumulator — separate from
+        savings_history.json (finalised past days) so a restart
+        mid-day doesn't lose today's partial progress."""
+        try:
+            with open(self._savings_state_path()) as f:
+                state = json.load(f)
+            self.savings_day = state.get("day")
+            self.baseline_soc = state.get("baseline_soc")
+            self.baseline_cost_today = state.get("baseline_cost_today", 0.0)
+        except (OSError, ValueError):
+            pass
+
+    def _save_savings_state(self):
+        try:
+            with open(self._savings_state_path(), "w") as f:
+                json.dump({"day": self.savings_day,
+                           "baseline_soc": self.baseline_soc,
+                           "baseline_cost_today": self.baseline_cost_today}, f)
+        except OSError:
+            pass
+
+    def _savings_history_path(self):
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "savings_history.json")
+
+    def _load_savings_history(self):
+        try:
+            with open(self._savings_history_path()) as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {}
+
+    def _save_savings_history(self):
+        try:
+            with open(self._savings_history_path(), "w") as f:
+                json.dump(self.savings_history, f)
+        except OSError:
+            pass
+
+    def _read_live_kw(self, entities):
+        """Sum of live power readings (kW) across one entity or a list
+        — same "assume the entity's native unit is already kW" as the
+        rest of this file's live reads (Sigenergy reports these that
+        way); mirrors _update_load_profile's approach rather than
+        introducing separate W/kW normalisation."""
+        if isinstance(entities, str):
+            entities = [entities]
+        total, got_any = 0.0, False
+        for e in (entities or []):
+            v = self.get_float_state(e, None)
+            if v is not None:
+                total += abs(v)
+                got_any = True
+        return total if got_any else None
+
+    def _roll_savings_day(self, now):
+        today_iso = now.date().isoformat()
+        if self.savings_day is None:
+            self.savings_day = today_iso
+            self.baseline_cost_today = 0.0
+            self.baseline_soc = self.get_float_state(self.ent_soc, 50.0)
+            return
+        if today_iso == self.savings_day:
+            return
+        # Day rolled over — file yesterday's numbers into history using
+        # whatever the real net-cost sensor last read before midnight,
+        # then start today fresh (baseline SoC reseeded from the real
+        # SoC so a shadow-simulation error can't compound forever).
+        self.savings_history[self.savings_day] = {
+            "actual": round(self._last_actual_energy_cost, 4),
+            "baseline": round(self.baseline_cost_today, 4)}
+        self.savings_history = dict(list(self.savings_history.items())[-400:])
+        self._save_savings_history()
+        self.savings_day = today_iso
+        self.baseline_cost_today = 0.0
+        self.baseline_soc = self.get_float_state(self.ent_soc, 50.0)
+
+    def _update_savings(self, now):
+        """One tick of a shadow self-consumption-only battery, driven
+        by the same real PV/load/rate readings as everything else —
+        the gap between what that hypothetical would have cost and
+        what was actually paid (from the real net-cost sensor) is
+        what GridLock's active scheduling is worth today."""
+        self._roll_savings_day(now)
+        pv_kw = self._read_live_kw(self.ent_pv_power_entities)
+        load_kw = self._read_live_kw(self.ent_load_power)
+        if pv_kw is None or load_kw is None:
+            return
+
+        imp_rate = self.get_float_state(self.ent_import_rate, self.default_import)
+        exp_rate = self.get_float_state(self.ent_export_rate, self.default_export)
+        dt_h = 5 / 60
+        eff, cap = self.efficiency, self.battery_kwh
+        floor_kwh = self.floor_soc / 100.0 * cap
+        max_c, max_d = self.charge_kw * dt_h, self.discharge_kw * dt_h
+
+        batt = self.baseline_soc / 100.0 * cap
+        pv, load = pv_kw * dt_h, load_kw * dt_h
+        grid_in = grid_out = extra_cost = 0.0
+
+        pv_to_load = min(pv, load)
+        pv -= pv_to_load
+        load -= pv_to_load
+
+        room = max(0.0, min((cap - batt) / eff, max_c))
+        pv_c = min(pv, room)
+        batt += pv_c * eff
+        grid_out += pv - pv_c
+        if load > 0:
+            avail = min(max_d, max(0.0, batt - floor_kwh))
+            d = min(load / eff, avail)
+            batt -= d
+            load -= d * eff
+            grid_in += load
+            extra_cost += d * self.degradation
+
+        self.baseline_soc = max(0.0, min(100.0, batt / cap * 100.0))
+        self.baseline_cost_today += grid_in * imp_rate - grid_out * exp_rate + extra_cost
+        self._save_savings_state()
+        self._publish_savings(now)
+
+    def _savings_totals(self, now):
+        today = round(self.baseline_cost_today - self._last_actual_energy_cost, 2)
+        week = month = all_time = today
+        for date_str, d in self.savings_history.items():
+            try:
+                age_days = (now.date() - datetime.fromisoformat(date_str).date()).days
+            except ValueError:
+                continue
+            net = d.get("baseline", 0.0) - d.get("actual", 0.0)
+            all_time += net
+            if age_days < 7:
+                week += net
+            if age_days < 30:
+                month += net
+        return today, round(week, 2), round(month, 2), round(all_time, 2)
+
+    def _publish_savings(self, now):
+        today, week, month, all_time = self._savings_totals(now)
+        self.set_state("sensor.gridlock_savings", state=f"{today:.2f}",
+                       attributes={"friendly_name": "GridLock Savings",
+                                   "unit_of_measurement": "£",
+                                   "icon": "mdi:piggy-bank",
+                                   "today": today, "week": week,
+                                   "month": month, "all_time": all_time})
 
     def _decision_log_path(self):
         return os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -1033,6 +1198,10 @@ class GridLock(hass.Hass):
         exp = self.get_float_state(self.ent_daily_export_value)
         stand = self.get_float_state(self.ent_daily_standing_charge)
         net = round(imp + stand - exp, 2)
+        # Energy-only (no standing charge — identical either way, so it
+        # cancels out of a savings comparison) real cost, for
+        # _update_savings to compare its shadow baseline against.
+        self._last_actual_energy_cost = imp - exp
         self.set_state("sensor.gridlock_calculated_net_cost_today",
                        state=f"{net:.2f}",
                        attributes={"friendly_name": "GridLock Net Cost Today",
@@ -1086,6 +1255,7 @@ class GridLock(hass.Hass):
         now = self.get_now()
         soc0 = self.get_float_state(self.ent_soc, 50.0)
         self._update_load_profile(now)
+        self._update_savings(now)
         self.publish_solar_forecast(now)
         self.publish_storm_status()
 
