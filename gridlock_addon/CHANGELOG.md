@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.28.0
+- **EXPORT now reserves enough charge to reach the next off-peak
+  window before selling anything further.** Reported directly: the
+  evening export event was selling flat-out, and if that left too
+  little behind, the following few hours before the next cheap window
+  paid real grid cost for ordinary self-consumption. EXPORT now caps
+  itself, per slot, at whatever's left over *after* protecting the
+  same forecasted self-consumption need the pacing/weighting logic
+  already tracks (`remaining_deficit`/`next_cheap_idx`) — it only
+  sells genuine surplus beyond that, rather than everything down to
+  the floor. No cap at all when there's no off-peak window in sight
+  (nothing to reserve for) — a genuinely good, one-off export rate
+  still sells flat-out exactly as before.
+
 ## 2.27.1
 - **Added a fine-grained (0.05kWh) refinement pass after the main
   0.5kWh hill-climb**, to close small residual grid-import gaps the

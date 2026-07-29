@@ -1343,6 +1343,19 @@ class GridLock(hass.Hass):
             pv -= pv_to_load
             load -= pv_to_load
 
+            # Reserve-aware export cap: don't let a sale eat into the
+            # charge self-consumption is counting on to reach the next
+            # off-peak window without hitting the floor — only sell
+            # genuine surplus beyond that need. No cap at all when
+            # there's no off-peak in sight (nothing to reserve for) —
+            # that's when a genuinely good rate should be sold flat-out,
+            # same as it always has been.
+            next_cheap = s.get("next_cheap_idx")
+            export_cap = max_d
+            if next_cheap is not None and next_cheap > i:
+                future_deficit = s.get("remaining_deficit", 0.0) - max(0.0, s["load"] - s["pv"])
+                export_cap = max(0.0, min(max_d, (batt - floor_kwh) - future_deficit / eff))
+
             if s["charge"] > 0:
                 # Grid-first charging: no battery discharge this slot
                 c = min(s["charge"], max_c, max(0.0, (cap - batt) / eff))
@@ -1353,7 +1366,7 @@ class GridLock(hass.Hass):
                 batt += pv_c * eff
                 grid_out += pv - pv_c
                 grid_in += load
-            elif s["export"] > 0 and batt > floor_kwh:
+            elif s["export"] > 0 and batt > floor_kwh and export_cap > 0:
                 # Genuine battery discharge for export — PV surplus
                 # sold alongside it. If the battery's already at the
                 # floor (this slot's "export" was only ever a planned
@@ -1362,8 +1375,13 @@ class GridLock(hass.Hass):
                 # consumption branch below instead of still selling
                 # the PV: an empty battery with free PV to absorb
                 # should charge from it, not sell it cheap, regardless
-                # of what this slot's own rate happens to be.
-                d = min(s["export"], max_d, batt - floor_kwh)
+                # of what this slot's own rate happens to be. Same
+                # fallthrough when export_cap is the thing that's zero —
+                # selling here would eat into the reserve for reaching
+                # the next off-peak window, so this slot behaves like an
+                # empty battery for export purposes even though there's
+                # genuinely charge in there.
+                d = min(s["export"], export_cap, batt - floor_kwh)
                 batt -= d
                 ac = d * eff
                 serve = min(ac, load)
@@ -1379,7 +1397,6 @@ class GridLock(hass.Hass):
                 grid_out += pv - pv_c
                 if load > 0:
                     headroom = max(0.0, batt - floor_kwh)
-                    next_cheap = s.get("next_cheap_idx")
                     if not self.conserve_battery:
                         # User override: just drain whatever's there,
                         # slot by slot, regardless of whether a later
