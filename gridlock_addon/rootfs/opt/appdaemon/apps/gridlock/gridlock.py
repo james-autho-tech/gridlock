@@ -151,13 +151,30 @@ class GridLock(hass.Hass):
         self.ent_battery_temp = (a.get("battery_temp_entity")
                                  or self.overrides.get("battery_temp_entity_override")
                                  or self._find_sigen_temp("cell"))
+        self.ent_battery_soh = (a.get("battery_soh_entity")
+                                or self.overrides.get("battery_soh_entity_override")
+                                or self._find_sigen_soh())
 
         # Parameters
         self.battery_kwh = float(a.get("battery_capacity_kwh", 10.0))
         self.daily_house_kwh = float(a.get("typical_daily_house_kwh", 12.0))
         self.load_weights = a.get("load_hourly_weights")  # optional list[24]
         self.efficiency = float(a.get("inverter_efficiency", 0.90))
-        self.degradation = float(a.get("battery_degradation_cost", 0.03))
+        # battery_risk_profile picks a sensible default degradation cost
+        # (£/kWh discharged — the optimiser's only real lever against
+        # cycling the battery for wafer-thin arbitrage margins); an
+        # explicit battery_degradation_cost always wins over the
+        # profile if both are set. These are reasoned defaults, not a
+        # real wear model — there's no solid Sigenergy degradation-vs-
+        # cycle-depth data to build a genuine SoH-driven one from.
+        risk_profiles = {"eco": 0.09, "balanced": 0.03, "max_profit": 0.01}
+        self.battery_risk_profile = str(a.get("battery_risk_profile", "balanced")).lower()
+        if self.battery_risk_profile not in risk_profiles:
+            self.log(f"Unknown battery_risk_profile {self.battery_risk_profile!r} "
+                     "— falling back to 'balanced'.", level="WARNING")
+            self.battery_risk_profile = "balanced"
+        self.degradation = float(a.get("battery_degradation_cost",
+                                       risk_profiles[self.battery_risk_profile]))
         self.floor_soc = float(a.get("floor_soc", 20.0))
         self.charge_kw = float(a.get("charge_rate_kw", 10.0))
         self.discharge_kw = float(a.get("discharge_rate_kw", 10.0))
@@ -420,6 +437,21 @@ class GridLock(hass.Hass):
                       and not any(x in eid for x in (exclude or []))]
         live = [eid for eid in candidates if self._is_live(flat.get(eid))]
         pool = live or candidates
+        return pool[0] if pool else None
+
+    def _find_sigen_soh(self):
+        """Battery State of Health — prefer the plant-level aggregate
+        (sigen_plant_battery_state_of_health) over the per-inverter one
+        for the same reason _find_sigen_pv_power prefers the aggregate:
+        one clear number rather than several near-identical readings."""
+        flat = self._all_states_flat()
+        candidates = [eid for eid in flat
+                      if eid.startswith("sensor.") and "sigen" in eid
+                      and "state_of_health" in eid]
+        plant = [eid for eid in candidates if "plant" in eid]
+        pool = plant or candidates
+        live = [eid for eid in pool if self._is_live(flat.get(eid))]
+        pool = live or pool
         return pool[0] if pool else None
 
     def _find_sigen_binary(self, keyword):
@@ -1473,5 +1505,8 @@ class GridLock(hass.Hass):
                                    "ev_power_entity": self.ent_ev_power,
                                    "inverter_temp_entity": self.ent_inverter_temp,
                                    "battery_temp_entity": self.ent_battery_temp,
+                                   "battery_soh_entity": self.ent_battery_soh,
+                                   "battery_risk_profile": self.battery_risk_profile,
+                                   "battery_degradation_cost": self.degradation,
                                    "storm_watch_entities": [e for e, _ in self.storm_sources if e] or None,
                                    "ssen_postcode": self.ssen_postcode or None})

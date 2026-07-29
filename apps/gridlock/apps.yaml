@@ -54,7 +54,16 @@ gridlock:
   battery_capacity_kwh: 36.0
   typical_daily_house_kwh: 12.0
   inverter_efficiency: 0.90
-  battery_degradation_cost: 0.03      # £/kWh discharged
+  # How readily the optimiser cycles the battery for arbitrage —
+  # eco needs a bigger price spread before it'll discharge (shallower,
+  # less frequent cycling); max_profit takes any margin above cost;
+  # balanced is the default either way. Check the Forecast tab's
+  # Battery health panel for the SoH sensors that motivated this — and
+  # its current effective £/kWh threshold under whichever profile you
+  # pick. Not a real degradation-vs-cycling model (no solid data to
+  # build one from), just a sensible lever to have.
+  battery_risk_profile: balanced      # eco | balanced | max_profit
+  # battery_degradation_cost: 0.03    # £/kWh — overrides the profile above if set
   floor_soc: 10
   charge_rate_kw: 10.0
   discharge_rate_kw: 10.0
@@ -101,9 +110,11 @@ gridlock:
   # here). Leave commented out to disable SSEN polling.
   # ssen_postcode: "SW1A 1"
 
-  # --- System temperature (Forecast tab, informational only) ---
-  # Auto-discovered by default (Sigenergy "pcs"/"cell" temperature
-  # sensors) — only set these if the Discovered Entities panel shows
-  # the wrong one, or you're not on Sigenergy hardware:
+  # --- Battery health (Forecast tab, informational only) ---
+  # Auto-discovered by default (Sigenergy "pcs"/"cell"/
+  # "state_of_health" sensors) — only set these if the Discovered
+  # Entities panel shows the wrong one, or you're not on Sigenergy
+  # hardware:
   # inverter_temp_entity: sensor.sigen_inverter_pcs_internal_temperature
   # battery_temp_entity: sensor.sigen_plant_ess_average_cell_temperature
+  # battery_soh_entity: sensor.sigen_plant_battery_state_of_health

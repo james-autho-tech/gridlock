@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.19.0
+- **Fixed another uncommented-placeholder bug**: `battery_degradation_cost:
+  0.03` was live in the shipped apps.yaml template — same class of issue
+  as the export-value one just fixed. It's now commented out (an
+  optional override), which also means it would have silently blocked
+  the new setting below from ever taking effect for anyone using the
+  template as-is.
+- New `battery_risk_profile` setting (eco / balanced / max_profit) —
+  a friendlier dial on the existing degradation-cost deterrent (the
+  optimiser's only real lever against cycling the battery for thin
+  arbitrage margins) rather than a new invented wear model, since
+  there's no solid Sigenergy degradation-vs-cycle-depth data to build
+  one from. eco needs a much bigger price spread before it'll
+  discharge; max_profit takes any margin above cost; balanced matches
+  today's existing default (unchanged behaviour if you don't set it).
+  An explicit `battery_degradation_cost` still overrides the profile.
+- New **Battery health** panel (renamed from System temperature) adds
+  a State of Health tile (auto-discovered, prefers the plant-level
+  aggregate) alongside the existing temperature ones, plus a line
+  showing the active risk profile and its effective £/kWh threshold.
+
 ## 2.18.0
 - **Fixed a real bug**: `daily_export_value_entity` in the shipped
   apps.yaml template was uncommented, pointing every fresh install at

@@ -61,7 +61,7 @@ for f in ev_charging_override octopus_dispatch_override import_rate_override \
          grid_power_entity_override battery_power_entity_override \
          ssen_postcode_override storm_watch_entity_override \
          inverter_temp_entity_override battery_temp_entity_override \
-         daily_export_value_entity_override; do
+         daily_export_value_entity_override battery_soh_entity_override; do
     val="$(bashio::config "$f" 2>/dev/null)" || val=""
     if [ "$val" != "null" ] && [ -n "$val" ]; then
         export "GL_OVR_${f}=${val}"

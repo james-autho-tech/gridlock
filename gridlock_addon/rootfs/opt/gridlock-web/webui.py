@@ -117,6 +117,9 @@ def build_status():
         "solar_tomorrow_kwh": solar.get("attributes", {}).get("tomorrow_kwh", 0),
         "inverter_temp": as_float(get(status_attrs.get("inverter_temp_entity")), None),
         "battery_temp": as_float(get(status_attrs.get("battery_temp_entity")), None),
+        "battery_soh": as_float(get(status_attrs.get("battery_soh_entity")), None),
+        "battery_risk_profile": status_attrs.get("battery_risk_profile") or "balanced",
+        "battery_degradation_cost": status_attrs.get("battery_degradation_cost"),
         "solar_forecast_data": solar.get("attributes", {}).get("forecast_data") or [],
         "soc_forecast_data": forecast.get("attributes", {}).get("forecast_data") or [],
         "learned_load_profile": forecast.get("attributes", {}).get("learned_load_profile") or [],
@@ -145,6 +148,7 @@ def build_status():
             "EV power": status_attrs.get("ev_power_entity"),
             "Inverter temp": status_attrs.get("inverter_temp_entity"),
             "Battery temp": status_attrs.get("battery_temp_entity"),
+            "Battery SoH": status_attrs.get("battery_soh_entity"),
             "Storm Watch": ", ".join(status_attrs.get("storm_watch_entities") or []) or None,
             "SSEN postcode": status_attrs.get("ssen_postcode"),
         },
@@ -304,6 +308,13 @@ function renderTempTile(label, value, amberAt, redAt) {
   }
   const color = value >= redAt ? 'var(--red)' : value >= amberAt ? 'var(--amber)' : 'var(--green)';
   return `<div class="gl-tile"><div class="lbl">${esc(label)}</div><div class="val num" style="color:${color}">${Number(value).toFixed(1)}°C</div></div>`;
+}
+function renderSohTile(value) {
+  if (value === null || value === undefined) {
+    return '<div class="gl-tile"><div class="lbl">State of health</div><div class="val" style="color:var(--dim);font-size:14px">not found</div></div>';
+  }
+  const color = value >= 90 ? 'var(--green)' : value >= 80 ? 'var(--amber)' : 'var(--red)';
+  return `<div class="gl-tile"><div class="lbl">State of health</div><div class="val num" style="color:${color}">${Number(value).toFixed(1)}%</div></div>`;
 }
 function renderFlow(f) {
   if (!f) return '';
@@ -554,12 +565,14 @@ async function refresh() {
         ${renderEnergyChart(d.solar_forecast_data, d.soc_forecast_data)}
       </div>
       <div class="gl-wrap">
-        <div class="gl-h">System temperature</div>
-        <div class="gl-sub">Solar and battery efficiency both drop off in high heat — a sanity check on the forecast above, not a factor in it (no reliable derating curve to calculate that from).</div>
+        <div class="gl-h">Battery health</div>
+        <div class="gl-sub">Temperature: solar and battery efficiency both drop off in high heat — a sanity check on the forecast above, not a factor in it (no reliable derating curve to calculate that from).</div>
         <div class="gl-grid">
           ${renderTempTile('Inverter', d.inverter_temp, 60, 75)}
           ${renderTempTile('Battery cells', d.battery_temp, 40, 55)}
+          ${renderSohTile(d.battery_soh)}
         </div>
+        <div class="gl-sub" style="margin-top:12px">Cycling protection: <b style="color:var(--ink)">${esc(d.battery_risk_profile)}</b>${d.battery_degradation_cost === null || d.battery_degradation_cost === undefined ? '' : ` — needs at least ${(Number(d.battery_degradation_cost) * 100).toFixed(1)}p/kWh spread before exporting/discharging the battery`}. Set <code>battery_risk_profile</code> (eco / balanced / max_profit) in apps.yaml.</div>
       </div>
       <div class="gl-wrap">
         <div class="gl-h">Learned house usage</div>

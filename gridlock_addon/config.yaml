@@ -1,5 +1,5 @@
 name: GridLock
-version: "2.18.0"
+version: "2.19.0"
 slug: gridlock
 description: Battery optimisation engine for Sigenergy + Octopus IOG (bundled AppDaemon)
 url: https://github.com/james-autho-tech/gridlock
@@ -41,6 +41,7 @@ options:
   inverter_temp_entity_override: ""
   battery_temp_entity_override: ""
   daily_export_value_entity_override: ""
+  battery_soh_entity_override: ""
 schema:
   ev_charging_override: str?
   octopus_dispatch_override: str?
@@ -55,3 +56,5 @@ schema:
   storm_watch_entity_override: str?
   inverter_temp_entity_override: str?
   battery_temp_entity_override: str?
+  daily_export_value_entity_override: str?
+  battery_soh_entity_override: str?
