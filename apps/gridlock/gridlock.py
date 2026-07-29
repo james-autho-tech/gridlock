@@ -1418,7 +1418,8 @@ class GridLock(hass.Hass):
             trace.append(round(soc, 1))
             if want_trace:
                 cost_trace.append({"delta": round(slot_grid_cost, 4),
-                                    "total": round(grid_cost, 4)})
+                                    "total": round(grid_cost, 4),
+                                    "grid_in": round(grid_in, 3)})
         return trace, round(cost, 4), violation, cost_trace, round(grid_cost, 4)
 
     def optimise(self, slots, soc0):
@@ -1615,11 +1616,13 @@ class GridLock(hass.Hass):
             # quicker "what's happening in this slot" scan than reading
             # the Action column text alone, especially scrolling fast
             # through 48 rows.
+            grid_kwh = cost_trace[i]["grid_in"]
             rows.append(
                 f"<tr style='background:{colour}1a'>"
                 f"<td>{s['start'].astimezone().strftime('%a %H:%M')}</td>"
                 f"<td>{s['imp']*100:.1f}p</td><td>{s['exp']*100:.1f}p</td>"
                 f"<td>{s['pv']:.2f}</td><td>{s['load']:.2f}</td>"
+                f"<td>{grid_kwh:.2f}</td>"
                 f"<td style='color:{colour};font-weight:600'>{act}</td>"
                 f"<td>{ev_cell}</td>"
                 f"<td>{trace[i]:.0f}%</td>"
@@ -1631,16 +1634,21 @@ class GridLock(hass.Hass):
             plan_table.append([
                 s["start"].astimezone().strftime("%a %H:%M"),
                 round(s["imp"] * 100, 2), round(s["exp"] * 100, 2),
-                round(s["pv"], 3), round(s["load"], 3), act,
+                round(s["pv"], 3), round(s["load"], 3), grid_kwh, act,
                 round(s["ev_kwh"], 3) if s["dispatch"] else None,
                 trace[i], round(delta_p, 2), cost_trace[i]["total"],
                 imp_rank[i], exp_rank[i]])
         html = ("<table class='gridlock-plan'><tr><th>Slot</th><th>Import</th>"
-                "<th>Export</th><th>PV kWh</th><th>Load kWh</th><th>Action</th>"
-                "<th>EV kWh</th><th>SoC</th><th>Cost</th><th>Total</th></tr>"
+                "<th>Export</th><th>PV kWh</th><th>Load kWh</th>"
+                "<th>Grid kWh</th><th>Action</th>"
+                "<th>EV kWh</th><th>SoC</th><th>Grid £</th><th>Total £</th></tr>"
                 + "".join(rows) + "</table>")
+        # grid_kwh is what the Grid £ column actually charges for -
+        # the gap between load_kwh and grid_kwh is what PV/battery
+        # covered for free, right there in the table instead of
+        # something you have to take on faith.
         plan_table_cols = ["slot", "import_p", "export_p", "pv_kwh", "load_kwh",
-                           "action", "ev_kwh", "soc_pct", "cost_delta_p",
+                           "grid_kwh", "action", "ev_kwh", "soc_pct", "cost_delta_p",
                            "total_gbp", "import_rank", "export_rank"]
         self.set_state("sensor.gridlock_soc_forecast", state=str(trace[0]),
                        attributes={"friendly_name": "GridLock SoC Forecast",

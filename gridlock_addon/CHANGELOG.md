@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.26.0
+- New **"Grid kWh" column** on the plan table, next to "Load kWh" —
+  shows exactly how much of that slot's load actually came from the
+  grid, so the "Grid £"/"Total £" columns (renamed from the plain
+  "Cost"/"Total" they were before) are no longer something you have
+  to take on faith. Every cost figure has only ever reflected real
+  grid import at that slot's actual rate — nothing for banking energy
+  for later, nothing speculative — but repeated questions about ECO
+  slots "costing money" made clear the table wasn't showing its own
+  working. Now it does: Load minus Grid is exactly what PV/battery
+  covered for free.
+
 ## 2.25.1
 - **Widened the bypass-mode trigger from `floor_soc + 0.5` to
   `floor_soc + 2.0`.** Reported from a real plan: SoC repeatedly
