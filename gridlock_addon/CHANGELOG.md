@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.11.0
+- Add a **Forecast** tab: Solcast solar forecast as a bar chart
+  (today/tomorrow totals + hourly breakdown), Storm Watch status,
+  SSEN Power Track outage status, and upcoming Saving Sessions —
+  all data GridLock already pulled in but never surfaced anywhere.
+- New sensor.gridlock_solar_forecast and sensor.gridlock_storm_status
+  publish this so it's available outside the web UI too.
+
 ## 2.10.0
 - Surface Storm Watch (MeteoAlarm) and SSEN postcode config in the
   Discovered Entities panel — previously invisible there since

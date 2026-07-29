@@ -3,7 +3,7 @@ import os
 import re
 import urllib.request
 
-VERSION = "2.10.0"
+VERSION = "2.11.0"
 
 import appdaemon.plugins.hass.hassapi as hass
 from datetime import datetime, timedelta, time as dtime
@@ -703,6 +703,33 @@ class GridLock(hass.Hass):
                     continue
         return curve
 
+    def publish_solar_forecast(self, now):
+        """Solcast curve as its own sensor, for the web UI's Forecast
+        page — not otherwise exposed anywhere outside the 24h plan."""
+        curve = self._pv_curve()
+        fc = sorted(({"x": t.isoformat(), "y": round(kwh, 3)}
+                     for t, kwh in curve.items()), key=lambda p: p["x"])
+        today_kwh = sum(kwh for t, kwh in curve.items() if t.date() == now.date())
+        tomorrow_kwh = sum(kwh for t, kwh in curve.items()
+                           if t.date() == (now + timedelta(days=1)).date())
+        self.set_state("sensor.gridlock_solar_forecast",
+                       state=f"{today_kwh:.2f}",
+                       attributes={"friendly_name": "GridLock Solar Forecast",
+                                   "unit_of_measurement": "kWh",
+                                   "icon": "mdi:solar-power-variant",
+                                   "forecast_data": fc,
+                                   "today_kwh": round(today_kwh, 2),
+                                   "tomorrow_kwh": round(tomorrow_kwh, 2)})
+
+    def publish_storm_status(self):
+        reason = self.storm_active()
+        self.set_state("sensor.gridlock_storm_status",
+                       state="Active" if reason else "Clear",
+                       attributes={"friendly_name": "GridLock Storm Watch",
+                                   "icon": ("mdi:weather-lightning" if reason
+                                            else "mdi:weather-partly-cloudy"),
+                                   "reason": reason or "No active alerts"})
+
     def _load_kwh(self, slot_start):
         slot_idx = str(slot_start.hour * 2 + (1 if slot_start.minute >= 30 else 0))
         learned = self.load_profile.get(slot_idx)
@@ -1004,6 +1031,8 @@ class GridLock(hass.Hass):
         now = self.get_now()
         soc0 = self.get_float_state(self.ent_soc, 50.0)
         self._update_load_profile(now)
+        self.publish_solar_forecast(now)
+        self.publish_storm_status()
 
         slots = self.build_slots(now)
         slots, trace, cost = self.optimise(slots, soc0)

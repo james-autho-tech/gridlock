@@ -65,6 +65,11 @@ def build_status():
     net = get("sensor.gridlock_calculated_net_cost_today") or {}
     ev_dispatch = get("sensor.gridlock_ev_dispatch_kwh") or {}
     decision_log = get("sensor.gridlock_decision_log") or {}
+    solar = get("sensor.gridlock_solar_forecast") or {}
+    storm = get("sensor.gridlock_storm_status") or {}
+    ssen = get("sensor.gridlock_ssen_local_outages") or {}
+    saving_raw = get(status_attrs.get("saving_events_entity")) or {}
+    saving_attrs = saving_raw.get("attributes", {})
 
     pv_kw = sum(as_kw(get(e))
                 for e in (status_attrs.get("pv_power_entities") or []))
@@ -102,6 +107,16 @@ def build_status():
         "compare_html": compare.get("attributes", {}).get("compare_html") or "",
         "ev_planned_kwh": ev_dispatch.get("state", "0.00"),
         "log_entries": list(reversed(decision_log.get("attributes", {}).get("entries") or [])),
+        "solar_forecast_data": solar.get("attributes", {}).get("forecast_data") or [],
+        "solar_today_kwh": solar.get("attributes", {}).get("today_kwh", 0),
+        "solar_tomorrow_kwh": solar.get("attributes", {}).get("tomorrow_kwh", 0),
+        "storm_state": storm.get("state", "Clear"),
+        "storm_reason": storm.get("attributes", {}).get("reason") or "No active alerts",
+        "ssen_count": ssen.get("state", "0"),
+        "ssen_planned": ssen.get("attributes", {}).get("planned", 0),
+        "ssen_severe": bool(ssen.get("attributes", {}).get("network_severe_weather")),
+        "saving_joined": saving_attrs.get("joined_events") or [],
+        "saving_available": saving_attrs.get("available_events") or [],
         "entities": {
             "Battery SoC": status_attrs.get("soc_entity"),
             "Import rate": status_attrs.get("import_rate_entity"),
@@ -181,6 +196,16 @@ PAGE = """<!doctype html>
                  color:var(--cyan); font-size:12px; font-weight:600; letter-spacing:.3px;
                  cursor:pointer; font-family:inherit; transition:background .15s; }
   .gl-more-btn:hover { background:rgba(56,189,248,.08); }
+  .gl-bars { display:flex; align-items:flex-end; gap:2px; height:150px;
+             margin-top:6px; border-bottom:1px solid var(--line); }
+  .gl-bar-col { flex:1; height:100%; display:flex; align-items:flex-end; min-width:2px; }
+  .gl-bar-fill { width:100%; min-height:2px; border-radius:2px 2px 0 0;
+                 background:linear-gradient(180deg,var(--amber),rgba(251,191,36,.15)); }
+  .gl-status-row { display:flex; align-items:center; gap:10px; }
+  .gl-status-dot { width:10px; height:10px; border-radius:50%; flex:0 0 auto; }
+  .gl-sess-row { display:flex; justify-content:space-between; gap:12px; font-size:13px;
+                 padding:7px 0; border-bottom:1px solid #14203a; }
+  .gl-sess-row .code { color:var(--dim); font-size:11px; }
   .flow-wrap { display:flex; justify-content:center; padding:12px 0; }
   .flow-svg { width:100%; max-width:920px; height:auto; }
   .flow-line { fill:none; stroke:#1e293b; stroke-width:2; }
@@ -231,6 +256,7 @@ PAGE = """<!doctype html>
   <button class="gl-nav-btn" data-tab="plan">Plan</button>
   <button class="gl-nav-btn" data-tab="tariffs">Tariffs</button>
   <button class="gl-nav-btn" data-tab="log">Log</button>
+  <button class="gl-nav-btn" data-tab="forecast">Forecast</button>
 </nav>
 <div id="app">Loading…</div>
 <script>
@@ -333,6 +359,43 @@ function renderLog(entries) {
     </div>`).join('');
   return `<div class="gl-log-list">${rows}</div>`;
 }
+function renderSolarChart(data) {
+  if (!data || !data.length) {
+    return '<div style="color:var(--dim)">No forecast data yet — needs the Solcast integration configured.</div>';
+  }
+  const hourly = {};
+  data.forEach(p => {
+    const key = p.x.slice(0, 13); // group to the hour, ISO strings sort/group fine as text
+    hourly[key] = (hourly[key] || 0) + p.y;
+  });
+  const keys = Object.keys(hourly).sort();
+  const max = Math.max(...keys.map(k => hourly[k]), 0.1);
+  const bars = keys.map(k => {
+    const h = Math.max(2, Math.round((hourly[k] / max) * 100));
+    const label = fmtTs(k + ':00:00');
+    return `<div class="gl-bar-col" title="${esc(label)}: ${hourly[k].toFixed(2)} kWh">
+      <div class="gl-bar-fill" style="height:${h}%"></div>
+    </div>`;
+  }).join('');
+  return `<div class="gl-bars">${bars}</div>`;
+}
+function renderSavingSessions(joined, available) {
+  const parts = [];
+  if (available && available.length) {
+    parts.push(`<div style="color:var(--green);font-size:12px;margin-bottom:8px">⚡ ${available.length} session(s) available to join — GridLock auto-joins these.</div>`);
+  }
+  if (!joined || !joined.length) {
+    parts.push('<div style="color:var(--dim)">No upcoming saving sessions.</div>');
+  } else {
+    const rows = joined.slice(-8).reverse().map(s => `
+      <div class="gl-sess-row">
+        <span>${esc(fmtTs(s.start))} – ${esc(fmtTs(s.end))}</span>
+        <span class="code">${esc(s.code || '')} · ${s.octopoints_per_kwh || 0} pts/kWh</span>
+      </div>`).join('');
+    parts.push(`<div>${rows}</div>`);
+  }
+  return parts.join('');
+}
 async function refresh() {
   let d;
   try {
@@ -402,6 +465,36 @@ async function refresh() {
       <div class="gl-wrap">
         <div class="gl-h">Decision log — what changed, and why</div>
         <div class="gl-scroll">${renderLog(d.log_entries)}</div>
+      </div>
+    </div>
+    <div class="tab-page" data-tab="forecast">
+      <div class="gl-wrap">
+        <div class="gl-h">Solar forecast</div>
+        <div class="gl-grid" style="margin-bottom:4px">
+          <div class="gl-tile"><div class="lbl">Today</div><div class="val num" style="color:var(--amber)">${Number(d.solar_today_kwh).toFixed(1)} kWh</div></div>
+          <div class="gl-tile"><div class="lbl">Tomorrow</div><div class="val num" style="color:var(--amber)">${Number(d.solar_tomorrow_kwh).toFixed(1)} kWh</div></div>
+        </div>
+        ${renderSolarChart(d.solar_forecast_data)}
+      </div>
+      <div class="gl-wrap">
+        <div class="gl-h">Storm Watch</div>
+        <div class="gl-status-row">
+          <span class="gl-status-dot" style="background:${d.storm_state === 'Active' ? 'var(--red)' : 'var(--green)'}"></span>
+          <span style="font-weight:700;color:${d.storm_state === 'Active' ? 'var(--red)' : 'var(--green)'}">${esc(d.storm_state)}</span>
+          <span style="color:var(--dim)">${esc(d.storm_reason)}</span>
+        </div>
+      </div>
+      <div class="gl-wrap">
+        <div class="gl-h">SSEN Power Track</div>
+        <div class="gl-status-row">
+          <span class="gl-status-dot" style="background:${Number(d.ssen_count) > 0 ? 'var(--red)' : 'var(--green)'}"></span>
+          <span style="font-weight:700">${d.ssen_count} local fault(s)</span>
+          <span style="color:var(--dim)">${d.ssen_planned} planned · ${d.ssen_severe ? 'severe weather flagged' : 'no severe weather flag'}</span>
+        </div>
+      </div>
+      <div class="gl-wrap">
+        <div class="gl-h">Saving sessions</div>
+        ${renderSavingSessions(d.saving_joined, d.saving_available)}
       </div>
     </div>
   `;

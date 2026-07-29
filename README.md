@@ -100,3 +100,5 @@ release.
 - `sensor.gridlock_heartbeat`
 - `sensor.gridlock_ev_dispatch_kwh` (planned_kwh, completed_kwh)
 - `sensor.gridlock_decision_log` (entries — timestamped state changes)
+- `sensor.gridlock_solar_forecast` (forecast_data, today_kwh, tomorrow_kwh)
+- `sensor.gridlock_storm_status` (reason)
