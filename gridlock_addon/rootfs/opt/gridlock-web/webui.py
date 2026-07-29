@@ -412,6 +412,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        # The page's JS is embedded in this HTML (no separate .js file),
+        # so any browser caching of it silently serves stale code after
+        # an update — no visible sign anything's wrong, just old bugs
+        # that look like they were never fixed.
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.send_header("Pragma", "no-cache")
         self.end_headers()
         self.wfile.write(body)
 

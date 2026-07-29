@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.9.2
+- Send `Cache-Control: no-store` on the web UI's page response — it
+  has no separate .js file (the JS is inline in the HTML), so a
+  cached page silently serves stale code after every update with no
+  visible sign anything's wrong.
+
 ## 2.9.1
 - Fix the web UI hanging on "Loading…" forever with no error: it was
   making 20+ sequential blocking HTTP calls to HA's API per page
