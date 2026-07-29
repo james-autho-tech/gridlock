@@ -213,6 +213,18 @@ class GridLock(hass.Hass):
         # worth the most - cheaper in aggregate, but means slots with
         # charge sitting right there can still show a grid cost.
         self.conserve_battery = bool(a.get("conserve_battery_for_peak", False))
+        # Max rate EXPORT is allowed to sell at, per slot - separate
+        # from discharge_rate_kw (the hardware limit self-consumption
+        # can still use in full when real load needs it). Defaults to
+        # the same as discharge_rate_kw (no change in behaviour) —
+        # lowering it spreads the same volume across more slots for a
+        # gentler peak discharge current, but this is a real financial
+        # tradeoff, not a free win: the good export window is only ever
+        # so many slots long, and once it runs out of slots to spread
+        # into, less total volume gets sold at a good rate overall.
+        # Tested at half rate on a real evening window: ~24% less
+        # profit, not "the same money" — set deliberately, not blindly.
+        self.export_rate_kw = float(a.get("export_rate_kw", self.discharge_kw))
         self.default_import = float(a.get("default_import_rate", 0.2839))
         self.default_export = float(a.get("default_export_rate", 0.15))
         self.export_margin = float(a.get("export_margin", 0.02))
@@ -1345,6 +1357,7 @@ class GridLock(hass.Hass):
         floor_kwh = self.floor_soc / 100.0 * cap
         max_c = self.charge_kw / 2.0
         max_d = self.discharge_kw / 2.0
+        max_d_export = self.export_rate_kw / 2.0
         soc = soc0
         trace, cost, grid_cost, violation = [], 0.0, 0.0, None
         cost_trace = [] if want_trace else None
@@ -1369,10 +1382,10 @@ class GridLock(hass.Hass):
             # that's when a genuinely good rate should be sold flat-out,
             # same as it always has been.
             next_cheap = s.get("next_cheap_idx")
-            export_cap = max_d
+            export_cap = max_d_export
             if next_cheap is not None and next_cheap > i:
                 future_deficit = s.get("remaining_deficit", 0.0) - max(0.0, s["load"] - s["pv"])
-                export_cap = max(0.0, min(max_d, (batt - floor_kwh) - future_deficit / eff))
+                export_cap = max(0.0, min(max_d_export, (batt - floor_kwh) - future_deficit / eff))
 
             if s["charge"] > 0:
                 # Grid-first charging: no battery discharge this slot
@@ -1483,7 +1496,7 @@ class GridLock(hass.Hass):
         where a whole 0.5kWh step would cost more than the tiny gap it's
         covering is actually worth, so the coarse pass leaves it alone."""
         max_c = self.charge_kw / 2.0
-        max_d = self.discharge_kw / 2.0
+        max_d_export = self.export_rate_kw / 2.0
         _, best, base_v, _, _ = self.simulate(slots, soc0)
 
         def refine(step, guard_budget):
@@ -1516,7 +1529,7 @@ class GridLock(hass.Hass):
                     s = slots[i]
                     if s["charge"] > 0:
                         continue
-                    while s["export"] < max_d and guard < guard_budget:
+                    while s["export"] < max_d_export and guard < guard_budget:
                         guard += 1
                         s["export"] += step
                         _, c, v, _, _ = self.simulate(slots, soc0)

@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.30.0
+- **New `export_rate_kw` setting** — caps how fast EXPORT is allowed
+  to sell per slot, separate from `discharge_rate_kw` (self-consumption
+  still uses the full hardware rate for real load). Lowering it spreads
+  the same total volume across more slots for a gentler peak discharge
+  current. Defaults to `discharge_rate_kw` — **no behaviour change
+  unless set explicitly**: tested at half rate on a real evening
+  export window and found ~24% less total profit, not "the same
+  money" — the good export window is only ever so many slots long,
+  and once it runs out of slots to spread into, less total volume
+  gets sold at a good rate overall. Worth setting deliberately with
+  that tradeoff in mind, not as a blind default.
+
 ## 2.29.1
 - **New "Charge kWh" column**, next to "Grid kWh". Reported directly:
   a CHARGE row showed Grid=4.41kWh against Load=3.91kWh but SoC only
