@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.16.1
+- Saving Sessions now shows actual Octopoints earned per session
+  (`rewarded_octopoints`, already in the Octopus integration's own
+  data — no calculation needed) instead of just the pts/kWh rate, plus
+  a running total across every settled session. Shows "pending" for
+  sessions Octopus hasn't settled yet (usually the day or two after a
+  session ends).
+
 ## 2.16.0
 - Removed the self-updater feature (`update_repo`/`update_token`/
   `auto_update`) — this required a fine-grained GitHub PAT and was

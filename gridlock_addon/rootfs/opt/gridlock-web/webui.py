@@ -459,11 +459,23 @@ function renderSavingSessions(joined, available) {
   if (!joined || !joined.length) {
     parts.push('<div style="color:var(--dim)">No upcoming saving sessions.</div>');
   } else {
-    const rows = joined.slice(-8).reverse().map(s => `
+    // rewarded_octopoints is null until Octopus has settled the session
+    // (usually the day or two after it ends) — sum only what's actually
+    // been awarded so far, across every joined session, not just the
+    // ones shown below.
+    const settled = joined.filter(s => s.rewarded_octopoints !== null && s.rewarded_octopoints !== undefined);
+    const totalPoints = settled.reduce((sum, s) => sum + Number(s.rewarded_octopoints), 0);
+    parts.push(`<div style="color:var(--amber);font-weight:700;font-size:14px;margin-bottom:10px">🏆 ${totalPoints.toLocaleString()} Octopoints earned across ${settled.length} session(s)</div>`);
+    const rows = joined.slice(-8).reverse().map(s => {
+      const pts = (s.rewarded_octopoints === null || s.rewarded_octopoints === undefined)
+        ? '<span style="color:var(--dim)">pending</span>'
+        : `<span style="color:var(--amber);font-weight:700">${Number(s.rewarded_octopoints).toLocaleString()} pts</span>`;
+      return `
       <div class="gl-sess-row">
         <span>${esc(fmtDate(s.start))} – ${esc(fmtTime(s.end))}</span>
-        <span class="code">${esc(s.code || '')} · ${s.octopoints_per_kwh || 0} pts/kWh</span>
-      </div>`).join('');
+        <span class="code">${pts} <span style="color:var(--dim)">(${s.octopoints_per_kwh || 0} pts/kWh)</span></span>
+      </div>`;
+    }).join('');
     parts.push(`<div>${rows}</div>`);
   }
   return parts.join('');
