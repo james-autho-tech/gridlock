@@ -1266,11 +1266,24 @@ class GridLock(hass.Hass):
         # where optimise() has already picked CHARGE or EXPORT aren't
         # affected — this only shapes the "nothing better to do than
         # serve load from the battery" fallback.
+        # For each slot in a peak stretch, its forecasted unmet load
+        # (load minus PV) plus every later slot's, up to the next cheap
+        # slot — i.e. this slot's share of the whole stretch's total
+        # need. Used to weight pacing by where the battery actually
+        # helps, not just split evenly by how many slots are left: an
+        # even split hands a small load its full ask and leaves a much
+        # bigger load later in the same stretch with an identical,
+        # now-inadequate ration.
         next_cheap_idx = None
+        deficit_acc = 0.0
         for i in range(len(slots) - 1, -1, -1):
             if slots[i]["imp"] <= self.cheap_rate:
                 next_cheap_idx = i
+                deficit_acc = 0.0
+            else:
+                deficit_acc += max(0.0, slots[i]["load"] - slots[i]["pv"])
             slots[i]["next_cheap_idx"] = next_cheap_idx
+            slots[i]["remaining_deficit"] = deficit_acc
         return slots
 
     # ------------------------------------------------------------------
@@ -1360,14 +1373,23 @@ class GridLock(hass.Hass):
                     # this slot (that branch already runs flat-out — see
                     # above), so this is genuinely a "meh, just keep the
                     # lights on" slot. If a known off-peak window is
-                    # still ahead, ration what's left evenly across the
+                    # still ahead, ration what's left across the
                     # remaining stretch rather than draining fast now
-                    # and importing at full peak rate later — recomputed
-                    # fresh every slot from the actual battery level, so
-                    # it self-corrects if PV covers some slots along the
-                    # way instead of committing to a stale plan upfront.
+                    # and importing at full peak rate later — weighted by
+                    # each slot's own forecasted share of the stretch's
+                    # total need (not just an even split by slot count),
+                    # so a big load doesn't get throttled to the same
+                    # ration as a tiny one earlier in the same stretch.
+                    # Recomputed fresh every slot from the actual battery
+                    # level, so it self-corrects if PV covers some slots
+                    # along the way instead of committing to a stale plan.
                     if next_cheap is not None and next_cheap > i:
-                        avail = min(max_d, headroom / (next_cheap - i))
+                        total_deficit = s.get("remaining_deficit", 0.0)
+                        this_deficit = max(0.0, s["load"] - s["pv"])
+                        if total_deficit > 0:
+                            avail = min(max_d, headroom * (this_deficit / total_deficit))
+                        else:
+                            avail = min(max_d, headroom / (next_cheap - i))
                     elif imp <= self.cheap_rate:
                         # Already sitting in a cheap/off-peak slot right
                         # now — spending stored charge here saves nothing

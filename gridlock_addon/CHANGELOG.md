@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.24.1
+- **Fixed pacing rationing evenly by time instead of by need.** Caught
+  from a real reported plan: a 0.98kWh slot got nearly its full ask
+  covered by the battery, then a 3.13kWh spike two slots later got the
+  *exact same* ration and mostly had to import at 27.4p — because
+  pacing (2.23.0) split the remaining headroom evenly across
+  slots-until-off-peak, with no regard for which of those slots
+  actually needs it. Now each slot's share is weighted by its own
+  forecasted load-minus-PV against the whole stretch's total, so a big
+  predicted load gets proportionally more of the remaining battery and
+  a small one doesn't soak up a flat ration it didn't need. Same total
+  budget, same floor-safe guarantee — just allocated where the plan
+  already knows it'll matter.
+
 ## 2.24.0
 - New **plan summary** — a one-sentence digest above the plan table
   (Overview and Plan tabs), e.g. *"Running mainly on self-consumption,
