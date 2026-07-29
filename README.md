@@ -105,3 +105,9 @@ release.
 - `sensor.gridlock_decision_log` (entries — timestamped state changes)
 - `sensor.gridlock_solar_forecast` (forecast_data, today_kwh, tomorrow_kwh)
 - `sensor.gridlock_storm_status` (reason)
+
+## License
+
+Personal, non-commercial use only — see [LICENSE.md](LICENSE.md).
+Forks/PRs on GitHub are welcome; redistribution elsewhere or
+commercial use needs permission first.
