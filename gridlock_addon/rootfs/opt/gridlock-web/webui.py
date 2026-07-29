@@ -313,7 +313,7 @@ function fmtTs(iso) {
 }
 function renderLog(entries) {
   if (!entries || !entries.length) {
-    return '<div style="color:var(--dim)">No decisions logged yet — entries appear here as GridLock\'s plan changes.</div>';
+    return '<div style="color:var(--dim)">No decisions logged yet — entries appear here as the plan changes.</div>';
   }
   const rows = entries.map(e => `
     <div class="gl-log-row">

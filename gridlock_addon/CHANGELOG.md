@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.9.3
+- Fix the actual "Loading…" root cause, found via the browser console
+  (Firefox): `Uncaught SyntaxError: unexpected token: identifier` at
+  the one place in the page's JS with a backslash-escaped apostrophe
+  (`GridLock\'s`). The source file has the correct two-character `\'`
+  escape, but something between the add-on and the browser (Ingress
+  proxy content handling, most likely) was stripping the backslash,
+  truncating the string early and leaving `s plan changes...` to be
+  parsed as JS. Removed the only escaped apostrophe in the file rather
+  than rely on an escape sequence that isn't surviving the trip intact.
+
 ## 2.9.2
 - Send `Cache-Control: no-store` on the web UI's page response — it
   has no separate .js file (the JS is inline in the HTML), so a
