@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.24.2
+- **Grid-charging is now a hard rule, not just cost-math discouragement:
+  never charges on a peak-rate slot, full stop — the only exception is
+  Storm Watch, which charges to target regardless of rate on purpose
+  (a critical weather alert), and which bypasses the planner entirely
+  rather than going through this rule.** Previously the optimiser only
+  avoided peak charging because round-trip efficiency loss usually
+  made it cost more than it saved — true for a flat two-tier tariff
+  like IOG, but not guaranteed for a tariff with a genuinely tiered
+  peak (e.g. a moderate day rate next to a much higher super-peak),
+  where charging during the cheaper-but-still-peak slot could
+  mathematically reduce total cost despite neither slot being
+  off-peak. Now that's blocked outright: a slot only gets considered
+  for CHARGE if its own rate is at or below the configured cheap-rate
+  threshold.
+
 ## 2.24.1
 - **Fixed pacing rationing evenly by time instead of by need.** Caught
   from a real reported plan: a 0.98kWh slot got nearly its full ask

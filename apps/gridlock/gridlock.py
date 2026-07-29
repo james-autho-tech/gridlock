@@ -1432,6 +1432,15 @@ class GridLock(hass.Hass):
             improved = False
             for i in sorted(range(len(slots)), key=lambda i: slots[i]["imp"]):
                 s = slots[i]
+                # Hard rule, not just a cost-math discouragement: never
+                # grid-charge outside a genuinely cheap/off-peak slot.
+                # Candidates are visited cheapest-first, so once one
+                # fails this the rest (all pricier) do too - Storm
+                # Watch is the only thing allowed to charge regardless
+                # of rate, and it bypasses this planner entirely via
+                # its own apply() call in _tick_inner.
+                if s["imp"] > self.cheap_rate:
+                    break
                 while s["charge"] < max_c and guard < 3000:
                     guard += 1
                     s["charge"] += step
