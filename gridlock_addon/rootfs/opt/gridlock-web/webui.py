@@ -104,6 +104,8 @@ def build_status():
         "plan_html": status_attrs.get("plan_html") or "",
         "plan_cost_24h": forecast.get("attributes", {}).get("plan_cost_24h", 0),
         "net_today": net.get("state", "0.00"),
+        "net_today_calc_import": net.get("attributes", {}).get("import_cost_calculated_today"),
+        "net_today_calc_export": net.get("attributes", {}).get("export_value_calculated_today"),
         "savings_today": savings.get("attributes", {}).get("today"),
         "savings_week": savings.get("attributes", {}).get("week"),
         "savings_month": savings.get("attributes", {}).get("month"),
@@ -134,6 +136,7 @@ def build_status():
             "IOG dispatch": status_attrs.get("dispatch_entity"),
             "Saving sessions": status_attrs.get("saving_events_entity"),
             "Daily import cost": status_attrs.get("daily_import_cost_entity"),
+            "Daily export value": status_attrs.get("daily_export_value_entity"),
             "Daily standing charge": status_attrs.get("daily_standing_charge_entity"),
             "PV power": ", ".join(status_attrs.get("pv_power_entities") or []) or None,
             "Grid power": status_attrs.get("grid_power_entity"),
@@ -508,7 +511,7 @@ async function refresh() {
         <div class="gl-grid">
           <div class="gl-tile"><div class="lbl">Import</div><div class="val num" style="color:var(--amber)">${d.import_p.toFixed(1)}p</div></div>
           <div class="gl-tile"><div class="lbl">Export</div><div class="val num" style="color:var(--cyan)">${d.export_p.toFixed(1)}p</div></div>
-          <div class="gl-tile"><div class="lbl">Today net</div><div class="val num" style="color:${Number(d.net_today) <= 0 ? 'var(--green)' : 'var(--amber)'}">£${d.net_today}</div></div>
+          <div class="gl-tile" title="${d.net_today_calc_import === null || d.net_today_calc_import === undefined ? '' : `GridLock's own estimate (calculated, not billing data): import £${Number(d.net_today_calc_import).toFixed(2)} · export £${Number(d.net_today_calc_export).toFixed(2)}`}"><div class="lbl">Today net</div><div class="val num" style="color:${Number(d.net_today) <= 0 ? 'var(--green)' : 'var(--amber)'}">£${d.net_today}</div></div>
           <div class="gl-tile" title="${d.savings_today === null || d.savings_today === undefined ? '' : `Today: £${Number(d.savings_today).toFixed(2)} · Month: £${Number(d.savings_month).toFixed(2)}`}"><div class="lbl">Saved (7d)</div>${d.savings_week === null || d.savings_week === undefined
             ? '<div class="val" style="color:var(--dim);font-size:14px">learning…</div>'
             : `<div class="val num" style="color:${Number(d.savings_week) >= 0 ? 'var(--green)' : 'var(--amber)'}">£${Number(d.savings_week).toFixed(2)}</div>`}</div>

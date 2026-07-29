@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.18.0
+- **Fixed a real bug**: `daily_export_value_entity` in the shipped
+  apps.yaml template was uncommented, pointing every fresh install at
+  a placeholder entity name that doesn't exist for anyone — silently
+  making "Today net" ignore all export credit (defaulted to £0) unless
+  someone happened to override it correctly. Also had no auto-discovery
+  or Configuration tab override at all, unlike every other entity.
+- Export cost now auto-discovers the same way import cost already did
+  (sibling `_current_accumulative_cost` sensor off the export MPAN),
+  plus a `daily_export_value_entity_override` Configuration tab field
+  and it's now shown in Discovered Entities.
+- New: GridLock also tracks its own running import/export total every
+  tick from live grid power + direction + rates — used automatically
+  whenever the Octopus sensor is missing or reports unknown/
+  unavailable (so "Today net" is never silently wrong for want of a
+  working sensor), and always shown as a tooltip on the Today net tile
+  labelled as a calculation, not billing data, so it's never confused
+  with the real figure when both are available.
+
 ## 2.17.0
 - New **savings tracking**: GridLock now runs a shadow
   self-consumption-only battery alongside the real one, tick by tick,

@@ -199,14 +199,32 @@ class GridLock(hass.Hass):
         # Comparison tariffs (see apps.yaml)
         self.compare_tariffs = a.get("compare_tariffs", [])
 
-        # Daily financials — also matched off the import rate entity's
-        # stem; daily_export_value_entity has no fixed Octopus naming
-        # pattern (varies by inverter integration) so stays explicit-only.
+        # Daily financials — both matched off their own MPAN's stem.
+        # Export used to be explicit-only on the assumption Octopus
+        # doesn't expose an accumulative-cost sibling for export MPANs
+        # the same way it does for import ones — unverified, and wrong
+        # if it does exist: "Today net" would silently ignore all
+        # export credit and just default to 0 rather than error, so a
+        # wrong assumption here fails silently instead of loudly.
         self.ent_daily_import_cost = a.get("daily_import_cost_entity") or self._find_sibling(
             import_stem, "sensor", ["_current_accumulative_cost"])
-        self.ent_daily_export_value = a.get("daily_export_value_entity")
+        self.ent_daily_export_value = (a.get("daily_export_value_entity")
+                                       or self.overrides.get("daily_export_value_entity_override")
+                                       or self._find_sibling(
+            export_stem, "sensor", ["_current_accumulative_cost"]))
         self.ent_daily_standing_charge = a.get("daily_standing_charge_entity") or self._find_sibling(
             import_stem, "sensor", ["_current_standing_charge"])
+
+        # GridLock's own running total of import/export cost, tracked
+        # every tick from live grid power + direction + rates — used
+        # whenever the Octopus sensors above are missing/unavailable
+        # (get_float_state's default kicks in), and always published
+        # alongside the real figures so the difference is visible
+        # rather than silently substituted.
+        self.cost_tracking_day = None
+        self.tracked_import_cost_today = 0.0
+        self.tracked_export_value_today = 0.0
+        self._load_cost_tracking_state()
 
         self.plan = []          # list of slot dicts after optimisation
         self.plan_built_at = None
@@ -618,6 +636,58 @@ class GridLock(hass.Hass):
                                    "icon": "mdi:piggy-bank",
                                    "today": today, "week": week,
                                    "month": month, "all_time": all_time})
+
+    def _cost_tracking_path(self):
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "cost_tracking_state.json")
+
+    def _load_cost_tracking_state(self):
+        try:
+            with open(self._cost_tracking_path()) as f:
+                state = json.load(f)
+            self.cost_tracking_day = state.get("day")
+            self.tracked_import_cost_today = state.get("import_cost", 0.0)
+            self.tracked_export_value_today = state.get("export_value", 0.0)
+        except (OSError, ValueError):
+            pass
+
+    def _save_cost_tracking_state(self):
+        try:
+            with open(self._cost_tracking_path(), "w") as f:
+                json.dump({"day": self.cost_tracking_day,
+                           "import_cost": self.tracked_import_cost_today,
+                           "export_value": self.tracked_export_value_today}, f)
+        except OSError:
+            pass
+
+    def _roll_cost_day(self, now):
+        today_iso = now.date().isoformat()
+        if self.cost_tracking_day != today_iso:
+            self.cost_tracking_day = today_iso
+            self.tracked_import_cost_today = 0.0
+            self.tracked_export_value_today = 0.0
+
+    def _update_energy_cost_tracking(self, now):
+        """GridLock's own running import/export total, tracked every
+        tick from live grid power + the same importing/exporting
+        boolean sensors the flow diagram trusts for direction (not a
+        power sensor's sign convention, which varies across inverter
+        integrations). An approximation — 5-minute samples assumed
+        constant in between — not a replacement for real metered
+        billing data, just a fallback for when that isn't available
+        and a visible cross-check when it is."""
+        self._roll_cost_day(now)
+        grid_kw = self._read_live_kw(self.ent_grid_power)
+        if grid_kw is None:
+            return
+        kwh = grid_kw * (5 / 60)
+        if self.ent_exporting and self.get_state(self.ent_exporting) == "on":
+            exp_rate = self.get_float_state(self.ent_export_rate, self.default_export)
+            self.tracked_export_value_today += kwh * exp_rate
+        elif self.ent_importing and self.get_state(self.ent_importing) == "on":
+            imp_rate = self.get_float_state(self.ent_import_rate, self.default_import)
+            self.tracked_import_cost_today += kwh * imp_rate
+        self._save_cost_tracking_state()
 
     def _decision_log_path(self):
         return os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -1194,8 +1264,15 @@ class GridLock(hass.Hass):
                                                for n, c in rows]})
 
     def update_daily_financials(self):
-        imp = self.get_float_state(self.ent_daily_import_cost)
-        exp = self.get_float_state(self.ent_daily_export_value)
+        now = self.get_now()
+        self._update_energy_cost_tracking(now)
+        # Real Octopus billing data when the sensor exists and has a
+        # valid reading; get_float_state's default silently takes over
+        # with GridLock's own tracked total otherwise (missing entity,
+        # or "unknown"/"unavailable" state) — always published
+        # separately too, rather than the substitution being invisible.
+        imp = self.get_float_state(self.ent_daily_import_cost, self.tracked_import_cost_today)
+        exp = self.get_float_state(self.ent_daily_export_value, self.tracked_export_value_today)
         stand = self.get_float_state(self.ent_daily_standing_charge)
         net = round(imp + stand - exp, 2)
         # Energy-only (no standing charge — identical either way, so it
@@ -1209,7 +1286,9 @@ class GridLock(hass.Hass):
                                    "icon": "mdi:currency-gbp",
                                    "import_cost_today": imp,
                                    "export_credit_today": exp,
-                                   "standing_charge_today": stand})
+                                   "standing_charge_today": stand,
+                                   "import_cost_calculated_today": round(self.tracked_import_cost_today, 2),
+                                   "export_value_calculated_today": round(self.tracked_export_value_today, 2)})
 
         planned_kwh, completed_kwh = self.ev_dispatch_totals()
         self.set_state("sensor.gridlock_ev_dispatch_kwh",
@@ -1379,6 +1458,7 @@ class GridLock(hass.Hass):
                                    "dispatch_entity": self.ent_dispatch,
                                    "saving_events_entity": self.ent_saving_events,
                                    "daily_import_cost_entity": self.ent_daily_import_cost,
+                                   "daily_export_value_entity": self.ent_daily_export_value,
                                    "daily_standing_charge_entity": self.ent_daily_standing_charge,
                                    # power-flow diagram entities
                                    "pv_power_entities": self.ent_pv_power_entities,

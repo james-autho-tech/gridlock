@@ -29,11 +29,15 @@ gridlock:
   # octopus_saving_events: event.octopus_energy_a_XXXXXXXX_octoplus_saving_session_events
   # import_rates_previous / import_rates_today / import_rates_tomorrow
   # export_rates_today / export_rates_tomorrow
-  # daily_import_cost_entity / daily_standing_charge_entity
-
-  # No Octopus naming convention for solar export value — set this if
-  # you track it (varies by inverter integration):
-  daily_export_value_entity: sensor.solar_export_value_today_numeric
+  # daily_import_cost_entity / daily_standing_charge_entity /
+  # daily_export_value_entity — check the Discovered Entities panel
+  # first; if it's wrong/missing, set it here or via the add-on's
+  # Configuration tab (daily_export_value_entity_override). Either way
+  # GridLock also tracks its own running import/export total from live
+  # grid power + rates as a fallback, so "Today net" never silently
+  # ignores export credit even with nothing configured — see the
+  # tooltip on that tile for the calculated figure.
+  # daily_export_value_entity: sensor.octopus_energy_electricity_XXXXXXXX_2222222222222_current_accumulative_cost
 
   # Solcast half-hourly curves
   solcast_detail_today: sensor.solcast_pv_forecast_forecast_today
