@@ -107,10 +107,9 @@ def build_status():
         "compare_html": compare.get("attributes", {}).get("compare_html") or "",
         "ev_planned_kwh": ev_dispatch.get("state", "0.00"),
         "log_entries": list(reversed(decision_log.get("attributes", {}).get("entries") or [])),
-        "solar_forecast_data": solar.get("attributes", {}).get("forecast_data") or [],
         "solar_today_kwh": solar.get("attributes", {}).get("today_kwh", 0),
         "solar_tomorrow_kwh": solar.get("attributes", {}).get("tomorrow_kwh", 0),
-        "soc_forecast_data": forecast.get("attributes", {}).get("forecast_data") or [],
+        "combined_forecast": forecast.get("attributes", {}).get("combined_forecast") or [],
         "learned_load_profile": forecast.get("attributes", {}).get("learned_load_profile") or [],
         "storm_state": storm.get("state", "Clear"),
         "storm_reason": storm.get("attributes", {}).get("reason") or "No active alerts",
@@ -206,6 +205,10 @@ PAGE = """<!doctype html>
   .gl-bar-fill-soc { background:linear-gradient(180deg,var(--cyan),rgba(56,189,248,.15)); }
   .gl-bar-fill-load { background:linear-gradient(180deg,var(--violet),rgba(167,139,250,.15)); }
   .gl-sub { color:var(--dim); font-size:12px; margin:-4px 0 10px; }
+  .gl-combo-svg { width:100%; height:220px; display:block; margin-top:6px; }
+  .gl-combo-legend { display:flex; gap:18px; font-size:12px; color:var(--dim); margin-top:6px; }
+  .gl-legend-dot { display:inline-block; width:9px; height:9px; border-radius:50%;
+                    margin-right:6px; vertical-align:middle; }
   .gl-status-row { display:flex; align-items:center; gap:10px; }
   .gl-status-dot { width:10px; height:10px; border-radius:50%; flex:0 0 auto; }
   .gl-sess-row { display:flex; justify-content:space-between; gap:12px; font-size:13px;
@@ -375,38 +378,35 @@ function renderLog(entries) {
     </div>`).join('');
   return `<div class="gl-log-list">${rows}</div>`;
 }
-function renderSolarChart(data) {
-  if (!data || !data.length) {
-    return '<div style="color:var(--dim)">No forecast data yet — needs the Solcast integration configured.</div>';
-  }
-  const hourly = {};
-  data.forEach(p => {
-    const key = p.x.slice(0, 13); // group to the hour, ISO strings sort/group fine as text
-    hourly[key] = (hourly[key] || 0) + p.y;
-  });
-  const keys = Object.keys(hourly).sort();
-  const max = Math.max(...keys.map(k => hourly[k]), 0.1);
-  const bars = keys.map(k => {
-    const h = Math.max(2, Math.round((hourly[k] / max) * 100));
-    const label = fmtTs(k + ':00:00');
-    return `<div class="gl-bar-col" title="${esc(label)}: ${hourly[k].toFixed(2)} kWh">
-      <div class="gl-bar-fill" style="height:${h}%"></div>
-    </div>`;
-  }).join('');
-  return `<div class="gl-bars">${bars}</div>`;
-}
-function renderSocChart(data) {
+function renderEnergyChart(data) {
   if (!data || !data.length) {
     return '<div style="color:var(--dim)">No forecast yet — computes once the first 24h plan has run.</div>';
   }
-  const bars = data.map(p => {
-    const pct = Math.min(100, Math.max(0, Number(p.y)));
-    const h = Math.max(2, Math.round(pct));
-    return `<div class="gl-bar-col" title="${esc(fmtDate(p.x))}: ${pct.toFixed(0)}%">
-      <div class="gl-bar-fill gl-bar-fill-soc" style="height:${h}%"></div>
-    </div>`;
+  const W = 900, H = 200;
+  const n = data.length;
+  const bw = W / n;
+  const maxPv = Math.max(...data.map(p => Number(p.pv) || 0), 0.1);
+  const bars = data.map((p, i) => {
+    const pv = Number(p.pv) || 0;
+    const h = Math.max(1, (pv / maxPv) * (H - 24));
+    const x = i * bw;
+    return `<rect x="${x.toFixed(1)}" y="${(H - h).toFixed(1)}" width="${Math.max(0.5, bw - 1).toFixed(1)}" height="${h.toFixed(1)}" fill="var(--amber)" opacity="0.5">`
+      + `<title>${esc(fmtDate(p.x))}: ${pv.toFixed(2)} kWh solar, ${Math.round(Math.min(100, Math.max(0, Number(p.soc))))}% battery</title></rect>`;
   }).join('');
-  return `<div class="gl-bars">${bars}</div>`;
+  const pts = data.map((p, i) => {
+    const x = i * bw + bw / 2;
+    const pct = Math.min(100, Math.max(0, Number(p.soc)));
+    const y = H - (pct / 100) * (H - 10) - 5;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  return `<svg viewBox="0 0 ${W} ${H}" class="gl-combo-svg" preserveAspectRatio="none">
+      ${bars}
+      <polyline points="${pts}" fill="none" stroke="var(--cyan)" stroke-width="2.5" />
+    </svg>
+    <div class="gl-combo-legend">
+      <span><span class="gl-legend-dot" style="background:var(--amber)"></span>Solar (kWh, bars)</span>
+      <span><span class="gl-legend-dot" style="background:var(--cyan)"></span>Battery % (line)</span>
+    </div>`;
 }
 function renderLoadProfileChart(data) {
   if (!data || !data.length) {
@@ -493,18 +493,13 @@ async function refresh() {
     </div>
     <div class="tab-page" data-tab="forecast">
       <div class="gl-wrap">
-        <div class="gl-h">Solar forecast</div>
-        <div class="gl-sub">How much your panels are expected to generate, from your Solcast forecast — each bar is one hour, today then tomorrow.</div>
+        <div class="gl-h">Energy forecast</div>
+        <div class="gl-sub">The next 24h, half-hour by half-hour: expected solar generation (amber bars) against GridLock's planned battery % (cyan line) — the "battery calculator" behind the plan, and what it's charging/exporting around.</div>
         <div class="gl-grid" style="margin-bottom:4px">
-          <div class="gl-tile"><div class="lbl">Today</div><div class="val num" style="color:var(--amber)">${Number(d.solar_today_kwh).toFixed(1)} kWh</div></div>
-          <div class="gl-tile"><div class="lbl">Tomorrow</div><div class="val num" style="color:var(--amber)">${Number(d.solar_tomorrow_kwh).toFixed(1)} kWh</div></div>
+          <div class="gl-tile"><div class="lbl">Solar today</div><div class="val num" style="color:var(--amber)">${Number(d.solar_today_kwh).toFixed(1)} kWh</div></div>
+          <div class="gl-tile"><div class="lbl">Solar tomorrow</div><div class="val num" style="color:var(--amber)">${Number(d.solar_tomorrow_kwh).toFixed(1)} kWh</div></div>
         </div>
-        ${renderSolarChart(d.solar_forecast_data)}
-      </div>
-      <div class="gl-wrap">
-        <div class="gl-h">Battery forecast</div>
-        <div class="gl-sub">GridLock's planned battery % over the next 24 hours — this is the "battery calculator": the charge/export plan simulated forward slot by slot.</div>
-        ${renderSocChart(d.soc_forecast_data)}
+        ${renderEnergyChart(d.combined_forecast)}
       </div>
       <div class="gl-wrap">
         <div class="gl-h">Learned house usage</div>

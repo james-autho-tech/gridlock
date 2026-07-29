@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.13.1
+- Merged the Forecast tab's Solar forecast and Battery forecast charts
+  into one **Energy forecast** chart — solar generation as bars against
+  the planned battery % as a line, on a shared 24h timeline. Also fixes
+  the previous Solar chart rendering as a flat line: it was aggregating
+  by hour across however many days Solcast happened to return (could be
+  a week+ on some accounts), so a handful of far-future days dwarfed the
+  scale and every real bar rounded down to nothing. The new chart is
+  built from the same 48 half-hour slots the plan itself uses, so it's
+  always exactly the next 24h.
+
 ## 2.13.0
 - Saving Sessions now show real dates (e.g. "29 Jul, 18:00") instead
   of just a weekday, which was ambiguous across months.
