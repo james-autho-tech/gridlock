@@ -1438,49 +1438,59 @@ class GridLock(hass.Hass):
         return trace, round(cost, 4), violation, cost_trace, round(grid_cost, 4)
 
     def optimise(self, slots, soc0):
-        """Cost-greedy allocation: keep any 0.5 kWh charge/export step that
-        lowers total 24h cost without breaching the SoC floor."""
+        """Cost-greedy allocation: keep any charge/export step that lowers
+        total 24h cost without breaching the SoC floor. Runs a coarse
+        0.5kWh pass first (fast), then a finer 0.05kWh pass to mop up
+        whatever the coarse step is too blunt to profitably close - e.g.
+        a fraction-of-a-kWh shortfall right at the edge of the horizon,
+        where a whole 0.5kWh step would cost more than the tiny gap it's
+        covering is actually worth, so the coarse pass leaves it alone."""
         max_c = self.charge_kw / 2.0
         max_d = self.discharge_kw / 2.0
-        step = 0.5
         _, best, base_v, _, _ = self.simulate(slots, soc0)
-        guard, improved = 0, True
-        while improved and guard < 3000:
-            improved = False
-            for i in sorted(range(len(slots)), key=lambda i: slots[i]["imp"]):
-                s = slots[i]
-                # Hard rule, not just a cost-math discouragement: never
-                # grid-charge outside a genuinely cheap/off-peak slot.
-                # Candidates are visited cheapest-first, so once one
-                # fails this the rest (all pricier) do too - Storm
-                # Watch is the only thing allowed to charge regardless
-                # of rate, and it bypasses this planner entirely via
-                # its own apply() call in _tick_inner.
-                if s["imp"] > self.cheap_rate:
-                    break
-                while s["charge"] < max_c and guard < 3000:
-                    guard += 1
-                    s["charge"] += step
-                    _, c, v, _, _ = self.simulate(slots, soc0)
-                    if (v is None or v == base_v) and c < best - 1e-6:
-                        best, improved = c, True
-                    else:
-                        s["charge"] -= step
+
+        def refine(step, guard_budget):
+            nonlocal best
+            guard, improved = 0, True
+            while improved and guard < guard_budget:
+                improved = False
+                for i in sorted(range(len(slots)), key=lambda i: slots[i]["imp"]):
+                    s = slots[i]
+                    # Hard rule, not just a cost-math discouragement: never
+                    # grid-charge outside a genuinely cheap/off-peak slot.
+                    # Candidates are visited cheapest-first, so once one
+                    # fails this the rest (all pricier) do too - Storm
+                    # Watch is the only thing allowed to charge regardless
+                    # of rate, and it bypasses this planner entirely via
+                    # its own apply() call in _tick_inner.
+                    if s["imp"] > self.cheap_rate:
                         break
-            for i in sorted(range(len(slots)),
-                            key=lambda i: slots[i]["exp"], reverse=True):
-                s = slots[i]
-                if s["charge"] > 0:
-                    continue
-                while s["export"] < max_d and guard < 3000:
-                    guard += 1
-                    s["export"] += step
-                    _, c, v, _, _ = self.simulate(slots, soc0)
-                    if (v is None or v == base_v) and c < best - 1e-6:
-                        best, improved = c, True
-                    else:
-                        s["export"] -= step
-                        break
+                    while s["charge"] < max_c and guard < guard_budget:
+                        guard += 1
+                        s["charge"] += step
+                        _, c, v, _, _ = self.simulate(slots, soc0)
+                        if (v is None or v == base_v) and c < best - 1e-6:
+                            best, improved = c, True
+                        else:
+                            s["charge"] -= step
+                            break
+                for i in sorted(range(len(slots)),
+                                key=lambda i: slots[i]["exp"], reverse=True):
+                    s = slots[i]
+                    if s["charge"] > 0:
+                        continue
+                    while s["export"] < max_d and guard < guard_budget:
+                        guard += 1
+                        s["export"] += step
+                        _, c, v, _, _ = self.simulate(slots, soc0)
+                        if (v is None or v == base_v) and c < best - 1e-6:
+                            best, improved = c, True
+                        else:
+                            s["export"] -= step
+                            break
+
+        refine(0.5, 3000)
+        refine(0.05, 600)
 
         # Drop any EXPORT block too small to be worth bothering with -
         # a lone slot selling a fraction of a percent of capacity isn't

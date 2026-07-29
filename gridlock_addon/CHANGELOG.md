@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.27.1
+- **Added a fine-grained (0.05kWh) refinement pass after the main
+  0.5kWh hill-climb**, to close small residual grid-import gaps the
+  coarse step is too blunt to profitably fix. Reported directly: a
+  tiny 0.06kWh shortfall at the very edge of the 24h horizon cost
+  1.6p imported at peak rate — buying that same amount off-peak
+  overnight would only cost ~0.2p, a clear win, but a whole 0.5kWh
+  charge step costs more than the 1.6p it'd save (most of the step
+  goes unused), so the coarse pass correctly left it alone. The new
+  finer pass picks up exactly this kind of small, genuine improvement
+  without changing how the coarse pass behaves for everything else.
+  Negligible performance cost (~16ms per full plan recompute in
+  testing, against a 5-minute tick interval). The hard no-peak-charge
+  rule from 2.24.2 applies identically to both passes.
+
 ## 2.27.0
 - **Self-consumption no longer rations available battery charge by
   default.** If there's charge above the floor, it's now spent
