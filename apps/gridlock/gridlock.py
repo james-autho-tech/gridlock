@@ -1368,6 +1368,16 @@ class GridLock(hass.Hass):
                     # way instead of committing to a stale plan upfront.
                     if next_cheap is not None and next_cheap > i:
                         avail = min(max_d, headroom / (next_cheap - i))
+                    elif imp <= self.cheap_rate:
+                        # Already sitting in a cheap/off-peak slot right
+                        # now — spending stored charge here saves nothing
+                        # over importing fresh (it's about as cheap as
+                        # importing gets), and costs a real round-trip
+                        # efficiency loss for zero benefit. Leave the
+                        # battery alone and import instead, so whatever's
+                        # stored stays available for the next expensive
+                        # stretch.
+                        avail = 0.0
                     else:
                         avail = min(max_d, headroom)
                     d = min(load / eff, avail)
@@ -1751,13 +1761,18 @@ class GridLock(hass.Hass):
             reason = f"{reason} (thermal derate to {derate * 100:.0f}%)"
         if mode == self.mode_eco:
             live_soc = self.get_float_state(self.ent_soc, 50.0)
-            if live_soc <= self.floor_soc + 0.5:
+            pv_now = bool(self.ent_pv_generating) and \
+                self.get_state(self.ent_pv_generating) == "on"
+            if live_soc <= self.floor_soc + 0.5 and not pv_now:
                 # "Maximum Self Consumption" still has the inverter
                 # actively hunting for battery power that isn't there
                 # once it's at the floor. "Unknown" is Sigenergy's own
                 # documented bypass state — it just passes load straight
                 # through to the grid instead, which is what we want
                 # here regardless of which ECO call site this came from.
+                # But not while PV is actively generating: an empty
+                # battery with free solar arriving should still charge
+                # from it via normal self-consumption, not sit bypassed.
                 mode = "Unknown"
                 reason = f"{reason} (battery at floor — bypass mode)"
         self._log_decision(state, reason)

@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.23.1
+- Two follow-up fixes to the pacing/bypass logic from 2.23.0, both
+  caught by direct questions rather than a bug report:
+  - **Bypass mode no longer engages while PV is actively generating.**
+    An empty battery with free solar arriving should still charge from
+    it via normal self-consumption — bypass is only for "genuinely
+    nothing useful to do," and absorbing PV is always useful.
+  - **Self-consumption no longer spends stored battery charge while
+    already sitting in a cheap/off-peak slot.** Discharging the
+    battery to serve load when the grid import rate is already at the
+    cheap threshold saves nothing over importing fresh, and costs a
+    real round-trip efficiency loss for zero benefit — now it leaves
+    the battery alone and imports instead, keeping whatever's stored
+    available for the next expensive stretch.
+
 ## 2.23.0
 - **Paced battery discharge toward the next off-peak window.** Plain
   self-consumption slots (no CHARGE or EXPORT candidate beat the
