@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.24.3
+- **Bypass mode now shows clearly in the status dot and decision log**,
+  the same way ECO/CHARGE/EXPORT/EV Protection already do — it was
+  only ever mentioned in the reason text before ("...battery at floor
+  — bypass mode"), so it was easy to miss unless you read the full
+  sentence. The state label itself now says e.g. "Self Consumption —
+  Bypass", with its own amber dot colour.
+
 ## 2.24.2
 - **Grid-charging is now a hard rule, not just cost-math discouragement:
   never charges on a peak-rate slot, full stop — the only exception is

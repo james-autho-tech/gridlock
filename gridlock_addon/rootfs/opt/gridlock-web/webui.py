@@ -338,6 +338,7 @@ function selectTab(tab) {
 document.querySelectorAll('.gl-nav-btn').forEach(b => b.addEventListener('click', () => selectTab(b.dataset.tab)));
 function dotColor(state) {
   if (state.includes('Storm')) return 'var(--red)';
+  if (state.includes('Bypass')) return 'var(--amber)';
   if (state.includes('Charg')) return 'var(--green)';
   if (state.includes('Export') || state.includes('Session')) return 'var(--cyan)';
   if (['Disabled','unavailable','unknown'].includes(state)) return 'var(--red)';

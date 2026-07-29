@@ -1871,6 +1871,7 @@ class GridLock(hass.Hass):
                 # battery with free solar arriving should still charge
                 # from it via normal self-consumption, not sit bypassed.
                 mode = "Unknown"
+                state = f"{state} — Bypass"
                 reason = f"{reason} (battery at floor — bypass mode)"
         self._log_decision(state, reason)
         if self.get_state(self.ent_mode) != mode:
