@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.19.1
+- Fixed the plan table's Cost/Total columns (and "Plan cost 24h")
+  showing rising cost during pure self-consumption slots, before any
+  real grid import was happening — a battery_risk_profile degradation
+  assumption was bleeding into the displayed figures. Self-consumption
+  discharging your own battery to serve load doesn't touch a meter, so
+  it now correctly shows £0 for those slots; only real grid import/
+  export shows a cost, matching what you'd actually see on a bill.
+  The degradation cost still discourages the optimiser from cycling
+  the battery for thin arbitrage margins internally — it's just no
+  longer mixed into the user-facing £ figures. Verified against a
+  synthetic overnight scenario (SoC draining to the floor): every
+  slot above the floor now shows exactly £0.00, cost only appears
+  once real grid import begins.
+
 ## 2.19.0
 - **Fixed another uncommented-placeholder bug**: `battery_degradation_cost:
   0.03` was live in the shipped apps.yaml template — same class of issue

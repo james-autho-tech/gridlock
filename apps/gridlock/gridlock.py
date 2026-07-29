@@ -1076,24 +1076,37 @@ class GridLock(hass.Hass):
     # SIMULATION + OPTIMISER
     # ------------------------------------------------------------------
     def simulate(self, slots, soc0, imp_override=None, exp_override=None, want_trace=False):
-        """Per-slot energy balance. Returns (soc_trace, cost, violation_idx,
-        cost_trace). cost_trace (only built when want_trace=True — this
-        runs thousands of times inside optimise()'s hill-climb, so
-        skipping it there avoids building a throwaway list on every
-        candidate step) is [{"delta": <this slot's cost>, "total":
-        <running total through this slot>}, ...], for the plan table's
-        cost/running-total columns."""
+        """Per-slot energy balance. Returns (soc_trace, cost,
+        violation_idx, cost_trace, grid_cost).
+
+        `cost` is the all-in figure optimise()'s hill-climb searches
+        on — it includes an assumed £/kWh degradation cost on every
+        battery discharge (see battery_risk_profile), specifically so
+        the search is discouraged from cycling the battery for
+        wafer-thin arbitrage margins. `grid_cost` is real grid
+        import/export £ only, with no degradation mixed in, for
+        anything user-facing (the plan table, "Plan cost 24h"):
+        self-consumption discharging your own battery to serve load
+        doesn't touch a meter, so showing it as rising "cost" there
+        conflated an internal decision-weighting assumption with money
+        that actually left your account.
+
+        cost_trace (only built when want_trace=True — this runs
+        thousands of times inside optimise()'s hill-climb, so skipping
+        it there avoids building a throwaway list on every candidate
+        step) is [{"delta": <this slot's grid £>, "total": <running
+        grid £ total through this slot>}, ...], for the plan table's
+        cost/running-total columns — grid-only, same reasoning."""
         eff = self.efficiency
         cap = self.battery_kwh
         floor_kwh = self.floor_soc / 100.0 * cap
         max_c = self.charge_kw / 2.0
         max_d = self.discharge_kw / 2.0
         soc = soc0
-        trace, cost, violation = [], 0.0, None
+        trace, cost, grid_cost, violation = [], 0.0, 0.0, None
         cost_trace = [] if want_trace else None
 
         for i, s in enumerate(slots):
-            cost_before = cost
             imp = imp_override[i] if imp_override else s["imp"]
             exp = exp_override[i] if exp_override else s["exp"]
             batt = soc / 100.0 * cap
@@ -1141,12 +1154,14 @@ class GridLock(hass.Hass):
             soc = max(0.0, min(100.0, batt / cap * 100.0))
             if soc < self.floor_soc - 0.5 and violation is None:
                 violation = i
-            cost += grid_in * imp - grid_out * exp
+            slot_grid_cost = grid_in * imp - grid_out * exp
+            cost += slot_grid_cost
+            grid_cost += slot_grid_cost
             trace.append(round(soc, 1))
             if want_trace:
-                cost_trace.append({"delta": round(cost - cost_before, 4),
-                                    "total": round(cost, 4)})
-        return trace, round(cost, 4), violation, cost_trace
+                cost_trace.append({"delta": round(slot_grid_cost, 4),
+                                    "total": round(grid_cost, 4)})
+        return trace, round(cost, 4), violation, cost_trace, round(grid_cost, 4)
 
     def optimise(self, slots, soc0):
         """Cost-greedy allocation: keep any 0.5 kWh charge/export step that
@@ -1154,7 +1169,7 @@ class GridLock(hass.Hass):
         max_c = self.charge_kw / 2.0
         max_d = self.discharge_kw / 2.0
         step = 0.5
-        _, best, base_v, _ = self.simulate(slots, soc0)
+        _, best, base_v, _, _ = self.simulate(slots, soc0)
         guard, improved = 0, True
         while improved and guard < 3000:
             improved = False
@@ -1163,7 +1178,7 @@ class GridLock(hass.Hass):
                 while s["charge"] < max_c and guard < 3000:
                     guard += 1
                     s["charge"] += step
-                    _, c, v, _ = self.simulate(slots, soc0)
+                    _, c, v, _, _ = self.simulate(slots, soc0)
                     if (v is None or v == base_v) and c < best - 1e-6:
                         best, improved = c, True
                     else:
@@ -1177,14 +1192,14 @@ class GridLock(hass.Hass):
                 while s["export"] < max_d and guard < 3000:
                     guard += 1
                     s["export"] += step
-                    _, c, v, _ = self.simulate(slots, soc0)
+                    _, c, v, _, _ = self.simulate(slots, soc0)
                     if (v is None or v == base_v) and c < best - 1e-6:
                         best, improved = c, True
                     else:
                         s["export"] -= step
                         break
-        trace, cost, _, cost_trace = self.simulate(slots, soc0, want_trace=True)
-        return slots, trace, cost, cost_trace
+        trace, cost, _, cost_trace, grid_cost = self.simulate(slots, soc0, want_trace=True)
+        return slots, trace, cost, cost_trace, grid_cost
 
     # ------------------------------------------------------------------
     # OUTPUT
@@ -1197,7 +1212,7 @@ class GridLock(hass.Hass):
             return "EXPORT"
         return "ECO"
 
-    def publish_plan(self, slots, trace, cost, cost_trace, soc0, live_label=None):
+    def publish_plan(self, slots, trace, cost_trace, grid_cost, soc0, live_label=None):
         """live_label overrides row 0's displayed action — the optimiser
         plan is theoretical (doesn't model EV/Storm/Session events), so
         when a live override (e.g. "EV Protection") is actually being
@@ -1212,7 +1227,7 @@ class GridLock(hass.Hass):
                        attributes={"friendly_name": "GridLock SoC Forecast",
                                    "unit_of_measurement": "%",
                                    "forecast_data": fc,
-                                   "plan_cost_24h": cost,
+                                   "plan_cost_24h": grid_cost,
                                    "learned_load_profile": learned})
 
         rows = []
@@ -1276,7 +1291,7 @@ class GridLock(hass.Hass):
             # Re-optimise a copy of the raw slots under this tariff
             cp = [dict(s, charge=0.0, export=0.0, imp=imp[i], exp=exp[i])
                   for i, s in enumerate(slots)]
-            cp, _, c, _ = self.optimise(cp, soc0)
+            cp, _, _, _, c = self.optimise(cp, soc0)
             c += float(t.get("standing", 0.0))
             rows.append((t.get("name", "tariff"), c))
 
@@ -1371,7 +1386,7 @@ class GridLock(hass.Hass):
         self.publish_storm_status()
 
         slots = self.build_slots(now)
-        slots, trace, cost, cost_trace = self.optimise(slots, soc0)
+        slots, trace, _, cost_trace, grid_cost = self.optimise(slots, soc0)
 
         cur = slots[0]
         action = self._action(cur)
@@ -1393,8 +1408,8 @@ class GridLock(hass.Hass):
         else:
             live_label = None
 
-        plan_html = self.publish_plan(slots, trace, cost, cost_trace, soc0, live_label)
-        self.publish_compare(self.build_slots(now), soc0, cost)
+        plan_html = self.publish_plan(slots, trace, cost_trace, grid_cost, soc0, live_label)
+        self.publish_compare(self.build_slots(now), soc0, grid_cost)
         self.plan = slots
 
         target = next((trace[i] for i, s in enumerate(slots)
