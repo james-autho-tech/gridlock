@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.29.1
+- **New "Charge kWh" column**, next to "Grid kWh". Reported directly:
+  a CHARGE row showed Grid=4.41kWh against Load=3.91kWh but SoC only
+  moved 1 point (1%→2%), which looked like the battery was somehow
+  charging far slower than its rated rate. Root cause: CHARGE mode
+  never discharges the battery for the concurrent load (it's served
+  directly from the grid instead), so "Grid kWh" there was always the
+  battery top-up *and* the house load added together — in this exact
+  row, only ~0.5kWh of that 4.41kWh actually went into the battery,
+  the rest was the load passing straight through. Verified against the
+  exact reported numbers: 0.5kWh charge + 3.91kWh load = 4.41kWh,
+  matching precisely. The new column isolates just the top-up amount.
+
 ## 2.29.0
 - **Extended the planning horizon from 24h to 28h.** Root cause of
   the battery still hitting empty (and bypass) before the next

@@ -309,8 +309,8 @@ function csvCell(v) {
 // separately hand-maintained one, so the two can't drift apart.
 const PLAN_CSV_HEADERS = {
   slot: 'Slot', import_p: 'Import (p)', export_p: 'Export (p)', pv_kwh: 'PV (kWh)',
-  load_kwh: 'Load (kWh)', grid_kwh: 'Grid (kWh)', action: 'Action',
-  ev_kwh: 'EV (kWh)', soc_pct: 'SoC (%)',
+  load_kwh: 'Load (kWh)', grid_kwh: 'Grid (kWh)', charge_kwh: 'Charge (kWh)',
+  action: 'Action', ev_kwh: 'EV (kWh)', soc_pct: 'SoC (%)',
   cost_delta_p: 'Grid cost delta (p)', total_gbp: 'Grid total (£)',
   import_rank: 'Import rank', export_rank: 'Export rank',
 };

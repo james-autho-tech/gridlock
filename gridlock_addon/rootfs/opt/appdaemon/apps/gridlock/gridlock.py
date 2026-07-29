@@ -1331,8 +1331,15 @@ class GridLock(hass.Hass):
         thousands of times inside optimise()'s hill-climb, so skipping
         it there avoids building a throwaway list on every candidate
         step) is [{"delta": <this slot's grid £>, "total": <running
-        grid £ total through this slot>}, ...], for the plan table's
-        cost/running-total columns — grid-only, same reasoning."""
+        grid £ total through this slot>, "grid_in": <total kWh drawn
+        from the grid this slot>, "charge_in": <of that, how much
+        actually went into the battery>}, ...], for the plan table.
+        During CHARGE, grid_in includes the concurrent load served
+        directly from the grid alongside the battery top-up (no
+        battery discharge happens in that branch) — charge_in isolates
+        just the top-up amount, since grid_in alone conflates the two
+        and makes the battery look like it's charging far slower than
+        the numbers imply."""
         eff = self.efficiency
         cap = self.battery_kwh
         floor_kwh = self.floor_soc / 100.0 * cap
@@ -1346,7 +1353,7 @@ class GridLock(hass.Hass):
             imp = imp_override[i] if imp_override else s["imp"]
             exp = exp_override[i] if exp_override else s["exp"]
             batt = soc / 100.0 * cap
-            grid_in = grid_out = 0.0
+            grid_in = grid_out = charge_in = 0.0
             pv, load = s["pv"], s["load"]
 
             # PV serves house load first in every mode
@@ -1372,6 +1379,7 @@ class GridLock(hass.Hass):
                 c = min(s["charge"], max_c, max(0.0, (cap - batt) / eff))
                 batt += c * eff
                 grid_in += c
+                charge_in = c
                 room = max(0.0, min((cap - batt) / eff, max_c - c))
                 pv_c = min(pv, room)
                 batt += pv_c * eff
@@ -1462,7 +1470,8 @@ class GridLock(hass.Hass):
             if want_trace:
                 cost_trace.append({"delta": round(slot_grid_cost, 4),
                                     "total": round(grid_cost, 4),
-                                    "grid_in": round(grid_in, 3)})
+                                    "grid_in": round(grid_in, 3),
+                                    "charge_in": round(charge_in, 3)})
         return trace, round(cost, 4), violation, cost_trace, round(grid_cost, 4)
 
     def optimise(self, slots, soc0):
@@ -1680,12 +1689,14 @@ class GridLock(hass.Hass):
             # the Action column text alone, especially scrolling fast
             # through the whole horizon's rows.
             grid_kwh = cost_trace[i]["grid_in"]
+            charge_kwh = cost_trace[i]["charge_in"]
             rows.append(
                 f"<tr style='background:{colour}1a'>"
                 f"<td>{s['start'].astimezone().strftime('%a %H:%M')}</td>"
                 f"<td>{s['imp']*100:.1f}p</td><td>{s['exp']*100:.1f}p</td>"
                 f"<td>{s['pv']:.2f}</td><td>{s['load']:.2f}</td>"
                 f"<td>{grid_kwh:.2f}</td>"
+                f"<td>{charge_kwh:.2f}</td>"
                 f"<td style='color:{colour};font-weight:600'>{act}</td>"
                 f"<td>{ev_cell}</td>"
                 f"<td>{trace[i]:.0f}%</td>"
@@ -1697,22 +1708,29 @@ class GridLock(hass.Hass):
             plan_table.append([
                 s["start"].astimezone().strftime("%a %H:%M"),
                 round(s["imp"] * 100, 2), round(s["exp"] * 100, 2),
-                round(s["pv"], 3), round(s["load"], 3), grid_kwh, act,
+                round(s["pv"], 3), round(s["load"], 3), grid_kwh, charge_kwh, act,
                 round(s["ev_kwh"], 3) if s["dispatch"] else None,
                 trace[i], round(delta_p, 2), cost_trace[i]["total"],
                 imp_rank[i], exp_rank[i]])
         html = ("<table class='gridlock-plan'><tr><th>Slot</th><th>Import</th>"
                 "<th>Export</th><th>PV kWh</th><th>Load kWh</th>"
-                "<th>Grid kWh</th><th>Action</th>"
+                "<th>Grid kWh</th><th>Charge kWh</th><th>Action</th>"
                 "<th>EV kWh</th><th>SoC</th><th>Grid £</th><th>Total £</th></tr>"
                 + "".join(rows) + "</table>")
         # grid_kwh is what the Grid £ column actually charges for -
         # the gap between load_kwh and grid_kwh is what PV/battery
         # covered for free, right there in the table instead of
-        # something you have to take on faith.
+        # something you have to take on faith. charge_kwh splits it
+        # further during CHARGE specifically: grid_kwh there is the
+        # battery top-up AND the concurrent load combined (CHARGE never
+        # discharges the battery for load in the same slot) - without
+        # this column a big Grid figure next to a small SoC move looks
+        # like the battery is charging far slower than it actually is,
+        # when most of that draw was just the house load passing
+        # straight through.
         plan_table_cols = ["slot", "import_p", "export_p", "pv_kwh", "load_kwh",
-                           "grid_kwh", "action", "ev_kwh", "soc_pct", "cost_delta_p",
-                           "total_gbp", "import_rank", "export_rank"]
+                           "grid_kwh", "charge_kwh", "action", "ev_kwh", "soc_pct",
+                           "cost_delta_p", "total_gbp", "import_rank", "export_rank"]
         self.set_state("sensor.gridlock_soc_forecast", state=str(trace[0]),
                        attributes={"friendly_name": "GridLock SoC Forecast",
                                    "unit_of_measurement": "%",
