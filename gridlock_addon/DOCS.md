@@ -10,12 +10,11 @@ File editor / Studio Code Server add-ons):
   charger. If discovery is ambiguous (multiple Octopus accounts/
   meters), set the affected key explicitly here as a **literal
   value** — not `!secret`. AppDaemon's app-config loader has no
-  built-in secrets.yaml support the way HA core does (confirmed by
-  checking how [REDACTED] does it — that's custom code [REDACTED] wrote
-  itself, not an AppDaemon feature); a `!secret` tag here makes the
-  whole file fail to parse and the app silently stops publishing
-  anything. The add-on self-heals from that (backs up the broken
-  file, restores the template) but it's simplest to just not use it.
+  built-in secrets.yaml support the way HA core does; a `!secret` tag
+  here makes the whole file fail to parse and the app silently stops
+  publishing anything. The add-on self-heals from that (backs up the
+  broken file, restores the template) but it's simplest to just not
+  use it.
 
 Open the add-on's sidebar panel (once Ingress is enabled via "Show in
 sidebar" on this add-on's Info page) — the "Discovered entities" card

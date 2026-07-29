@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.16.0
+- Removed the self-updater feature (`update_repo`/`update_token`/
+  `auto_update`) — this required a fine-grained GitHub PAT and was
+  redundant with the Supervisor add-on's own update mechanism (HA's
+  Add-on Store already handles this), so it added a security-sensitive
+  config option nobody needed to see.
+- `gridlock.py` no longer tracks its own separate `VERSION` — it now
+  reads the add-on's `config.yaml` version at startup (the single
+  source of truth for the add-on install path), instead of two version
+  numbers that had to be bumped in sync by hand on every release.
+- Removed references to other projects from the docs/comments —
+  everything here describes GridLock's own behaviour on its own terms.
+
 ## 2.15.0
 - Live power flow diagram is now Sankey-style: each line's thickness
   scales to that flow's actual kW, relative to whichever flow is
@@ -48,9 +61,9 @@
   forecast, not a factor fed into it (no reliable derating curve to
   calculate that from).
 - The 24h plan table now has **Cost** (this slot's £ cost/saving) and
-  **Total** (running total through that slot) columns, like [REDACTED]'s
-  plan table — makes it possible to see which slots are actually
-  moving the needle rather than just the 24h total.
+  **Total** (running total through that slot) columns — makes it
+  possible to see which slots are actually moving the needle rather
+  than just the 24h total.
 - Plan rows are now tinted by action (green charge, cyan export/
   session, amber hold/EV-protection, grey eco) instead of just the
   Action column text, for a faster scan down 48 rows.
@@ -86,9 +99,8 @@
   behind the plan (was already computed for the optimiser, just never
   shown).
 - New **Learned house usage** chart on the Forecast tab, showing the
-  per-half-hour load profile GridLock has learned from live readings
-  (same idea as [REDACTED]'s load learning) — previously tracked
-  internally but invisible in the UI.
+  per-half-hour load profile GridLock has learned from live readings —
+  previously tracked internally but invisible in the UI.
 
 ## 2.12.0
 - Add a Configuration tab (Supervisor add-on's native UI) exposing

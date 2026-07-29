@@ -62,7 +62,7 @@ gridlock:
   # the learned load profile above doesn't have data for yet:
   # load_hourly_weights: [2,2,2,2,2,2,4,6,5,4,4,4,4,4,4,5,7,9,9,8,6,5,4,3]
 
-  # --- Tariff comparison ([REDACTED]-Compare style) ---
+  # --- Tariff comparison ---
   compare_tariffs:
     - name: "Octopus Go"
       import_default: 0.2662
@@ -103,8 +103,3 @@ gridlock:
   # the wrong one, or you're not on Sigenergy hardware:
   # inverter_temp_entity: sensor.sigen_inverter_pcs_internal_temperature
   # battery_temp_entity: sensor.sigen_plant_ess_average_cell_temperature
-
-  # Self-updater (update_repo/update_token/auto_update): only relevant
-  # to the HACS/manual install path, not this Supervisor add-on — see
-  # README's "Install (HACS + existing AppDaemon add-on)" section if
-  # you're on that path and want it.

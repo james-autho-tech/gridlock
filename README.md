@@ -10,8 +10,8 @@ HA-side watchdog.
 
 ## Install (Supervisor add-on — no AppDaemon add-on needed)
 
-Bundles its own AppDaemon runtime, same distribution model as
-[REDACTED]'s `[REDACTED]_addon`. Settings → Add-ons → Add-on Store → ⋮ →
+Bundles its own AppDaemon runtime — no separate AppDaemon add-on
+needed. Settings → Add-ons → Add-on Store → ⋮ →
 **Repositories** → add `https://github.com/james-autho-tech/gridlock`
 → find "GridLock" → Install. Config lives in
 `/addon_configs/gridlock/` once started — see
@@ -49,15 +49,13 @@ add-on and [HACS](https://hacs.xyz/) already installed.
        import_rate: sensor.octopus_energy_electricity_AAAAAAAA_1111111111111_current_rate
 
    Don't use `!secret` here — unlike Home Assistant core, AppDaemon's
-   app-config YAML loader has no built-in secrets.yaml support (this
-   isn't documented clearly; confirmed by checking how [REDACTED] does
-   it — [REDACTED] implements its own custom `!secret` handling in
-   Python, which GridLock doesn't). Using `!secret` in this file
-   causes AppDaemon to fail to parse it entirely and the whole app
-   silently stops publishing anything, with only a terse "Failed to
-   read file" in the log to go on. (The add-on's `run` script
-   self-heals from this now — detects the parse failure, backs up the
-   broken file, restores the template — but better to just not hit it.)
+   app-config YAML loader has no built-in secrets.yaml support. Using
+   `!secret` in this file causes AppDaemon to fail to parse it
+   entirely and the whole app silently stops publishing anything, with
+   only a terse "Failed to read file" in the log to go on. (The
+   add-on's `run` script self-heals from this now — detects the parse
+   failure, backs up the broken file, restores the template — but
+   better to just not hit it.)
 
    Optional postcode for SSEN Power Track, same reasoning — literal
    value: `ssen_postcode: "SW1A 1"`.
@@ -80,17 +78,6 @@ add-on and [HACS](https://hacs.xyz/) already installed.
    `/addon_configs/a0d7b954_appdaemon/apps/`), so you end up with
    `apps/gridlock/gridlock.py` + `apps.yaml`.
 2. Steps 4–7 above.
-
-Optional built-in self-updater (not needed if you installed via
-HACS): set `update_repo` + `update_token` (literal value, not
-`!secret` — see note above) in apps.yaml with a fine-grained PAT
-scoped to **Contents: Read only** on this repo. The engine checks
-every 6h,
-publishes `sensor.gridlock_version` (with `update_available`),
-notifies on a new version, and with `auto_update: true` pulls the
-new file, syntax-checks it, backs up the old one, and lets AppDaemon
-hot-reload it. Bump `VERSION` in gridlock.py and push to `main` to
-release.
 
 ## Entities published
 

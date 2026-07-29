@@ -3,7 +3,10 @@ import os
 import re
 import urllib.request
 
-VERSION = "2.15.0"
+# The Supervisor add-on's config.yaml version is the single source of
+# truth (set by `run` via GL_VERSION) — falls back to "dev" for the
+# HACS/manual install path, which has no add-on manifest to read.
+VERSION = os.environ.get("GL_VERSION") or "dev"
 
 import appdaemon.plugins.hass.hassapi as hass
 from datetime import datetime, timedelta, time as dtime
@@ -229,16 +232,6 @@ class GridLock(hass.Hass):
         elif self.ent_saving_events:
             self.log(f"Saving Sessions entity '{self.ent_saving_events}' "
                      "not found", level="WARNING")
-
-        # Self-updater ([REDACTED]-style): pulls gridlock.py from a GitHub
-        # repo. Private repos need a fine-grained PAT with contents:read.
-        self.update_repo = a.get("update_repo")          # e.g. "you/gridlock"
-        self.update_token = a.get("update_token")
-        self.update_branch = a.get("update_branch", "main")
-        self.update_path = a.get("update_path", "apps/gridlock/gridlock.py")
-        self.auto_update = bool(a.get("auto_update", False))
-        if self.update_repo:
-            self.run_every(self.check_update, "now", 6 * 3600)
 
         if self.ssen_postcode:
             self.run_every(self.poll_ssen, "now", 300)
@@ -596,62 +589,6 @@ class GridLock(hass.Hass):
             except (KeyError, ValueError):
                 continue
         return None
-
-    @staticmethod
-    def extract_version(source):
-        m = re.search(r'^VERSION\s*=\s*["\']([^"\']+)["\']', source,
-                      re.MULTILINE)
-        return m.group(1) if m else None
-
-    def fetch_remote_source(self):
-        url = (f"https://api.github.com/repos/{self.update_repo}/contents/"
-               f"{self.update_path}?ref={self.update_branch}")
-        headers = {"Accept": "application/vnd.github.raw+json",
-                   "User-Agent": "GridLock/2"}
-        if self.update_token:
-            headers["Authorization"] = f"Bearer {self.update_token}"
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            return resp.read().decode("utf-8")
-
-    def check_update(self, kwargs):
-        try:
-            remote = self.fetch_remote_source()
-            latest = self.extract_version(remote)
-        except Exception as exc:  # noqa: BLE001
-            self.log(f"Update check failed: {exc!r}", level="WARNING")
-            return
-        if not latest:
-            self.log("Update check: no VERSION found in remote file",
-                     level="WARNING")
-            return
-        self.set_state("sensor.gridlock_version", state=VERSION, attributes={
-            "friendly_name": "GridLock Version", "icon": "mdi:tag",
-            "latest": latest, "update_available": latest != VERSION,
-            "repo": self.update_repo})
-        if latest == VERSION:
-            return
-        self.log(f"Update available: {VERSION} -> {latest}")
-        if not self.auto_update:
-            self.call_service(
-                "persistent_notification/create",
-                title="GridLock update available",
-                message=(f"{VERSION} -> {latest} in {self.update_repo}. "
-                         "Set auto_update: true or pull manually."))
-            return
-        try:
-            compile(remote, "gridlock.py", "exec")  # sanity: valid Python
-        except SyntaxError as exc:
-            self.log(f"Refusing update — remote file has syntax error: {exc}",
-                     level="ERROR")
-            return
-        target = os.path.abspath(__file__)
-        with open(target + ".bak", "w") as fh:
-            fh.write(open(target).read())
-        with open(target, "w") as fh:
-            fh.write(remote)
-        self.log(f"Updated to {latest}; AppDaemon will reload the app. "
-                 f"Previous version saved as gridlock.py.bak")
 
     def parse_ssen(self, data):
         """Extract postcode-matched faults from a getallfaults payload."""

@@ -541,7 +541,7 @@ async function refresh() {
       </div>
       <div class="gl-wrap">
         <div class="gl-h">Learned house usage</div>
-        <div class="gl-sub">Your typical household draw by time of day, learned from live readings (like [REDACTED]'s load profile) — used to plan ahead instead of assuming a flat average.</div>
+        <div class="gl-sub">Your typical household draw by time of day, learned from live readings — used to plan ahead instead of assuming a flat average.</div>
         ${renderLoadProfileChart(d.learned_load_profile)}
       </div>
       <div class="gl-wrap">

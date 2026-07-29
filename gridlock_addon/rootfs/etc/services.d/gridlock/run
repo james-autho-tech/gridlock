@@ -5,6 +5,11 @@
 
 CONFIG_DIR=/config
 
+# The add-on's config.yaml version is the single source of truth —
+# gridlock.py reads it via this env var instead of keeping its own
+# separate VERSION constant that has to be bumped in sync by hand.
+export GL_VERSION="$(bashio::addon.version 2>/dev/null)" || true
+
 mkdir -p "${CONFIG_DIR}/apps/gridlock"
 
 GL_YAML="${CONFIG_DIR}/apps/gridlock/apps.yaml"
