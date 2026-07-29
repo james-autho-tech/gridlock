@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.14.2
+- SSEN Power Track no longer shows a misleading "0 local fault(s)"
+  when no postcode is set (polling is off until one's configured, so
+  it was always reading as "all clear" by default) — now says plainly
+  that polling is off and where to set the postcode.
+
 ## 2.14.1
 - Fix Inverter/Battery cells in the System temperature panel showing
   the identical value — every Sigenergy entity is namespaced

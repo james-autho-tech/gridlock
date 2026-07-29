@@ -119,6 +119,7 @@ def build_status():
         "ssen_count": ssen.get("state", "0"),
         "ssen_planned": ssen.get("attributes", {}).get("planned", 0),
         "ssen_severe": bool(ssen.get("attributes", {}).get("network_severe_weather")),
+        "ssen_postcode": status_attrs.get("ssen_postcode"),
         "saving_joined": saving_attrs.get("joined_events") or [],
         "saving_available": saving_attrs.get("available_events") or [],
         "entities": {
@@ -541,11 +542,11 @@ async function refresh() {
       </div>
       <div class="gl-wrap">
         <div class="gl-h">SSEN Power Track</div>
-        <div class="gl-status-row">
+        ${d.ssen_postcode ? `<div class="gl-status-row">
           <span class="gl-status-dot" style="background:${Number(d.ssen_count) > 0 ? 'var(--red)' : 'var(--green)'}"></span>
           <span style="font-weight:700">${d.ssen_count} local fault(s)</span>
           <span style="color:var(--dim)">${d.ssen_planned} planned · ${d.ssen_severe ? 'severe weather flagged' : 'no severe weather flag'}</span>
-        </div>
+        </div>` : `<div style="color:var(--dim)">No postcode set — SSEN polling is off until you add one. Set <code>ssen_postcode</code> in apps.yaml, or "SSEN Postcode Override" in the add-on's Configuration tab (e.g. "SW1A 1").</div>`}
       </div>
       <div class="gl-wrap">
         <div class="gl-h">Saving sessions</div>

@@ -3,7 +3,7 @@ import os
 import re
 import urllib.request
 
-VERSION = "2.14.1"
+VERSION = "2.14.2"
 
 import appdaemon.plugins.hass.hassapi as hass
 from datetime import datetime, timedelta, time as dtime
