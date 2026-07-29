@@ -119,7 +119,15 @@ PAGE = """<!doctype html>
           --violet:#a78bfa; --red:#f87171; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--ink);
-         font-family:system-ui,sans-serif; padding:20px; }
+         font-family:system-ui,sans-serif; }
+  .gl-nav { display:flex; gap:4px; padding:12px 20px; background:var(--panel);
+            border-bottom:1px solid var(--line); position:sticky; top:0; z-index:10; }
+  .gl-nav-btn { background:none; border:none; color:var(--dim); font-size:13px;
+                font-weight:600; letter-spacing:.4px; padding:8px 16px; border-radius:8px;
+                cursor:pointer; transition:color .15s, background .15s; font-family:inherit; }
+  .gl-nav-btn:hover { color:var(--ink); background:rgba(255,255,255,.05); }
+  .gl-nav-btn.active { color:var(--cyan); background:rgba(56,189,248,.12); }
+  .tab-page { padding:20px; }
   .num { font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
          font-variant-numeric:tabular-nums; }
   .gl, .gl-wrap { background:var(--panel); border:1px solid var(--line);
@@ -154,17 +162,23 @@ PAGE = """<!doctype html>
   .gl-h { font-size:12px; letter-spacing:1.6px; text-transform:uppercase;
           color:var(--dim); margin-bottom:10px; }
   .gl-scroll { max-height:520px; overflow-y:auto; }
-  .flow-wrap { display:flex; justify-content:center; }
-  .flow-svg { width:100%; max-width:440px; height:auto; }
+  .flow-wrap { display:flex; justify-content:center; padding:12px 0; }
+  .flow-svg { width:100%; max-width:920px; height:auto; }
   .flow-line { fill:none; stroke:#1e293b; stroke-width:2; }
-  .flow-line.active { stroke-width:2.5; }
-  .flow-dot { filter:drop-shadow(0 0 4px currentColor); }
+  .flow-line.active { stroke-width:3; filter:drop-shadow(0 0 3px currentColor); }
+  .flow-dot { filter:drop-shadow(0 0 6px currentColor); }
+  .flow-hub { fill:var(--line); }
+  .flow-hub.active { fill:var(--ink); filter:drop-shadow(0 0 5px var(--ink)); }
   .flow-node circle.ring { fill:var(--panel); stroke:var(--line); stroke-width:1.5; }
-  .flow-node.active circle.ring { stroke-width:2; }
-  .flow-node text.icon { font-size:20px; text-anchor:middle; dominant-baseline:central; }
-  .flow-node text.label { font-size:9px; letter-spacing:1px; text-transform:uppercase;
+  .flow-node.active circle.ring { stroke-width:2.5; animation:ringpulse 2.2s ease-in-out infinite; }
+  @keyframes ringpulse {
+    0%, 100% { filter:drop-shadow(0 0 2px currentColor); }
+    50% { filter:drop-shadow(0 0 12px currentColor); }
+  }
+  .flow-node text.icon { font-size:24px; text-anchor:middle; dominant-baseline:central; }
+  .flow-node text.label { font-size:10px; letter-spacing:1.5px; text-transform:uppercase;
                            fill:var(--dim); text-anchor:middle; }
-  .flow-node text.val { font-size:12px; font-weight:700; text-anchor:middle;
+  .flow-node text.val { font-size:14px; font-weight:700; text-anchor:middle;
                          font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
   .gl-ent-list { display:flex; flex-direction:column; gap:6px; }
   .gl-ent-row { display:flex; align-items:baseline; gap:8px; font-size:13px;
@@ -184,8 +198,20 @@ PAGE = """<!doctype html>
 </style>
 </head>
 <body>
+<nav class="gl-nav">
+  <button class="gl-nav-btn" data-tab="overview">Overview</button>
+  <button class="gl-nav-btn" data-tab="entities">Entities</button>
+  <button class="gl-nav-btn" data-tab="tariffs">Tariffs</button>
+</nav>
 <div id="app">Loading…</div>
 <script>
+let currentTab = 'overview';
+function selectTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.gl-nav-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  document.querySelectorAll('.tab-page').forEach(p => p.style.display = (p.dataset.tab === tab) ? '' : 'none');
+}
+document.querySelectorAll('.gl-nav-btn').forEach(b => b.addEventListener('click', () => selectTab(b.dataset.tab)));
 function dotColor(state) {
   if (state.includes('Storm')) return 'var(--red)';
   if (state.includes('Charg')) return 'var(--green)';
@@ -237,15 +263,18 @@ function renderFlow(f) {
   }).join('');
   const nodeEls = Object.values(nodes).map(n => `
     <g class="flow-node ${n.active ? 'active' : ''}" transform="translate(${n.x},${n.y})">
-      <circle class="ring" r="26" style="stroke:${n.active ? n.color : 'var(--line)'}" />
+      <circle class="ring" r="30" style="stroke:${n.active ? n.color : 'var(--line)'};color:${n.color}" />
       <text class="icon" y="-2">${n.icon}</text>
-      <text class="val" style="fill:${n.active ? n.color : 'var(--dim)'}" y="42">${n.val}</text>
-      <text class="label" y="-32">${n.label}</text>
-      ${n.badge ? `<text x="20" y="-16" style="font-size:14px">${n.badge}</text>` : ''}
+      <text class="val" style="fill:${n.active ? n.color : 'var(--dim)'}" y="48">${n.val}</text>
+      <text class="label" y="-38">${n.label}</text>
+      ${n.badge ? `<text x="22" y="-20" style="font-size:16px">${n.badge}</text>` : ''}
     </g>`).join('');
+  const anyActive = Object.values(nodes).some(n => n.active);
   return `<div class="flow-wrap"><svg class="flow-svg" viewBox="0 0 420 375">
-    ${lines}${nodeEls}
-  </svg></div>${f.ev_protected ? '<div style="text-align:center;color:var(--violet);font-size:12px;margin-top:6px">🛡️ EV Protection active — battery discharge clamped to 0</div>' : ''}`;
+    ${lines}
+    <circle class="flow-hub ${anyActive ? 'active' : ''}" cx="${CX}" cy="${CY}" r="4" />
+    ${nodeEls}
+  </svg></div>${f.ev_protected ? '<div style="text-align:center;color:var(--violet);font-size:13px;margin-top:8px">🛡️ EV Protection active — battery discharge clamped to 0</div>' : ''}`;
 }
 function renderEntities(entities) {
   const rows = Object.entries(entities || {}).map(([label, eid]) => `
@@ -265,45 +294,52 @@ async function refresh() {
     return;
   }
   document.getElementById('app').innerHTML = `
-    <div class="gl">
-      <div class="gl-eyebrow">⚡ GridLock Engine</div>
-      <div class="gl-top">
-        <span class="gl-state"><span class="gl-dot" style="background:${dotColor(d.state)}"></span>${d.state}</span>
-        <span class="gl-reason">${d.reason}</span>
-      </div>
-      <div class="gl-grid">
-        <div class="gl-tile"><div class="lbl">Import</div><div class="val num" style="color:var(--amber)">${d.import_p.toFixed(1)}p</div></div>
-        <div class="gl-tile"><div class="lbl">Export</div><div class="val num" style="color:var(--cyan)">${d.export_p.toFixed(1)}p</div></div>
-        <div class="gl-tile"><div class="lbl">Today net</div><div class="val num">£${d.net_today}</div></div>
-        <div class="gl-tile"><div class="lbl">Plan cost 24h</div><div class="val num" style="color:var(--violet)">£${Number(d.plan_cost_24h).toFixed(2)}</div></div>
-        <div class="gl-tile"><div class="lbl">Best tariff</div><div class="val" style="font-size:16px">${d.best_tariff}</div></div>
-        <div class="gl-tile"><div class="lbl">EV planned</div><div class="val num" style="color:var(--cyan)">${d.ev_planned_kwh} kWh</div></div>
-      </div>
-      <div class="gl-bar">
-        <div class="lbl"><span>Battery ${Math.round(d.soc)}%</span><span>target ${Math.round(d.target)}%</span></div>
-        <div class="gl-track">
-          <div class="gl-fill" style="width:${d.soc}%"></div>
-          <div class="gl-target" style="left:${d.target}%"></div>
+    <div class="tab-page" data-tab="overview">
+      <div class="gl">
+        <div class="gl-eyebrow">⚡ GridLock Engine</div>
+        <div class="gl-top">
+          <span class="gl-state"><span class="gl-dot" style="background:${dotColor(d.state)}"></span>${d.state}</span>
+          <span class="gl-reason">${d.reason}</span>
+        </div>
+        <div class="gl-grid">
+          <div class="gl-tile"><div class="lbl">Import</div><div class="val num" style="color:var(--amber)">${d.import_p.toFixed(1)}p</div></div>
+          <div class="gl-tile"><div class="lbl">Export</div><div class="val num" style="color:var(--cyan)">${d.export_p.toFixed(1)}p</div></div>
+          <div class="gl-tile"><div class="lbl">Today net</div><div class="val num">£${d.net_today}</div></div>
+          <div class="gl-tile"><div class="lbl">Plan cost 24h</div><div class="val num" style="color:var(--violet)">£${Number(d.plan_cost_24h).toFixed(2)}</div></div>
+          <div class="gl-tile"><div class="lbl">Best tariff</div><div class="val" style="font-size:16px">${d.best_tariff}</div></div>
+          <div class="gl-tile"><div class="lbl">EV planned</div><div class="val num" style="color:var(--cyan)">${d.ev_planned_kwh} kWh</div></div>
+        </div>
+        <div class="gl-bar">
+          <div class="lbl"><span>Battery ${Math.round(d.soc)}%</span><span>target ${Math.round(d.target)}%</span></div>
+          <div class="gl-track">
+            <div class="gl-fill" style="width:${d.soc}%"></div>
+            <div class="gl-target" style="left:${d.target}%"></div>
+          </div>
         </div>
       </div>
+      <div class="gl-wrap">
+        <div class="gl-h">Live power flow</div>
+        ${renderFlow(d.flow)}
+      </div>
+      <div class="gl-wrap">
+        <div class="gl-h">30-minute action tape</div>
+        <div class="gl-scroll">${d.plan_html || '<div style="color:var(--dim)">Waiting for first plan — computes every 5 minutes.</div>'}</div>
+      </div>
     </div>
-    <div class="gl-wrap">
-      <div class="gl-h">Live power flow</div>
-      ${renderFlow(d.flow)}
+    <div class="tab-page" data-tab="entities">
+      <div class="gl-wrap">
+        <div class="gl-h">Discovered entities</div>
+        ${renderEntities(d.entities)}
+      </div>
     </div>
-    <div class="gl-wrap">
-      <div class="gl-h">Discovered entities</div>
-      ${renderEntities(d.entities)}
-    </div>
-    <div class="gl-wrap">
-      <div class="gl-h">30-minute action tape</div>
-      <div class="gl-scroll">${d.plan_html || '<div style="color:var(--dim)">Waiting for first plan — computes every 5 minutes.</div>'}</div>
-    </div>
-    <div class="gl-wrap">
-      <div class="gl-h">Tariff comparison</div>
-      ${d.compare_html || '<div style="color:var(--dim)">Waiting for first comparison run.</div>'}
+    <div class="tab-page" data-tab="tariffs">
+      <div class="gl-wrap">
+        <div class="gl-h">Tariff comparison</div>
+        ${d.compare_html || '<div style="color:var(--dim)">Waiting for first comparison run.</div>'}
+      </div>
     </div>
   `;
+  selectTab(currentTab);
 }
 refresh();
 setInterval(refresh, 30000);
