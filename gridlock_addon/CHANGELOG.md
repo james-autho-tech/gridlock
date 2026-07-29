@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.25.0
+- **New minimum export size** (`min_export_pct`, default 5% of battery
+  capacity). Caught from a reported plan: an isolated slot with a
+  merely-okay export rate sold a fraction of a percent of the battery
+  for about a penny of genuine extra credit — technically a marginal
+  improvement by the cost math, but not worth the SoC it spent right
+  before a stretch that needed every bit of reserve to reach off-peak
+  without hitting the floor. Now a whole contiguous export block is
+  only kept if its total sale clears the threshold; anything smaller
+  reverts to self-consumption. A genuinely good export window (like
+  the big evening sell-off) is unaffected — it was always well above
+  this threshold anyway.
+- New `cheap_rate_threshold` documented in `apps.yaml` (default 0.10)
+  — this already existed as a code default but was never actually
+  written into the template; it governs both the off-peak pacing
+  boundary and the hard no-peak-charging rule from 2.24.2.
+
 ## 2.24.3
 - **Bypass mode now shows clearly in the status dot and decision log**,
   the same way ECO/CHARGE/EXPORT/EV Protection already do — it was

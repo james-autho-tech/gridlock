@@ -191,6 +191,7 @@ class GridLock(hass.Hass):
         self.discharge_kw = float(a.get("discharge_rate_kw", 10.0))
         self.ev_concurrent_charge_kw = float(a.get("ev_concurrent_charge_kw", 5.0))
         self.cheap_rate = float(a.get("cheap_rate_threshold", 0.10))
+        self.min_export_pct = float(a.get("min_export_pct", 5.0))
         self.default_import = float(a.get("default_import_rate", 0.2839))
         self.default_export = float(a.get("default_export_rate", 0.15))
         self.export_margin = float(a.get("export_margin", 0.02))
@@ -1464,6 +1465,29 @@ class GridLock(hass.Hass):
                     else:
                         s["export"] -= step
                         break
+
+        # Drop any EXPORT block too small to be worth bothering with -
+        # a lone slot selling a fraction of a percent of capacity isn't
+        # worth the SoC it eats into, even if it technically shaved a
+        # fraction of a penny off total cost. Only whole contiguous
+        # blocks that clear min_export_pct of capacity survive; the
+        # rest fall back to self-consumption.
+        min_export_kwh = self.min_export_pct / 100.0 * self.battery_kwh
+        i = 0
+        while i < len(slots):
+            if slots[i]["export"] > 0:
+                j = i
+                block_kwh = 0.0
+                while j < len(slots) and slots[j]["export"] > 0:
+                    block_kwh += slots[j]["export"]
+                    j += 1
+                if block_kwh < min_export_kwh:
+                    for k in range(i, j):
+                        slots[k]["export"] = 0.0
+                i = j
+            else:
+                i += 1
+
         trace, cost, _, cost_trace, grid_cost = self.simulate(slots, soc0, want_trace=True)
         return slots, trace, cost, cost_trace, grid_cost
 

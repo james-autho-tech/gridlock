@@ -75,6 +75,18 @@ gridlock:
   default_import_rate: 0.2839
   default_export_rate: 0.15
   export_margin: 0.02
+  # Import rate at/below which a slot counts as "off-peak" for pacing
+  # self-consumption toward the next cheap window, and as the hard
+  # floor for grid-charging (charging above this, arbitrage math
+  # aside, never happens except Storm Watch).
+  cheap_rate_threshold: 0.10
+  # Smallest export worth bothering with, as % of battery capacity —
+  # a lone slot selling a fraction of a percent isn't worth the SoC
+  # it spends even if it technically shaves a fraction of a penny off
+  # cost. Blocks aren't split up to satisfy this — only a whole
+  # contiguous export block below the threshold gets dropped back to
+  # self-consumption; a genuinely good export window is untouched.
+  min_export_pct: 5.0
   # Optional: 24 hourly load weights (relative), used only for slots
   # the learned load profile above doesn't have data for yet:
   # load_hourly_weights: [2,2,2,2,2,2,4,6,5,4,4,4,4,4,4,5,7,9,9,8,6,5,4,3]
