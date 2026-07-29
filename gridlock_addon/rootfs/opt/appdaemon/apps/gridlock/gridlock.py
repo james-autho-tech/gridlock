@@ -1649,6 +1649,16 @@ class GridLock(hass.Hass):
                 act = self._action(s)
                 colour = {"CHARGE": "#22c55e", "EXPORT": "#38bdf8",
                           "ECO": "#9ca3af"}[act]
+                # Forecast-level version of the same live bypass check
+                # apply() does — if this slot's predicted SoC is at/near
+                # the floor with no PV forecast, the actual hardware
+                # command when this slot arrives will be the "Unknown"
+                # bypass state, not "Maximum Self Consumption". Shown
+                # here too, not just on the live status line, so the
+                # whole stretch it applies to is visible rather than
+                # just whatever slot happens to be "now".
+                if act == "ECO" and trace[i] <= self.floor_soc + 2.0 and s["pv"] <= 0.01:
+                    act = "ECO (Bypass)"
             ev_cell = (f"<span style='color:#38bdf8'>⚡ {s['ev_kwh']:.2f}</span>"
                        if s["dispatch"] else "—")
             delta_p = cost_trace[i]["delta"] * 100

@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.28.1
+- **Bypass mode now shows in the plan table itself**, not just the
+  live status line. It was only ever computed inside `apply()` for
+  whatever's happening right now — the plan table's row labels (and
+  even row 0, "now") never reflected it, so a whole overnight stretch
+  genuinely running in bypass would just show plain "ECO" throughout.
+  Rows now show **"ECO (Bypass)"** wherever the forecasted SoC for
+  that slot is at/near the floor with no PV expected — the same
+  condition `apply()` uses live, just evaluated against the forecast
+  instead of the live reading, so it's visible for the whole stretch
+  it applies to rather than only whichever slot happens to be current.
+
 ## 2.28.0
 - **EXPORT now reserves enough charge to reach the next off-peak
   window before selling anything further.** Reported directly: the
