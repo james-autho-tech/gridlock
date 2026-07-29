@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.23.2
+- **Fixed the whole ingress page's `<script>` block silently breaking**
+  in the browser ("Uncaught SyntaxError: unterminated regular
+  expression literal"), introduced by the CSV export in 2.23.0. Root
+  cause: the page template is a plain Python triple-quoted string, and
+  the JS inside used `\n` (regex character class, and the CSV blob's
+  line-join) — Python itself was interpreting those as real newline
+  characters before the page was ever served, splitting a regex
+  literal and a string literal across lines. Static checks against the
+  source file didn't catch this (the escape sequences look correct on
+  disk; the corruption only happens when Python evaluates the string),
+  which is how it slipped through in 2.23.0/2.23.1 — now caught by
+  actually evaluating the template the way the server does, not just
+  reading the file. Fixed by making the template a raw string so
+  Python leaves the embedded JS/CSS alone.
+
 ## 2.23.1
 - Two follow-up fixes to the pacing/bypass logic from 2.23.0, both
   caught by direct questions rather than a bug report:
