@@ -3,7 +3,7 @@ import os
 import re
 import urllib.request
 
-VERSION = "2.8.2"
+VERSION = "2.9.0"
 
 import appdaemon.plugins.hass.hassapi as hass
 from datetime import datetime, timedelta, time as dtime
@@ -85,6 +85,7 @@ class GridLock(hass.Hass):
         # remain the fallback for slots not learned yet.
         self.ent_load_power = a.get("load_power_entity") or self._find_load_entity()
         self.load_profile = self._load_load_profile()
+        self.decision_log = self._load_decision_log()
 
         # Live power-flow entities (Solar/Grid/Battery/Home diagram in
         # the Ingress web UI) — magnitude from power sensors, direction
@@ -406,6 +407,40 @@ class GridLock(hass.Hass):
         self.load_profile[slot_idx] = (observed_slot_kwh if prev is None
                                         else prev * (1 - alpha) + observed_slot_kwh * alpha)
         self._save_load_profile()
+
+    def _decision_log_path(self):
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "decision_log.json")
+
+    def _load_decision_log(self):
+        try:
+            with open(self._decision_log_path()) as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return []
+
+    def _log_decision(self, state, reason):
+        """Human-readable history of what GridLock actually did and why
+        — a running log of state changes (not every 5-min tick, only
+        when the decision actually changes), so someone can look back
+        over hours/days and see the reasoning rather than just the
+        current status."""
+        last = self.decision_log[-1] if self.decision_log else None
+        if last and last["state"] == state and last["reason"] == reason:
+            return
+        self.decision_log.append({"ts": self.get_now().isoformat(),
+                                   "state": state, "reason": reason})
+        self.decision_log = self.decision_log[-200:]
+        try:
+            with open(self._decision_log_path(), "w") as f:
+                json.dump(self.decision_log, f)
+        except OSError:
+            pass
+        self.set_state("sensor.gridlock_decision_log",
+                       state=self.decision_log[-1]["ts"],
+                       attributes={"friendly_name": "GridLock Decision Log",
+                                   "icon": "mdi:script-text-outline",
+                                   "entries": self.decision_log[-100:]})
 
     @staticmethod
     def _mpan_stem(base_entity, suffix):
@@ -1062,6 +1097,7 @@ class GridLock(hass.Hass):
                        "Self Consumption", "Planned ECO slot", plan_html)
 
     def apply(self, mode, disch_kw, charge_kw, state, reason, plan_html):
+        self._log_decision(state, reason)
         if self.get_state(self.ent_mode) != mode:
             self.call_service("select/select_option",
                               target={"entity_id": self.ent_mode}, option=mode)

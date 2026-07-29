@@ -55,6 +55,7 @@ def build_status():
     compare = ha_get_state("sensor.gridlock_tariff_compare") or {}
     net = ha_get_state("sensor.gridlock_calculated_net_cost_today") or {}
     ev_dispatch = ha_get_state("sensor.gridlock_ev_dispatch_kwh") or {}
+    decision_log = ha_get_state("sensor.gridlock_decision_log") or {}
 
     pv_kw = sum(as_kw(ha_get_state(e))
                 for e in (status_attrs.get("pv_power_entities") or []))
@@ -91,6 +92,7 @@ def build_status():
         "best_tariff": compare.get("state", "—"),
         "compare_html": compare.get("attributes", {}).get("compare_html") or "",
         "ev_planned_kwh": ev_dispatch.get("state", "0.00"),
+        "log_entries": list(reversed(decision_log.get("attributes", {}).get("entries") or [])),
         "entities": {
             "Battery SoC": status_attrs.get("soc_entity"),
             "Import rate": status_attrs.get("import_rate_entity"),
@@ -186,6 +188,14 @@ PAGE = """<!doctype html>
   .gl-ent-dot { width:7px; height:7px; border-radius:50%; flex:0 0 auto; }
   .gl-ent-label { color:var(--dim); flex:0 0 150px; }
   .gl-ent-id { color:#cbd5e1; font-size:12px; word-break:break-all; }
+  .gl-log-list { display:flex; flex-direction:column; gap:2px; }
+  .gl-log-row { display:flex; align-items:baseline; gap:12px; font-size:13px;
+                padding:8px 0; border-bottom:1px solid #14203a; }
+  .gl-log-dot { width:8px; height:8px; border-radius:50%; flex:0 0 auto;
+                margin-top:5px; }
+  .gl-log-ts { color:var(--dim); flex:0 0 148px; font-size:12px; }
+  .gl-log-state { flex:0 0 200px; font-weight:600; }
+  .gl-log-reason { color:#cbd5e1; }
   table.gridlock-plan { width:100%; border-collapse:collapse; font-size:13px;
           font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
   table.gridlock-plan th { position:sticky; top:0; background:var(--panel);
@@ -202,6 +212,7 @@ PAGE = """<!doctype html>
   <button class="gl-nav-btn" data-tab="overview">Overview</button>
   <button class="gl-nav-btn" data-tab="entities">Entities</button>
   <button class="gl-nav-btn" data-tab="tariffs">Tariffs</button>
+  <button class="gl-nav-btn" data-tab="log">Log</button>
 </nav>
 <div id="app">Loading…</div>
 <script>
@@ -285,6 +296,25 @@ function renderEntities(entities) {
     </div>`).join('');
   return `<div class="gl-ent-list">${rows}</div>`;
 }
+function fmtTs(iso) {
+  try {
+    return new Date(iso).toLocaleString(undefined, {
+      weekday: 'short', hour: '2-digit', minute: '2-digit' });
+  } catch (e) { return iso; }
+}
+function renderLog(entries) {
+  if (!entries || !entries.length) {
+    return '<div style="color:var(--dim)">No decisions logged yet — entries appear here as GridLock\'s plan changes.</div>';
+  }
+  const rows = entries.map(e => `
+    <div class="gl-log-row">
+      <span class="gl-log-dot" style="background:${dotColor(e.state)}"></span>
+      <span class="gl-log-ts num">${fmtTs(e.ts)}</span>
+      <span class="gl-log-state" style="color:${dotColor(e.state)}">${esc(e.state)}</span>
+      <span class="gl-log-reason">${esc(e.reason)}</span>
+    </div>`).join('');
+  return `<div class="gl-log-list">${rows}</div>`;
+}
 async function refresh() {
   let d;
   try {
@@ -336,6 +366,12 @@ async function refresh() {
       <div class="gl-wrap">
         <div class="gl-h">Tariff comparison</div>
         ${d.compare_html || '<div style="color:var(--dim)">Waiting for first comparison run.</div>'}
+      </div>
+    </div>
+    <div class="tab-page" data-tab="log">
+      <div class="gl-wrap">
+        <div class="gl-h">Decision log — what changed, and why</div>
+        <div class="gl-scroll">${renderLog(d.log_entries)}</div>
       </div>
     </div>
   `;

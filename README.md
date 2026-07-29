@@ -98,3 +98,5 @@ release.
 - `sensor.gridlock_calculated_net_cost_today`
 - `sensor.gridlock_ssen_local_outages`
 - `sensor.gridlock_heartbeat`
+- `sensor.gridlock_ev_dispatch_kwh` (planned_kwh, completed_kwh)
+- `sensor.gridlock_decision_log` (entries — timestamped state changes)
