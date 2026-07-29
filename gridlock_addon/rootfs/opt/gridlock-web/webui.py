@@ -13,17 +13,21 @@ SUPERVISOR_TOKEN = os.environ["SUPERVISOR_TOKEN"]
 PORT = 8099
 
 
-def ha_get_state(entity_id):
-    if not entity_id:
-        return None
+def ha_get_all_states():
+    """One bulk call instead of one HTTP round-trip per entity —
+    build_status() looks up 20+ entities per request; fetching them
+    individually risked the whole page hanging on "Loading…" if any
+    single one was slow, since each call carries its own timeout and
+    they ran one after another."""
     req = urllib.request.Request(
-        f"http://supervisor/core/api/states/{entity_id}",
+        "http://supervisor/core/api/states",
         headers={"Authorization": f"Bearer {SUPERVISOR_TOKEN}"})
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
-            return json.load(resp)
-    except (urllib.error.URLError, TimeoutError):
-        return None
+            states = json.load(resp)
+        return {s["entity_id"]: s for s in states}
+    except (urllib.error.URLError, TimeoutError, ValueError, KeyError):
+        return {}
 
 
 def as_float(state_obj, default=0.0):
@@ -45,36 +49,41 @@ def is_on(state_obj):
 
 
 def build_status():
-    status = ha_get_state("sensor.gridlock_status") or {}
-    status_attrs = status.get("attributes", {})
-    soc = ha_get_state(status_attrs.get("soc_entity"))
-    imp = ha_get_state(status_attrs.get("import_rate_entity"))
-    exp = ha_get_state(status_attrs.get("export_rate_entity"))
-    forecast = ha_get_state("sensor.gridlock_soc_forecast") or {}
-    target = ha_get_state("sensor.gridlock_target_soc")
-    compare = ha_get_state("sensor.gridlock_tariff_compare") or {}
-    net = ha_get_state("sensor.gridlock_calculated_net_cost_today") or {}
-    ev_dispatch = ha_get_state("sensor.gridlock_ev_dispatch_kwh") or {}
-    decision_log = ha_get_state("sensor.gridlock_decision_log") or {}
+    states = ha_get_all_states()
 
-    pv_kw = sum(as_kw(ha_get_state(e))
+    def get(entity_id):
+        return states.get(entity_id) if entity_id else None
+
+    status = get("sensor.gridlock_status") or {}
+    status_attrs = status.get("attributes", {})
+    soc = get(status_attrs.get("soc_entity"))
+    imp = get(status_attrs.get("import_rate_entity"))
+    exp = get(status_attrs.get("export_rate_entity"))
+    forecast = get("sensor.gridlock_soc_forecast") or {}
+    target = get("sensor.gridlock_target_soc")
+    compare = get("sensor.gridlock_tariff_compare") or {}
+    net = get("sensor.gridlock_calculated_net_cost_today") or {}
+    ev_dispatch = get("sensor.gridlock_ev_dispatch_kwh") or {}
+    decision_log = get("sensor.gridlock_decision_log") or {}
+
+    pv_kw = sum(as_kw(get(e))
                 for e in (status_attrs.get("pv_power_entities") or []))
-    battery_kw = as_kw(ha_get_state(status_attrs.get("battery_power_entity")))
-    grid_kw = as_kw(ha_get_state(status_attrs.get("grid_power_entity")))
-    home_kw = as_kw(ha_get_state(status_attrs.get("load_power_entity")))
-    ev_kw = as_kw(ha_get_state(status_attrs.get("ev_power_entity")))
+    battery_kw = as_kw(get(status_attrs.get("battery_power_entity")))
+    grid_kw = as_kw(get(status_attrs.get("grid_power_entity")))
+    home_kw = as_kw(get(status_attrs.get("load_power_entity")))
+    ev_kw = as_kw(get(status_attrs.get("ev_power_entity")))
     flow = {
         "pv_kw": round(pv_kw, 2),
         "battery_kw": round(battery_kw, 2),
         "grid_kw": round(grid_kw, 2),
         "home_kw": round(home_kw, 2),
         "ev_kw": round(ev_kw, 2),
-        "pv_generating": is_on(ha_get_state(status_attrs.get("pv_generating_entity"))),
-        "importing": is_on(ha_get_state(status_attrs.get("importing_entity"))),
-        "exporting": is_on(ha_get_state(status_attrs.get("exporting_entity"))),
-        "battery_charging": is_on(ha_get_state(status_attrs.get("battery_charging_entity"))),
-        "battery_discharging": is_on(ha_get_state(status_attrs.get("battery_discharging_entity"))),
-        "ev_charging": is_on(ha_get_state(status_attrs.get("ev_entity"))),
+        "pv_generating": is_on(get(status_attrs.get("pv_generating_entity"))),
+        "importing": is_on(get(status_attrs.get("importing_entity"))),
+        "exporting": is_on(get(status_attrs.get("exporting_entity"))),
+        "battery_charging": is_on(get(status_attrs.get("battery_charging_entity"))),
+        "battery_discharging": is_on(get(status_attrs.get("battery_discharging_entity"))),
+        "ev_charging": is_on(get(status_attrs.get("ev_entity"))),
         "ev_protected": status.get("state") == "EV Protection",
     }
 
@@ -318,9 +327,14 @@ function renderLog(entries) {
 async function refresh() {
   let d;
   try {
-    d = await (await fetch('api/status')).json();
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 15000);
+    const resp = await fetch('api/status', { signal: ctrl.signal });
+    clearTimeout(t);
+    d = await resp.json();
   } catch (e) {
-    document.getElementById('app').innerHTML = '<div class="gl">Could not reach GridLock — is the add-on running?</div>';
+    document.getElementById('app').innerHTML =
+      `<div class="gl">Could not reach GridLock (${esc(e.message || e)}) — check the add-on log, or it may still be starting up.</div>`;
     return;
   }
   document.getElementById('app').innerHTML = `

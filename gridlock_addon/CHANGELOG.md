@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.9.1
+- Fix the web UI hanging on "Loading…" forever with no error: it was
+  making 20+ sequential blocking HTTP calls to HA's API per page
+  load (one per entity), so any single slow one stalled the whole
+  response with nothing to show for it. Now fetches all states in one
+  bulk call. Also added a 15s client-side timeout so a genuine failure
+  shows an error instead of hanging indefinitely.
+
 ## 2.9.0
 - Add a readable decision log: a running history of what GridLock
   actually did and why (state changes, not every 5-min tick), viewable
