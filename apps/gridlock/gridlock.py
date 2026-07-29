@@ -1884,7 +1884,7 @@ class GridLock(hass.Hass):
             live_soc = self.get_float_state(self.ent_soc, 50.0)
             pv_now = bool(self.ent_pv_generating) and \
                 self.get_state(self.ent_pv_generating) == "on"
-            if live_soc <= self.floor_soc + 0.5 and not pv_now:
+            if live_soc <= self.floor_soc + 2.0 and not pv_now:
                 # "Maximum Self Consumption" still has the inverter
                 # actively hunting for battery power that isn't there
                 # once it's at the floor. "Unknown" is Sigenergy's own

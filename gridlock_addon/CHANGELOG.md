@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.25.1
+- **Widened the bypass-mode trigger from `floor_soc + 0.5` to
+  `floor_soc + 2.0`.** Reported from a real plan: SoC repeatedly
+  bottomed out at 1-2% and stayed there, never hitting the old 0.5-point
+  margin, so "Unknown" bypass never actually engaged despite the
+  battery genuinely being empty in practice. Real SoC sensors report
+  in whole percent and the BMS itself likely keeps some invisible
+  reserve below what's shown, so requiring near-exact equality to the
+  floor was never going to fire in the real world. Confirmed 1% and 2%
+  now correctly trigger it while 3%+ doesn't.
+
 ## 2.25.0
 - **New minimum export size** (`min_export_pct`, default 5% of battery
   capacity). Caught from a reported plan: an isolated slot with a
