@@ -128,6 +128,7 @@ def build_status():
         "battery_soh": as_float(get(status_attrs.get("battery_soh_entity")), None),
         "battery_risk_profile": status_attrs.get("battery_risk_profile") or "balanced",
         "battery_degradation_cost": status_attrs.get("battery_degradation_cost"),
+        "thermal_derate": status_attrs.get("thermal_derate"),
         "solar_forecast_data": solar.get("attributes", {}).get("forecast_data") or [],
         "soc_forecast_data": forecast.get("attributes", {}).get("forecast_data") or [],
         "learned_load_profile": forecast.get("attributes", {}).get("learned_load_profile") or [],
@@ -639,12 +640,15 @@ async function refresh() {
       </div>
       <div class="gl-wrap">
         <div class="gl-h">Battery health</div>
-        <div class="gl-sub">Temperature: solar and battery efficiency both drop off in high heat — a sanity check on the forecast above, not a factor in it (no reliable derating curve to calculate that from).</div>
+        <div class="gl-sub">Temperature: solar/battery efficiency drop off in high heat (not modelled in the forecast above — no reliable curve to calculate that from), but above 60°C GridLock does start reducing the commanded charge/discharge rate itself, tapering to 25% by 75°C.</div>
         <div class="gl-grid">
           ${renderTempTile('Inverter', d.inverter_temp, 60, 75)}
           ${renderTempTile('Battery cells', d.battery_temp, 40, 55)}
           ${renderSohTile(d.battery_soh)}
         </div>
+        ${d.thermal_derate !== null && d.thermal_derate !== undefined && Number(d.thermal_derate) < 1
+          ? `<div class="gl-sub" style="margin-top:12px;color:var(--amber)">🌡️ Thermal derate active — charge/discharge commands reduced to <b>${(Number(d.thermal_derate) * 100).toFixed(0)}%</b> of configured rate while the inverter's this warm.</div>`
+          : ''}
         <div class="gl-sub" style="margin-top:12px">Cycling protection: <b style="color:var(--ink)">${esc(d.battery_risk_profile)}</b>${d.battery_degradation_cost === null || d.battery_degradation_cost === undefined ? '' : ` — needs at least ${(Number(d.battery_degradation_cost) * 100).toFixed(1)}p/kWh spread before exporting/discharging the battery`}. Set <code>battery_risk_profile</code> (eco / balanced / max_profit) in apps.yaml.</div>
       </div>
       <div class="gl-wrap">

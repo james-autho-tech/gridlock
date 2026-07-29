@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.22.0
+- New **thermal derating**: once the inverter's temperature reads
+  above 60°C, every charge/discharge command GridLock sends now gets
+  scaled down (linear taper to 25% by 75°C, same thresholds already
+  shown on the Battery health panel). Heat in power electronics scales
+  roughly with current², so a lower commanded rate genuinely reduces
+  further heat generation — an extra safety margin on top of whatever
+  thermal protection the inverter already has built in, not a
+  replacement for it (unverified what that protection actually is).
+  Verified the derate curve at every boundary before shipping,
+  including against a real reported 62.4°C (→ 88% of configured rate).
+  Shown on the Battery health panel whenever it's actively reducing
+  the rate, and in the decision log's reason text.
+
 ## 2.21.0
 - New **carbon intensity** tracking (Forecast tab) — GB grid
   gCO2/kWh from National Grid ESO's free public API, 30-min blocks

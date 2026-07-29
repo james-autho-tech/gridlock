@@ -117,7 +117,7 @@ gridlock:
   # send to a specific notify service (e.g. your phone):
   # notify_service: notify.mobile_app_yourphone
 
-  # --- Battery health (Forecast tab, informational only) ---
+  # --- Battery health (Forecast tab) ---
   # Auto-discovered by default (Sigenergy "pcs"/"cell"/
   # "state_of_health" sensors) — only set these if the Discovered
   # Entities panel shows the wrong one, or you're not on Sigenergy
@@ -125,3 +125,9 @@ gridlock:
   # inverter_temp_entity: sensor.sigen_inverter_pcs_internal_temperature
   # battery_temp_entity: sensor.sigen_plant_ess_average_cell_temperature
   # battery_soh_entity: sensor.sigen_plant_battery_state_of_health
+  #
+  # Not just informational: once inverter_temp_entity reads above 60°C,
+  # every charge/discharge command GridLock sends gets scaled down
+  # (linear taper to 25% by 75°C) — an extra safety margin on top of
+  # whatever thermal protection the inverter has built in already
+  # (unverified what that is). No setting to disable this currently.

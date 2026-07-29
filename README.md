@@ -90,7 +90,7 @@ add-on and [HACS](https://hacs.xyz/) already installed.
 
 - `sensor.gridlock_status` (plan_html, action, reason, plus discovered-
   entity attributes including battery_soh_entity, battery_risk_profile,
-  battery_degradation_cost)
+  battery_degradation_cost, thermal_derate)
 - `sensor.gridlock_soc_forecast` (forecast_data, plan_cost_24h, learned_load_profile)
 - `sensor.gridlock_target_soc`
 - `sensor.gridlock_tariff_compare` (compare_html)

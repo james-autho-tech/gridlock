@@ -990,6 +990,26 @@ class GridLock(hass.Hass):
             except Exception as exc:  # noqa: BLE001 — a bad notify_service shouldn't break the tick
                 self.log(f"notify_service call failed: {exc!r}", level="WARNING")
 
+    def _thermal_derate_factor(self):
+        """Scale factor (1.0 = full rate) applied to charge/discharge
+        commands based on live inverter temperature. Heat in power
+        electronics scales roughly with current², so a lower commanded
+        rate genuinely reduces heat generation, not just theoretically
+        — an extra safety margin on top of whatever thermal protection
+        the inverter already has built in (unverified what that
+        actually is, or at what temperature it kicks in). Same 60°C/
+        75°C thresholds as the Battery health panel's amber/red — a
+        reasoned guess, not a manufacturer-specified limit: full rate
+        below 60°C, tapering linearly to 25% by 75°C, holding at 25%
+        above that (never fully to zero — an idle inverter doing
+        nothing at all isn't obviously safer than one running gently)."""
+        temp = self.get_float_state(self.ent_inverter_temp, None)
+        if temp is None or temp < 60:
+            return 1.0
+        if temp >= 75:
+            return 0.25
+        return 1.0 - (temp - 60) / 15 * 0.75
+
     def poll_ssen(self, kwargs):
         try:
             req = urllib.request.Request(
@@ -1638,6 +1658,11 @@ class GridLock(hass.Hass):
                        "Self Consumption", "Planned ECO slot", plan_html)
 
     def apply(self, mode, disch_kw, charge_kw, state, reason, plan_html):
+        derate = self._thermal_derate_factor()
+        if derate < 1.0:
+            disch_kw = round(disch_kw * derate, 2)
+            charge_kw = round(charge_kw * derate, 2)
+            reason = f"{reason} (thermal derate to {derate * 100:.0f}%)"
         self._log_decision(state, reason)
         if self.get_state(self.ent_mode) != mode:
             self.call_service("select/select_option",
@@ -1684,5 +1709,6 @@ class GridLock(hass.Hass):
                                    "battery_soh_entity": self.ent_battery_soh,
                                    "battery_risk_profile": self.battery_risk_profile,
                                    "battery_degradation_cost": self.degradation,
+                                   "thermal_derate": derate,
                                    "storm_watch_entities": [e for e, _ in self.storm_sources if e] or None,
                                    "ssen_postcode": self.ssen_postcode or None})
