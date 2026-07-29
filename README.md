@@ -1,3 +1,5 @@
+![GridLock](docs/banner.svg)
+
 # GridLock v2
 
 Self-contained battery optimisation engine for Sigenergy + Octopus IOG.
@@ -7,6 +9,11 @@ model → charge/export/eco plan, executed every 5 minutes. Includes EV
 Watch (Met Office red warnings, SSEN Power Track outages, manual toggle),
 tariff comparison, safe-mode fault handling, and a heartbeat for the
 HA-side watchdog.
+
+## Screenshots
+
+**Overview** — live status, cost/savings tiles, battery progress
+![Overview](docs/screenshots/overview.png)
 
 ## Install (Supervisor add-on — no AppDaemon add-on needed)
 
