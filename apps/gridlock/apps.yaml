@@ -64,7 +64,11 @@ gridlock:
   # build one from), just a sensible lever to have.
   battery_risk_profile: balanced      # eco | balanced | max_profit
   # battery_degradation_cost: 0.03    # £/kWh — overrides the profile above if set
-  floor_soc: 10
+  # Reserve the plan won't discharge below, even if profitable. Default
+  # 0 uses the full battery; raise this if you'd rather keep a buffer
+  # against deep-discharge wear — most general battery guidance
+  # suggests some margin, but that's a preference, not enforced here.
+  floor_soc: 0
   charge_rate_kw: 10.0
   discharge_rate_kw: 10.0
   ev_concurrent_charge_kw: 5.0        # battery charge rate while Hypervolt active
@@ -131,3 +135,11 @@ gridlock:
   # (linear taper to 25% by 75°C) — an extra safety margin on top of
   # whatever thermal protection the inverter has built in already
   # (unverified what that is). No setting to disable this currently.
+
+  # Hardware-level backstop for floor_soc — auto-discovered
+  # (number.sigen_plant_ess_discharge_cut_off_state_of_charge), kept in
+  # sync with floor_soc automatically. Without this, floor_soc only
+  # ever existed in GridLock's own planning, with no hardware-level
+  # stop if the tick loop ever hung mid-command. Override if discovery
+  # picks the wrong one:
+  # discharge_cutoff_entity: number.sigen_plant_ess_discharge_cut_off_state_of_charge

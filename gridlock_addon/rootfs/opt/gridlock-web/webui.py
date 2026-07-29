@@ -104,6 +104,7 @@ def build_status():
         "reason": status_attrs.get("reason") or "—",
         "plan_html": status_attrs.get("plan_html") or "",
         "plan_cost_24h": forecast.get("attributes", {}).get("plan_cost_24h", 0),
+        "plan_table": forecast.get("attributes", {}).get("plan_table") or {"columns": [], "rows": []},
         "net_today": net.get("state", "0.00"),
         "net_today_calc_import": net.get("attributes", {}).get("import_cost_calculated_today"),
         "net_today_calc_export": net.get("attributes", {}).get("export_value_calculated_today"),
@@ -158,6 +159,7 @@ def build_status():
             "Inverter temp": status_attrs.get("inverter_temp_entity"),
             "Battery temp": status_attrs.get("battery_temp_entity"),
             "Battery SoH": status_attrs.get("battery_soh_entity"),
+            "Discharge cutoff (hardware)": status_attrs.get("discharge_cutoff_entity"),
             "Storm Watch": ", ".join(status_attrs.get("storm_watch_entities") or []) or None,
             "SSEN postcode": status_attrs.get("ssen_postcode"),
         },
@@ -295,6 +297,38 @@ PAGE = """<!doctype html>
 <div id="app">Loading…</div>
 <script>
 let currentTab = 'overview';
+let latestPlanTable = { columns: [], rows: [] };
+function csvCell(v) {
+  if (v === null || v === undefined) return '';
+  const s = String(v);
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+// Field name -> friendly CSV header, in the exact order gridlock.py's
+// plan_table.columns lists them — driven by that list rather than a
+// separately hand-maintained one, so the two can't drift apart.
+const PLAN_CSV_HEADERS = {
+  slot: 'Slot', import_p: 'Import (p)', export_p: 'Export (p)', pv_kwh: 'PV (kWh)',
+  load_kwh: 'Load (kWh)', action: 'Action', ev_kwh: 'EV (kWh)', soc_pct: 'SoC (%)',
+  cost_delta_p: 'Cost delta (p)', total_gbp: 'Total (£)',
+  import_rank: 'Import rank', export_rank: 'Export rank',
+};
+function downloadPlanCsv() {
+  const cols = latestPlanTable.columns || [];
+  const rows = latestPlanTable.rows || [];
+  if (!rows.length) return;
+  const header = cols.map(c => PLAN_CSV_HEADERS[c] || c);
+  const lines = [header.map(csvCell).join(',')];
+  rows.forEach(row => lines.push(row.map(csvCell).join(',')));
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `gridlock-plan-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 function selectTab(tab) {
   currentTab = tab;
   document.querySelectorAll('.gl-nav-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
@@ -385,7 +419,7 @@ function renderFlow(f) {
   const hubR = anyActive
     ? Math.max(5, Math.min(13, 5 + (Object.values(mags).reduce((a, b) => a + b, 0) / (maxMag * 4)) * 8))
     : 4;
-  return `<div class="flow-wrap"><svg class="flow-svg" viewBox="0 0 420 375">
+  return `<div class="flow-wrap"><svg class="flow-svg" viewBox="0 0 420 400">
     ${lines}
     <circle class="flow-hub ${anyActive ? 'active' : ''}" cx="${CX}" cy="${CY}" r="${hubR.toFixed(1)}" />
     ${nodeEls}
@@ -580,6 +614,7 @@ async function refresh() {
     const resp = await fetch('api/status', { signal: ctrl.signal });
     clearTimeout(t);
     d = await resp.json();
+    latestPlanTable = d.plan_table || { columns: [], rows: [] };
   } catch (e) {
     document.getElementById('app').innerHTML =
       `<div class="gl">Could not reach GridLock (${esc(e.message || e)}) — check the add-on log, or it may still be starting up.</div>`;
@@ -624,7 +659,10 @@ async function refresh() {
     </div>
     <div class="tab-page" data-tab="plan">
       <div class="gl-wrap">
-        <div class="gl-h">30-minute action tape — full 24h plan</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <div class="gl-h" style="margin:0">30-minute action tape — full 24h plan</div>
+          <button class="gl-more-btn" style="width:auto;padding:8px 16px;margin:0" onclick="downloadPlanCsv()" ${(d.plan_table && d.plan_table.rows || []).length ? '' : 'disabled'}>⬇ Download CSV</button>
+        </div>
         <div class="gl-scroll">${d.plan_html || '<div style="color:var(--dim)">Waiting for first plan — computes every 5 minutes.</div>'}</div>
       </div>
     </div>

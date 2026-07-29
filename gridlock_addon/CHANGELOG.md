@@ -1,5 +1,43 @@
 # Changelog
 
+## 2.23.0
+- **Paced battery discharge toward the next off-peak window.** Plain
+  self-consumption slots (no CHARGE or EXPORT candidate beat the
+  hill-climb there — see 2.22.1) used to drain the battery at whatever
+  rate the load demanded, which could hit the floor early in a long
+  peak stretch and then import the rest of it at the full peak rate.
+  Now, whenever a cheaper window is still visible later in the
+  horizon, the remaining charge above the floor is rationed evenly
+  across the slots left until then — recalculated fresh every slot
+  from the actual battery level, so it self-corrects if PV covers some
+  of those slots along the way. This only touches the "nothing better
+  to do" fallback: a genuinely good EXPORT opportunity (or an active
+  Saving Session, handled separately) still discharges flat-out, never
+  paced.
+- New **"Unknown" bypass mode**: once the battery's actually at the
+  floor, GridLock now sends Sigenergy's documented bypass state
+  instead of "Maximum Self Consumption" — the inverter has nothing
+  left to give at that point, so there's no reason to leave it
+  actively hunting for battery power that isn't there. Applies
+  uniformly everywhere GridLock would otherwise command self-
+  consumption (planned ECO slots, EV Protection, fault/safe-mode
+  fallback), decided centrally in `apply()` from the live SoC reading.
+- New **hardware discharge-cutoff safety net**: `floor_soc` only ever
+  existed in GridLock's own 5-minute planning loop, with nothing
+  stopping the real battery discharging past it if that loop ever hung
+  mid-command. Now auto-discovers and syncs
+  `number.sigen_plant_ess_discharge_cut_off_state_of_charge` (or your
+  own override) to match `floor_soc` on every apply.
+- **`floor_soc` default changed from 10 to 0.** If you're happy for
+  the battery to reach empty, there's nothing to change; set it back
+  above 0 in `apps.yaml` if you'd rather keep a margin.
+- New **CSV export** on the Plan tab — downloads the full 24h plan
+  table (rate, PV, load, action, SoC, cost, and each slot's import/
+  export rank against the rest of the horizon) for anyone who wants
+  to check GridLock's numbers themselves.
+- Fixed the flow diagram's Battery node value label getting clipped
+  off the bottom of the SVG.
+
 ## 2.22.1
 - **Fixed a real planning bug**, caught from a user-reported full 24h
   plan: once the battery hit its floor, EXPORT slots kept selling PV

@@ -163,6 +163,9 @@ class GridLock(hass.Hass):
         self.ent_battery_soh = (a.get("battery_soh_entity")
                                 or self.overrides.get("battery_soh_entity_override")
                                 or self._find_sigen_soh())
+        self.ent_discharge_cutoff = (a.get("discharge_cutoff_entity")
+                                     or self.overrides.get("discharge_cutoff_entity_override")
+                                     or self._find_sigen_discharge_cutoff())
 
         # Parameters
         self.battery_kwh = float(a.get("battery_capacity_kwh", 10.0))
@@ -472,6 +475,24 @@ class GridLock(hass.Hass):
         candidates = [eid for eid in flat
                       if eid.startswith("sensor.") and "sigen" in eid
                       and "state_of_health" in eid]
+        plant = [eid for eid in candidates if "plant" in eid]
+        pool = plant or candidates
+        live = [eid for eid in pool if self._is_live(flat.get(eid))]
+        pool = live or pool
+        return pool[0] if pool else None
+
+    def _find_sigen_discharge_cutoff(self):
+        """The inverter's OWN hardware-level discharge floor (number.
+        sigen_plant_ess_discharge_cut_off_state_of_charge) — separate
+        from, and currently unrelated to, this app's own floor_soc
+        planning parameter. Without this, floor_soc is only ever
+        enforced in software (this app deciding what to command each
+        tick) with no hardware backstop if the tick loop ever hangs or
+        crashes mid-command."""
+        flat = self._all_states_flat()
+        candidates = [eid for eid in flat
+                      if eid.startswith("number.") and "sigen" in eid
+                      and "discharge" in eid and ("cut_off" in eid or "cutoff" in eid)]
         plant = [eid for eid in candidates if "plant" in eid]
         pool = plant or candidates
         live = [eid for eid in pool if self._is_live(flat.get(eid))]
@@ -1235,6 +1256,21 @@ class GridLock(hass.Hass):
                 "charge": 0.0,   # grid->battery kWh (AC side)
                 "export": 0.0,   # battery->grid kWh (battery side)
             })
+
+        # For each slot, the index of the next slot (at or after it)
+        # whose import rate has dropped to "cheap" — i.e. the next
+        # off-peak window, as far as this horizon can see. Used by
+        # simulate()'s self-consumption branch to pace battery use
+        # across a peak stretch instead of draining it early and
+        # importing at the full peak rate for whatever's left. Slots
+        # where optimise() has already picked CHARGE or EXPORT aren't
+        # affected — this only shapes the "nothing better to do than
+        # serve load from the battery" fallback.
+        next_cheap_idx = None
+        for i in range(len(slots) - 1, -1, -1):
+            if slots[i]["imp"] <= self.cheap_rate:
+                next_cheap_idx = i
+            slots[i]["next_cheap_idx"] = next_cheap_idx
         return slots
 
     # ------------------------------------------------------------------
@@ -1318,7 +1354,22 @@ class GridLock(hass.Hass):
                 batt += pv_c * eff
                 grid_out += pv - pv_c
                 if load > 0:
-                    avail = min(max_d, max(0.0, batt - floor_kwh))
+                    headroom = max(0.0, batt - floor_kwh)
+                    next_cheap = s.get("next_cheap_idx")
+                    # No export candidate beat the cheap-import gate for
+                    # this slot (that branch already runs flat-out — see
+                    # above), so this is genuinely a "meh, just keep the
+                    # lights on" slot. If a known off-peak window is
+                    # still ahead, ration what's left evenly across the
+                    # remaining stretch rather than draining fast now
+                    # and importing at full peak rate later — recomputed
+                    # fresh every slot from the actual battery level, so
+                    # it self-corrects if PV covers some slots along the
+                    # way instead of committing to a stale plan upfront.
+                    if next_cheap is not None and next_cheap > i:
+                        avail = min(max_d, headroom / (next_cheap - i))
+                    else:
+                        avail = min(max_d, headroom)
                     d = min(load / eff, avail)
                     batt -= d
                     load -= d * eff
@@ -1397,14 +1448,18 @@ class GridLock(hass.Hass):
         learned = [{"x": f"{i // 2:02d}:{'30' if i % 2 else '00'}", "y": round(kwh, 3)}
                    for i, kwh in sorted(((int(k), v) for k, v in self.load_profile.items()),
                                         key=lambda p: p[0])]
-        self.set_state("sensor.gridlock_soc_forecast", state=str(trace[0]),
-                       attributes={"friendly_name": "GridLock SoC Forecast",
-                                   "unit_of_measurement": "%",
-                                   "forecast_data": fc,
-                                   "plan_cost_24h": grid_cost,
-                                   "learned_load_profile": learned})
+
+        # Objective rate ranking (1 = best), for the CSV export — not a
+        # claim about why the optimiser chose a slot (it doesn't record
+        # that, only "did this reduce total cost"), just a verifiable
+        # fact: where this slot's rate sits among the other 47.
+        imp_rank = {idx: r + 1 for r, idx in
+                    enumerate(sorted(range(len(slots)), key=lambda i: slots[i]["imp"]))}
+        exp_rank = {idx: r + 1 for r, idx in
+                    enumerate(sorted(range(len(slots)), key=lambda i: -slots[i]["exp"]))}
 
         rows = []
+        plan_table = []
         for i, s in enumerate(slots):
             if i == 0 and live_label:
                 act = live_label
@@ -1440,10 +1495,32 @@ class GridLock(hass.Hass):
                 f"<td>{trace[i]:.0f}%</td>"
                 f"<td style='color:{delta_colour}'>{delta_sign}{delta_p:.1f}p</td>"
                 f"<td>£{cost_trace[i]['total']:.2f}</td></tr>")
+            # Array-of-arrays, not array-of-objects — field names would
+            # otherwise repeat 48 times and eat most of HA's ~16KB
+            # attribute-size limit for no reason.
+            plan_table.append([
+                s["start"].astimezone().strftime("%a %H:%M"),
+                round(s["imp"] * 100, 2), round(s["exp"] * 100, 2),
+                round(s["pv"], 3), round(s["load"], 3), act,
+                round(s["ev_kwh"], 3) if s["dispatch"] else None,
+                trace[i], round(delta_p, 2), cost_trace[i]["total"],
+                imp_rank[i], exp_rank[i]])
         html = ("<table class='gridlock-plan'><tr><th>Slot</th><th>Import</th>"
                 "<th>Export</th><th>PV kWh</th><th>Load kWh</th><th>Action</th>"
                 "<th>EV kWh</th><th>SoC</th><th>Cost</th><th>Total</th></tr>"
                 + "".join(rows) + "</table>")
+        plan_table_cols = ["slot", "import_p", "export_p", "pv_kwh", "load_kwh",
+                           "action", "ev_kwh", "soc_pct", "cost_delta_p",
+                           "total_gbp", "import_rank", "export_rank"]
+        self.set_state("sensor.gridlock_soc_forecast", state=str(trace[0]),
+                       attributes={"friendly_name": "GridLock SoC Forecast",
+                                   "unit_of_measurement": "%",
+                                   "forecast_data": fc,
+                                   "plan_cost_24h": grid_cost,
+                                   "learned_load_profile": learned,
+                                   "plan_table": {"columns": plan_table_cols,
+                                                  "rows": plan_table,
+                                                  "total_slots": len(slots)}})
         return html
 
     def publish_compare(self, slots, soc0, live_cost):
@@ -1672,6 +1749,17 @@ class GridLock(hass.Hass):
             disch_kw = round(disch_kw * derate, 2)
             charge_kw = round(charge_kw * derate, 2)
             reason = f"{reason} (thermal derate to {derate * 100:.0f}%)"
+        if mode == self.mode_eco:
+            live_soc = self.get_float_state(self.ent_soc, 50.0)
+            if live_soc <= self.floor_soc + 0.5:
+                # "Maximum Self Consumption" still has the inverter
+                # actively hunting for battery power that isn't there
+                # once it's at the floor. "Unknown" is Sigenergy's own
+                # documented bypass state — it just passes load straight
+                # through to the grid instead, which is what we want
+                # here regardless of which ECO call site this came from.
+                mode = "Unknown"
+                reason = f"{reason} (battery at floor — bypass mode)"
         self._log_decision(state, reason)
         if self.get_state(self.ent_mode) != mode:
             self.call_service("select/select_option",
@@ -1684,6 +1772,14 @@ class GridLock(hass.Hass):
             self.call_service("number/set_value",
                               target={"entity_id": self.ent_charge_limit},
                               value=charge_kw)
+        # Hardware-level backstop matching floor_soc — without this,
+        # the floor only ever existed in this app's own planning, with
+        # nothing stopping the real battery discharging past it if the
+        # tick loop ever hung mid-command.
+        if self.ent_discharge_cutoff and self.get_float_state(self.ent_discharge_cutoff, -1) != self.floor_soc:
+            self.call_service("number/set_value",
+                              target={"entity_id": self.ent_discharge_cutoff},
+                              value=self.floor_soc)
         self.set_state("sensor.gridlock_status", state=state,
                        attributes={"friendly_name": "GridLock Status",
                                    "icon": "mdi:brain",
@@ -1716,6 +1812,7 @@ class GridLock(hass.Hass):
                                    "inverter_temp_entity": self.ent_inverter_temp,
                                    "battery_temp_entity": self.ent_battery_temp,
                                    "battery_soh_entity": self.ent_battery_soh,
+                                   "discharge_cutoff_entity": self.ent_discharge_cutoff,
                                    "battery_risk_profile": self.battery_risk_profile,
                                    "battery_degradation_cost": self.degradation,
                                    "thermal_derate": derate,
