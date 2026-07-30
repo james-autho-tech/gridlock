@@ -173,6 +173,45 @@ def test_reserve_shortfall_degrades_gracefully_instead_of_infeasible():
         prev = result.trace[i]
 
 
+def test_reserve_margin_holds_back_more_than_the_bare_forecast():
+    """The plan re-solves every 5 minutes and can't claw back energy an
+    earlier slot already sold — a reserve built against the bare
+    point-estimate load forecast cuts exactly to the wire against that
+    forecast being right, which real house load rarely is slot to slot.
+    reserve_margin_pct should make the optimiser hold back more than a
+    zero-margin reserve would, i.e. export less now to leave slack for
+    the forecast being wrong later. Needs a closing cheap slot so
+    next_cheap_idx (and therefore the reserve constraint) is actually
+    defined for the on-peak stretch in between — without one there's
+    nothing to reserve *toward*, by design (see annotate_reserve)."""
+    rows = [{"imp": CHEAP, "exp": 0.05, "load": 0.0}] + \
+        [{"imp": 0.30, "exp": 0.60, "load": 0.0}] + \
+        [{"imp": 0.30, "exp": 0.05, "load": 2.0} for _ in range(4)] + \
+        [{"imp": CHEAP, "exp": 0.05, "load": 0.0}]
+    slots_a = make_slots(rows, CHEAP)
+    slots_b = make_slots(rows, CHEAP)
+
+    cfg_no_margin = base_cfg(battery_kwh=15.0, charge_kw=40.0, discharge_kw=40.0,
+                              export_rate_kw=40.0, mode=Mode.BALANCED, degradation=0.05,
+                              reserve_margin_pct=0.0)
+    cfg_with_margin = base_cfg(battery_kwh=15.0, charge_kw=40.0, discharge_kw=40.0,
+                                export_rate_kw=40.0, mode=Mode.BALANCED, degradation=0.05,
+                                reserve_margin_pct=0.30)
+
+    result_a = optimizer.solve(slots_a, soc0_pct=100.0, cfg=cfg_no_margin)
+    result_b = optimizer.solve(slots_b, soc0_pct=100.0, cfg=cfg_with_margin)
+
+    export_a = result_a.slots[1]["export"]
+    export_b = result_b.slots[1]["export"]
+    assert export_b < export_a, (
+        "a larger reserve margin should export less from the same profitable "
+        "slot, leaving more slack for the load forecast to be wrong")
+    assert not result_a.infeasible and not result_b.infeasible
+    # And concretely: the margin case should still have real charge left
+    # right before the closing cheap slot, not have ground down to 0%.
+    assert result_b.trace[-2] > result_a.trace[-2]
+
+
 def test_storm_override_charges_regardless_of_price():
     decision = optimizer.storm_decision(
         soc0_pct=40.0, storm_target_soc=100.0, discharge_kw=10.0,

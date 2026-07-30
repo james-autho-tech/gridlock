@@ -158,6 +158,7 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
         next_cheap = s.get("next_cheap_idx")
         if next_cheap is not None and next_cheap > i:
             future_deficit = s.get("remaining_deficit", 0.0) - max(0.0, load - pv)
+            future_deficit *= (1.0 + cfg.reserve_margin_pct)
             shortfall = pulp.LpVariable(f"reserve_shortfall_{i}", 0)
             prob += soc[i] + shortfall >= floor_kwh + future_deficit / eff
             reserve_penalty_terms.append(shortfall)

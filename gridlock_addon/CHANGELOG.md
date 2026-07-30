@@ -1,5 +1,23 @@
 # Changelog
 
+## 3.2.0
+- **New `reserve_margin_pct` (default 0.15)**: the on-peak reserve
+  constraint now holds back extra slack on top of the bare forecasted
+  load for the rest of a peak stretch, rather than reserving for
+  exactly 100% of a point-estimate. Why: the plan re-solves every 5
+  minutes and can't claw back charge an earlier slot already exported
+  or discharged — if the learned load forecast for a later slot drifts
+  upward *after* an earlier slot already sold against the old, lower
+  estimate, that energy is gone, and no amount of "try harder" in a
+  later solve recovers it. A reserve built with zero margin cuts
+  exactly to the wire against its own forecast being right, which real
+  house load rarely is slot to slot — this is a direct, concrete
+  response to a real report of the battery being sold down too far and
+  landing in Bypass with genuine load still ahead of it. Set it to 0
+  to go back to the exact-forecast reserve if your load is very
+  predictable and you'd rather have the extra export; raise it further
+  if you're still seeing Bypass you don't think should happen.
+
 ## 3.1.3
 - **Fix: battery draining to empty and hitting Bypass mid-afternoon on a
   day forecast at 30-50+ kWh solar.** Root cause: Solcast only publishes

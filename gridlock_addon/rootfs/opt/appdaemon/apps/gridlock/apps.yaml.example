@@ -76,6 +76,18 @@ gridlock:
   # today (tomorrow gets its own fresh budget). Unset by default — the
   # LP just keeps selling wherever it's profitable all day.
   # target_daily_net_cost: 0.0
+  # Extra slack the on-peak reserve holds back on top of the bare
+  # forecasted load for the rest of a peak stretch — 0.15 means "reserve
+  # for 115% of predicted load", not exactly 100% of it. Matters because
+  # the plan re-solves every 5 minutes and can't claw back charge an
+  # earlier slot already exported/discharged: if the learned load
+  # forecast for a later slot drifts upward after an earlier one has
+  # already sold against the old, lower estimate, that's gone — only a
+  # margin held back in advance protects against it. Raise this if
+  # you're seeing Bypass slots you don't think should've happened; lower
+  # it (toward 0) to squeeze closer to the theoretical maximum if your
+  # load is very predictable and you'd rather have the extra export.
+  reserve_margin_pct: 0.15
   # Reserve the plan won't discharge below, even if profitable. Default
   # 0 uses the full battery; raise this if you'd rather keep a buffer
   # against deep-discharge wear — most general battery guidance

@@ -277,6 +277,7 @@ class GridLock(hass.Hass):
             export_margin=self.export_margin, mode=self.mode, degradation=self.degradation,
             target_daily_net_cost=self.target_daily_net_cost,
             storm_target_soc=float(a.get("storm_watch_target_soc", 100.0)),
+            reserve_margin_pct=float(a.get("reserve_margin_pct", 0.15)),
             horizon_slots=HORIZON_SLOTS, slot_min=SLOT_MIN)
 
         # Mode strings (Sigenergy EMS) + the adapter that actually talks

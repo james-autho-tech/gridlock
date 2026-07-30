@@ -76,6 +76,18 @@ class SiteConfig:
 
     storm_target_soc: float = 100.0
 
+    # Extra slack on top of the bare forecasted load when reserving
+    # charge for an on-peak stretch — e.g. 0.15 reserves for 115% of the
+    # predicted deficit, not exactly 100% of it. Exists specifically
+    # because the plan re-solves every 5 minutes: if the learned load
+    # forecast for a later slot drifts upward *after* an earlier slot
+    # has already exported/discharged against the old, lower estimate,
+    # that energy is already gone — a later solve can't claw it back,
+    # only ration what's left. A point-estimate reserve with zero margin
+    # cuts exactly to the wire against its own forecast being right;
+    # real house load isn't that predictable slot to slot.
+    reserve_margin_pct: float = 0.15
+
     horizon_slots: int = HORIZON_SLOTS
     slot_min: int = SLOT_MIN
 
