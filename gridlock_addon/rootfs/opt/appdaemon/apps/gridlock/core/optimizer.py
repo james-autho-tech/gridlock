@@ -189,8 +189,19 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
         grid_cost_total += delta
         soc_pct = _val(soc[i]) / cap * 100.0
         trace.append(round(soc_pct, 1))
+        # Battery-side kWh actually discharged this slot (self-consumption
+        # + export combined) — computed directly from the LP's own
+        # variables, not reconstructed from a SoC delta against the
+        # previous row. That reconstruction is exactly what caused real
+        # confusion in practice: which slot a SoC change "belongs to"
+        # depends on a same-row-is-the-end-of-this-slot convention that's
+        # easy to misread by one row, making a good decision look
+        # backwards. This number needs no such alignment — it's already
+        # anchored to slot i.
+        battery_kwh = _val(batt_to_load[i]) + _val(batt_to_export[i])
         cost_trace.append({"delta": round(delta, 4), "total": round(grid_cost_total, 4),
-                            "grid_in": round(grid_in, 3), "charge_in": round(s["charge"], 3)})
+                            "grid_in": round(grid_in, 3), "charge_in": round(s["charge"], 3),
+                            "battery_kwh": round(battery_kwh, 3)})
 
     total_cost = _val(prob.objective, grid_cost_total) if prob.objective is not None else grid_cost_total
     return out_slots, trace, cost_trace, round(grid_cost_total, 4), round(total_cost, 4), infeasible

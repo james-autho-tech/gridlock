@@ -486,6 +486,7 @@ function csvCell(v) {
 const PLAN_CSV_HEADERS = {
   slot: 'Slot', import_p: 'Import (p)', export_p: 'Export (p)', pv_kwh: 'PV (kWh)',
   load_kwh: 'Load (kWh)', grid_kwh: 'Grid (kWh)', charge_kwh: 'Charge (kWh)',
+  battery_kwh: 'Battery (kWh)',
   action: 'Action', ev_kwh: 'EV (kWh)', dispatch: 'EV dispatch slot', soc_pct: 'SoC (%)',
   cost_delta_p: 'Grid cost delta (p)', total_gbp: 'Grid total (£)',
   import_rank: 'Import rank', export_rank: 'Export rank',
@@ -736,6 +737,7 @@ function renderPlanTable(table, opts) {
       <td>${Number(r.load_kwh).toFixed(2)}</td>
       <td>${Number(r.grid_kwh).toFixed(2)}</td>
       <td>${Number(r.charge_kwh).toFixed(2)}</td>
+      <td class="num" title="Battery-side kWh discharged this slot (self-consumption + export combined) — read directly off this row, not a SoC difference against the row above">${Number(r.battery_kwh).toFixed(2)}</td>
       <td>${actionPill(r.action)}</td>
       <td>${Number(r.dispatch) > 0.5 ? `<span style="color:var(--cyan)">⚡ ${Number(r.ev_kwh).toFixed(2)}</span>` : '—'}</td>
       <td>${socMiniBar(r.soc_pct)}</td>
@@ -745,7 +747,7 @@ function renderPlanTable(table, opts) {
   }).join('');
   return `<div class="gl-table-scroll"><table class="gl-plan">
     <tr><th>Slot</th><th>Import</th><th>Export</th><th>PV kWh</th><th>Load kWh</th>
-        <th>Grid kWh</th><th>Charge kWh</th><th>Action</th><th>EV kWh</th><th>SoC</th>
+        <th>Grid kWh</th><th>Charge kWh</th><th title="Battery kWh discharged this slot, self-consumption + export combined">Battery kWh</th><th>Action</th><th>EV kWh</th><th>SoC</th>
         <th>Grid £</th><th>Total £</th></tr>
     ${trs}
   </table></div>`;

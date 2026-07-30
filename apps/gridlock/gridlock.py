@@ -31,8 +31,8 @@ STATE_FILES = ("load_profile.json", "savings_state.json", "savings_history.json"
 # alongside sensor.gridlock_soc_forecast's plan_table attribute, so the
 # two can never drift out of sync with each other.
 PLAN_TABLE_COLS = ["slot", "import_p", "export_p", "pv_kwh", "load_kwh",
-                   "grid_kwh", "charge_kwh", "action", "ev_kwh", "dispatch",
-                   "soc_pct", "cost_delta_p", "total_gbp",
+                   "grid_kwh", "charge_kwh", "battery_kwh", "action", "ev_kwh",
+                   "dispatch", "soc_pct", "cost_delta_p", "total_gbp",
                    "import_rank", "export_rank"]
 
 # Confirmed in production (2026-07-30): a value equal to exactly 0/0.0
@@ -1034,6 +1034,13 @@ class GridLock(hass.Hass):
             delta_sign = "+" if delta_p > 0 else ""
             grid_kwh = cost_trace[i]["grid_in"]
             charge_kwh = cost_trace[i]["charge_in"]
+            # Battery-side kWh discharged THIS slot (self-consumption +
+            # export combined), taken directly from the LP's own
+            # variables for slot i — deliberately not reconstructed from
+            # a SoC delta against the row above/below, which is exactly
+            # the misreading that made a correct decision (the best-
+            # priced slot selling the most) look backwards in practice.
+            battery_kwh = cost_trace[i]["battery_kwh"]
             rows.append(
                 f"<tr style='background:{colour}1a'>"
                 f"<td>{s['start'].astimezone().strftime('%a %H:%M')}</td>"
@@ -1041,6 +1048,7 @@ class GridLock(hass.Hass):
                 f"<td>{s['pv']:.2f}</td><td>{s['load']:.2f}</td>"
                 f"<td>{grid_kwh:.2f}</td>"
                 f"<td>{charge_kwh:.2f}</td>"
+                f"<td>{battery_kwh:.2f}</td>"
                 f"<td style='color:{colour};font-weight:600'>{act}</td>"
                 f"<td>{ev_cell}</td>"
                 f"<td>{trace[i]:.0f}%</td>"
@@ -1049,7 +1057,8 @@ class GridLock(hass.Hass):
             plan_row = [
                 s["start"].astimezone().strftime("%a %H:%M"),
                 round(s["imp"] * 100, 2), round(s["exp"] * 100, 2),
-                round(s["pv"], 3), round(s["load"], 3), grid_kwh, charge_kwh, act,
+                round(s["pv"], 3), round(s["load"], 3), grid_kwh, charge_kwh,
+                battery_kwh, act,
                 # Always a number, never None — a genuinely missing value
                 # in a row this size is exactly what shifted every column
                 # after it into the wrong slot in practice (see
@@ -1068,7 +1077,7 @@ class GridLock(hass.Hass):
             plan_table.append(plan_row)
         html = ("<table class='gridlock-plan'><tr><th>Slot</th><th>Import</th>"
                 "<th>Export</th><th>PV kWh</th><th>Load kWh</th>"
-                "<th>Grid kWh</th><th>Charge kWh</th><th>Action</th>"
+                "<th>Grid kWh</th><th>Charge kWh</th><th>Battery kWh</th><th>Action</th>"
                 "<th>EV kWh</th><th>SoC</th><th>Grid £</th><th>Total £</th></tr>"
                 + "".join(rows) + "</table>")
         self.set_state("sensor.gridlock_soc_forecast", state=str(trace[0]),

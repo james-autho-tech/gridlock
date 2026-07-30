@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.2.1
+- **New "Battery kWh" plan table column.** The only way to see how much
+  battery a slot actually used was to subtract its SoC from the row
+  above's — and that's exactly backwards to get wrong: a row's SoC is
+  the level *after* that slot's own action, so a slot's real usage is
+  (previous row's SoC − this row's SoC), not the other way round. Read
+  the wrong direction and the best-priced export slot (which correctly
+  sold the most) looks like it barely sold anything, while an ordinary
+  ECO slot right after it (not selling anything, just serving a small
+  load) looks like a big sale at a cheap price — confirmed against a
+  real report that read it exactly backwards. `battery_kwh` is taken
+  directly from the optimiser's own per-slot variables and needs no
+  diff against any other row to mean something.
+
 ## 3.2.0
 - **New `reserve_margin_pct` (default 0.15)**: the on-peak reserve
   constraint now holds back extra slack on top of the bare forecasted

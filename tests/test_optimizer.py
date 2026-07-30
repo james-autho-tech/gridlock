@@ -173,6 +173,36 @@ def test_reserve_shortfall_degrades_gracefully_instead_of_infeasible():
         prev = result.trace[i]
 
 
+def test_battery_kwh_is_anchored_to_its_own_slot_not_a_soc_delta():
+    """Real-world confusion: reconstructing "how much battery did this
+    slot use" from (this row's SoC - previous row's SoC) requires
+    knowing which row a delta "belongs to", and it's easy to misattribute
+    it to the wrong slot's price by one row when reading a table by eye
+    (a 22.6p export slot that actually sold the most looked, read that
+    way, like it barely sold anything, and an ECO slot right after it —
+    which wasn't selling anything at all, just serving a small load —
+    looked like a huge sale at a cheap price). cost_trace["battery_kwh"]
+    must equal each slot's own real discharge, taken directly from that
+    slot's own LP variables, with no dependence on any other row."""
+    rows = [{"imp": CHEAP, "exp": 0.05, "load": 0.0}] + \
+        [{"imp": 0.30, "exp": 0.50, "load": 0.0}] + \
+        [{"imp": 0.30, "exp": 0.05, "load": 0.5}] + \
+        [{"imp": CHEAP, "exp": 0.05, "load": 0.0}]
+    slots = make_slots(rows, CHEAP)
+    cfg = base_cfg(mode=Mode.BALANCED, degradation=0.05)
+    result = optimizer.solve(slots, soc0_pct=100.0, cfg=cfg)
+
+    export_slot_battery_kwh = result.cost_trace[1]["battery_kwh"]
+    eco_slot_battery_kwh = result.cost_trace[2]["battery_kwh"]
+    assert export_slot_battery_kwh > eco_slot_battery_kwh, (
+        "the profitable export slot should show as the large battery user on "
+        "its own row, and the small self-consumption-only slot as the small "
+        "one on its own row — independent of how any other row reads")
+    # And it should match the slot's own decision variables directly:
+    # export slot's battery_kwh is (at minimum) its own export amount.
+    assert export_slot_battery_kwh >= result.slots[1]["export"] - 1e-3
+
+
 def test_reserve_margin_holds_back_more_than_the_bare_forecast():
     """The plan re-solves every 5 minutes and can't claw back energy an
     earlier slot already sold — a reserve built against the bare
