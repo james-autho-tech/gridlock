@@ -35,8 +35,51 @@ PLAN_TABLE_COLS = ["slot", "import_p", "export_p", "pv_kwh", "load_kwh",
                    "soc_pct", "cost_delta_p", "total_gbp",
                    "import_rank", "export_rank"]
 
+# Confirmed in production (2026-07-30): a value equal to exactly 0/0.0
+# nested inside a set_state() attributes payload — a dict key or a list
+# element — goes missing by the time it comes back out of Home
+# Assistant, whether read via Developer Tools' own state view or via
+# the plain /api/states REST endpoint webui.py uses. Every single
+# "corrupted" plan_table cell and every missing Solcast forecast point
+# at night was, without exception, a value that should have been
+# exactly zero for that slot — confirmed by cross-referencing against
+# the same slot's still-intact plan_html string, built from the same
+# numbers a few lines earlier in the same function. This predates any
+# of the 3.1.x changes (the very first bug report already showed it,
+# before the LP rewrite's own separate NaN issue was ever found or
+# fixed) — it's somewhere in the AppDaemon<->HA state pipeline, not in
+# gridlock.py's own data. Rather than track down exactly which layer
+# does it, nudge every zero by a display-invisible epsilon at the one
+# choke point all of this app's published attributes pass through
+# (GridLock.set_state below) — a value that is never exactly zero
+# can't be silently dropped by whatever's doing this.
+_ZERO_EPS = 1e-9
+
+
+def _never_zero_deep(obj):
+    if isinstance(obj, dict):
+        return {k: _never_zero_deep(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_never_zero_deep(v) for v in obj]
+    if isinstance(obj, bool):
+        return obj  # bool is a subclass of int in Python -- never touch these
+    if isinstance(obj, (int, float)) and obj == 0:
+        return _ZERO_EPS
+    return obj
+
 
 class GridLock(hass.Hass):
+
+    def set_state(self, entity_id, *args, **kwargs):
+        """Every sensor this app publishes goes through here — see
+        _never_zero_deep's docstring above for why. Intercepting the one
+        shared call site catches this for every current and future
+        attribute this app ever publishes, rather than needing every
+        individual set_state() call site to remember to guard against it."""
+        attrs = kwargs.get("attributes")
+        if attrs is not None:
+            kwargs["attributes"] = _never_zero_deep(attrs)
+        return super().set_state(entity_id, *args, **kwargs)
 
     # ------------------------------------------------------------------
     # INIT

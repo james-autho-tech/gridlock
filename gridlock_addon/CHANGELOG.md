@@ -1,5 +1,25 @@
 # Changelog
 
+## 3.1.2
+- **Fix: the actual cause of the corrupted Plan tab.** 3.1.1 fixed a
+  real bug (a stray NaN able to slip past a truthy-check guard) but it
+  wasn't the one causing the reported corruption — confirmed by
+  checking a pre-3.1.1 report against that same tick's still-intact
+  `plan_html` string: every "missing" plan_table cell, without
+  exception, was a value that should have been exactly `0`/`0.0` for
+  that slot. Something between AppDaemon's `set_state()` and Home
+  Assistant's own state storage silently drops any dict key or list
+  element equal to exactly zero (also confirmed independently on
+  `sensor.gridlock_solar_forecast`'s forecast points at night, where
+  `pv=0` made the whole point vanish rather than read as zero).
+  Rather than chase which exact layer does this, `GridLock.set_state()`
+  now nudges every such value by a display-invisible epsilon
+  (`1e-9`) before publishing — applied once at the single call site
+  every sensor this app publishes goes through, so it covers all of
+  them, not just plan_table. The web UI's one place that read a
+  0/1 flag with a truthy check (the EV-dispatch column) is updated to
+  compare numerically instead, since `1e-9` is still truthy in JS.
+
 ## 3.1.1
 - **Fix: corrupted Plan tab** — real-world report showed the Action/EV kWh/
   SoC/Grid £/Total £ columns full of stray numbers and "NaN". Root cause:

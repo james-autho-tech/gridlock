@@ -737,7 +737,7 @@ function renderPlanTable(table, opts) {
       <td>${Number(r.grid_kwh).toFixed(2)}</td>
       <td>${Number(r.charge_kwh).toFixed(2)}</td>
       <td>${actionPill(r.action)}</td>
-      <td>${r.dispatch ? `<span style="color:var(--cyan)">⚡ ${Number(r.ev_kwh).toFixed(2)}</span>` : '—'}</td>
+      <td>${Number(r.dispatch) > 0.5 ? `<span style="color:var(--cyan)">⚡ ${Number(r.ev_kwh).toFixed(2)}</span>` : '—'}</td>
       <td>${socMiniBar(r.soc_pct)}</td>
       <td style="color:${Number(r.cost_delta_p) <= 0 ? 'var(--green)' : 'var(--amber)'}">${Number(r.cost_delta_p) > 0 ? '+' : ''}${Number(r.cost_delta_p).toFixed(1)}p</td>
       <td>£${Number(r.total_gbp).toFixed(2)}</td>
