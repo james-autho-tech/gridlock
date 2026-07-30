@@ -14,6 +14,23 @@ def rate_at(windows, t, default):
     return default
 
 
+def _pv_for_slot(pv_curve, s):
+    """Solcast only publishes a "today" and "tomorrow" forecast sensor —
+    a 48h horizon reaches into the day *after* tomorrow for a large part
+    of the day (e.g. from any afternoon/evening "now"), which neither
+    sensor covers at all. Falling back to a bare 0.0 there means "assume
+    zero solar", the single most pessimistic possible assumption — it
+    reads as correct planning but drains the battery for no real reason
+    once the horizon runs past Solcast's own visibility (observed in
+    production: a whole day showing 0 PV including midday, ending in
+    Bypass mid-afternoon on a day forecast at 38-56kWh solar). Repeating
+    the same time-of-day from 24h earlier — real data, when available —
+    is a far better default than that."""
+    if s in pv_curve:
+        return pv_curve[s]
+    return pv_curve.get(s - timedelta(hours=24), 0.0)
+
+
 def build_slots(now, *, import_windows, export_windows, dispatch_windows,
                  pv_curve, load_kwh_fn, cheap_rate,
                  live_import_rate, live_export_rate,
@@ -47,7 +64,7 @@ def build_slots(now, *, import_windows, export_windows, dispatch_windows,
             "imp": imp,
             "exp": rate_at(export_windows, s,
                            live_export_rate if i == 0 else default_export_rate),
-            "pv": pv_curve.get(s, 0.0),
+            "pv": _pv_for_slot(pv_curve, s),
             "load": load_kwh_fn(s),
             "dispatch": in_disp,
             "ev_kwh": ev_slot_kwh,

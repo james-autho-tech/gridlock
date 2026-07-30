@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.1.3
+- **Fix: battery draining to empty and hitting Bypass mid-afternoon on a
+  day forecast at 30-50+ kWh solar.** Root cause: Solcast only publishes
+  a "today" and a "tomorrow" forecast sensor — the 48h horizon (added in
+  the LP rewrite) reaches into the day *after* tomorrow for a large part
+  of the day from any afternoon/evening "now", which neither sensor
+  covers at all. `core/slots.py` was defaulting missing PV data to
+  `0.0` — "assume zero solar", the single most pessimistic possible
+  planning assumption — for that entire stretch, correctly-by-its-own-
+  logic draining the battery for load it (wrongly) believed had no
+  solar coming to offset it. Now falls back to the same time-of-day
+  from 24h earlier (real Solcast data, already fetched, just for the
+  wrong day) whenever Solcast's own coverage runs out, rather than
+  inventing a zero.
+
 ## 3.1.2
 - **Fix: the actual cause of the corrupted Plan tab.** 3.1.1 fixed a
   real bug (a stray NaN able to slip past a truthy-check guard) but it
