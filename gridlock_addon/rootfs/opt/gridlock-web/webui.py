@@ -486,7 +486,7 @@ function csvCell(v) {
 const PLAN_CSV_HEADERS = {
   slot: 'Slot', import_p: 'Import (p)', export_p: 'Export (p)', pv_kwh: 'PV (kWh)',
   load_kwh: 'Load (kWh)', grid_kwh: 'Grid (kWh)', charge_kwh: 'Charge (kWh)',
-  action: 'Action', ev_kwh: 'EV (kWh)', soc_pct: 'SoC (%)',
+  action: 'Action', ev_kwh: 'EV (kWh)', dispatch: 'EV dispatch slot', soc_pct: 'SoC (%)',
   cost_delta_p: 'Grid cost delta (p)', total_gbp: 'Grid total (£)',
   import_rank: 'Import rank', export_rank: 'Export rank',
 };
@@ -688,7 +688,17 @@ function renderFlow(f, bypassActive) {
 function planRowObjects(table) {
   if (!table || !table.columns || !table.rows) return [];
   const cols = table.columns;
-  return table.rows.map(row => Object.fromEntries(cols.map((c, i) => [c, row[i]])));
+  // Defensive: a row with the wrong length would otherwise silently
+  // misassign every value after the gap to the wrong column name (seen
+  // in practice from a stray NaN upstream shortening a row) — skip a
+  // malformed row rather than render misleading numbers from it.
+  const bad = table.rows.filter(r => r.length !== cols.length).length;
+  if (bad) {
+    console.warn(`plan_table: ${bad} row(s) don't match the ${cols.length}-column shape — skipping them.`);
+  }
+  return table.rows
+    .filter(row => row.length === cols.length)
+    .map(row => Object.fromEntries(cols.map((c, i) => [c, row[i]])));
 }
 function heatColor(pence, cheapP) {
   // Relative to the site's own configured cheap-rate threshold (blue),
@@ -727,7 +737,7 @@ function renderPlanTable(table, opts) {
       <td>${Number(r.grid_kwh).toFixed(2)}</td>
       <td>${Number(r.charge_kwh).toFixed(2)}</td>
       <td>${actionPill(r.action)}</td>
-      <td>${r.ev_kwh === null || r.ev_kwh === undefined ? '—' : `<span style="color:var(--cyan)">⚡ ${Number(r.ev_kwh).toFixed(2)}</span>`}</td>
+      <td>${r.dispatch ? `<span style="color:var(--cyan)">⚡ ${Number(r.ev_kwh).toFixed(2)}</span>` : '—'}</td>
       <td>${socMiniBar(r.soc_pct)}</td>
       <td style="color:${Number(r.cost_delta_p) <= 0 ? 'var(--green)' : 'var(--amber)'}">${Number(r.cost_delta_p) > 0 ? '+' : ''}${Number(r.cost_delta_p).toFixed(1)}p</td>
       <td>£${Number(r.total_gbp).toFixed(2)}</td>

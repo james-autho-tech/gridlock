@@ -16,6 +16,7 @@ coefficients are what enforce it, and that's exactly what the "only
 export when profitable" unit tests are checking.
 """
 
+import math
 import shutil
 from dataclasses import dataclass, field
 
@@ -24,6 +25,21 @@ import pulp
 from .config import Mode
 
 EPS = 1e-6
+
+
+def _val(var, default=0.0):
+    """pulp.value(var) or 0.0 looks like a safe fallback but isn't one:
+    `nan` is truthy in Python, so `float('nan') or 0.0` evaluates to
+    `nan`, not 0.0 — a stray NaN from the solver (observed in practice on
+    a genuinely tight/degenerate solve) then slips straight through into
+    the published plan, and a NaN inside a value HA stores as an entity
+    attribute can end up silently dropped rather than serialized,
+    shortening that row and misaligning every column after it. Guard
+    explicitly against both None and non-finite values instead."""
+    v = pulp.value(var)
+    if v is None or not math.isfinite(v):
+        return default
+    return v
 
 # Penalty (£ per kWh of shortfall) on the on-peak reserve slack — see
 # _solve_lp's reserve constraint below. Must dominate any realistic
@@ -162,21 +178,21 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
     grid_cost_total = 0.0
     for i, s in enumerate(slots):
         s = dict(s)
-        s["charge"] = round(max(0.0, pulp.value(charge[i]) or 0.0), 6)
-        s["export"] = round(max(0.0, pulp.value(batt_to_export[i]) or 0.0), 6)
+        s["charge"] = round(max(0.0, _val(charge[i])), 6)
+        s["export"] = round(max(0.0, _val(batt_to_export[i])), 6)
         out_slots.append(s)
 
-        grid_in = (pulp.value(charge[i]) or 0.0) + (pulp.value(grid_to_load[i]) or 0.0)
-        grid_out = (pulp.value(pv_to_grid[i]) or 0.0) + eff * (pulp.value(batt_to_export[i]) or 0.0)
+        grid_in = _val(charge[i]) + _val(grid_to_load[i])
+        grid_out = _val(pv_to_grid[i]) + eff * _val(batt_to_export[i])
         delta = s["imp"] * grid_in - s["exp"] * grid_out
         grid_cost_total += delta
-        soc_pct = (pulp.value(soc[i]) or 0.0) / cap * 100.0
+        soc_pct = _val(soc[i]) / cap * 100.0
         trace.append(round(soc_pct, 1))
         cost_trace.append({"delta": round(delta, 4), "total": round(grid_cost_total, 4),
                             "grid_in": round(grid_in, 3), "charge_in": round(s["charge"], 3)})
 
-    total_cost = pulp.value(prob.objective) if prob.objective is not None else grid_cost_total
-    return out_slots, trace, cost_trace, round(grid_cost_total, 4), round(total_cost or 0.0, 4), infeasible
+    total_cost = _val(prob.objective, grid_cost_total) if prob.objective is not None else grid_cost_total
+    return out_slots, trace, cost_trace, round(grid_cost_total, 4), round(total_cost, 4), infeasible
 
 
 def _apply_min_export_block_filter(slots, cost_trace, cfg):

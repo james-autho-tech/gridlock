@@ -3,6 +3,31 @@ from core import optimizer
 
 from helpers import make_slots
 
+
+class _FakeVar:
+    """Minimal stand-in for an LpVariable/LpAffineExpression — pulp.value()
+    just calls x.value(), so this is all _val needs to be exercised
+    without a full LP solve."""
+    def __init__(self, v):
+        self._v = v
+
+    def value(self):
+        return self._v
+
+
+def test_val_replaces_nan_and_inf_not_just_none():
+    """`pulp.value(x) or 0.0` looks like a safe fallback but isn't: NaN is
+    truthy in Python, so that pattern lets a stray NaN through unchanged.
+    This is exactly the bug that shipped a corrupted plan_table to a real
+    deployment — a NaN slot value produced a shortened, misaligned row
+    once published. _val must catch NaN/inf explicitly, not just None."""
+    assert optimizer._val(_FakeVar(None)) == 0.0
+    assert optimizer._val(_FakeVar(float("nan"))) == 0.0
+    assert optimizer._val(_FakeVar(float("inf"))) == 0.0
+    assert optimizer._val(_FakeVar(float("-inf"))) == 0.0
+    assert optimizer._val(_FakeVar(3.5)) == 3.5
+    assert optimizer._val(_FakeVar(0.0)) == 0.0
+
 CHEAP = 0.10
 
 

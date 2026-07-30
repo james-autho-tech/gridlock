@@ -1,5 +1,23 @@
 # Changelog
 
+## 3.1.1
+- **Fix: corrupted Plan tab** — real-world report showed the Action/EV kWh/
+  SoC/Grid £/Total £ columns full of stray numbers and "NaN". Root cause:
+  `pulp.value(x) or 0.0`, used to guard every solver read in
+  `core/optimizer.py`, doesn't actually catch `NaN` — `NaN` is truthy in
+  Python, so `float('nan') or 0.0` evaluates to `nan`, not `0.0`. A stray
+  NaN reaching a published plan_table row correlated with that row
+  arriving short by a few values, which silently misaligned every column
+  after the gap in the web UI. Fixed at the source (`core/optimizer.py`'s
+  `_val()` now explicitly rejects non-finite values, not just `None`) and
+  defended in two more places: `gridlock.py` sanitises every plan_table
+  cell and now hard-asserts each row's length before publishing it
+  (dropping, not corrupting, a slot if this ever recurs), and the web UI
+  independently validates row length before rendering. Also removes the
+  one previously-intentional `None` in the row (the EV kWh cell) in
+  favour of a number plus an explicit new `dispatch` column, since a
+  `None` in the row was itself part of what made the row length variable.
+
 ## 3.1.0
 - **Web UI visual overhaul**: action pill badges (CHARGE/EXPORT/ECO/
   STORM_HOLD/BYPASS) with a glowing warning treatment for bypass;

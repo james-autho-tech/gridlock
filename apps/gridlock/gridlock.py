@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import re
 import shutil
@@ -24,6 +25,15 @@ from core.forecast import SolcastForecastProvider, LearnedLoadForecastProvider
 
 STATE_FILES = ("load_profile.json", "savings_state.json", "savings_history.json",
                "cost_tracking_state.json", "decision_log.json")
+
+# publish_plan()'s per-slot row shape — a single source of truth for both
+# the row length it builds and the "columns" name list it publishes
+# alongside sensor.gridlock_soc_forecast's plan_table attribute, so the
+# two can never drift out of sync with each other.
+PLAN_TABLE_COLS = ["slot", "import_p", "export_p", "pv_kwh", "load_kwh",
+                   "grid_kwh", "charge_kwh", "action", "ev_kwh", "dispatch",
+                   "soc_pct", "cost_delta_p", "total_gbp",
+                   "import_rank", "export_rank"]
 
 
 class GridLock(hass.Hass):
@@ -416,6 +426,20 @@ class GridLock(hass.Hass):
             return float(v) if v not in (None, "unknown", "unavailable") else default
         except (ValueError, TypeError):
             return default
+
+    @staticmethod
+    def _json_safe(value):
+        """Guards a plan_table cell against None/NaN/inf before it ever
+        reaches HA's state attributes — a value that goes missing partway
+        through serialisation (observed: a stray NaN correlating with a
+        shortened, misaligned row reaching the web UI) is worse than a
+        wrong-looking but present 0, since a missing element shifts every
+        column after it rather than just being wrong in its own cell."""
+        if isinstance(value, float) and not math.isfinite(value):
+            return 0.0
+        if value is None:
+            return 0.0
+        return value
 
     @staticmethod
     def _iso(dt_str):
@@ -978,21 +1002,31 @@ class GridLock(hass.Hass):
                 f"<td>{trace[i]:.0f}%</td>"
                 f"<td style='color:{delta_colour}'>{delta_sign}{delta_p:.1f}p</td>"
                 f"<td>£{cost_trace[i]['total']:.2f}</td></tr>")
-            plan_table.append([
+            plan_row = [
                 s["start"].astimezone().strftime("%a %H:%M"),
                 round(s["imp"] * 100, 2), round(s["exp"] * 100, 2),
                 round(s["pv"], 3), round(s["load"], 3), grid_kwh, charge_kwh, act,
-                round(s["ev_kwh"], 3) if s["dispatch"] else None,
+                # Always a number, never None — a genuinely missing value
+                # in a row this size is exactly what shifted every column
+                # after it into the wrong slot in practice (see
+                # PLAN_TABLE_COLS' length check below); "was this a
+                # dispatch slot" now has its own explicit column instead.
+                round(s["ev_kwh"], 3) if s["dispatch"] else 0.0,
+                1 if s["dispatch"] else 0,
                 trace[i], round(delta_p, 2), cost_trace[i]["total"],
-                imp_rank[i], exp_rank[i]])
+                imp_rank[i], exp_rank[i]]
+            plan_row = [self._json_safe(v) for v in plan_row]
+            if len(plan_row) != len(PLAN_TABLE_COLS):
+                self.log(f"plan_table row has {len(plan_row)} values, expected "
+                         f"{len(PLAN_TABLE_COLS)} — dropping this slot rather than "
+                         "publish a misaligned row.", level="ERROR")
+                continue
+            plan_table.append(plan_row)
         html = ("<table class='gridlock-plan'><tr><th>Slot</th><th>Import</th>"
                 "<th>Export</th><th>PV kWh</th><th>Load kWh</th>"
                 "<th>Grid kWh</th><th>Charge kWh</th><th>Action</th>"
                 "<th>EV kWh</th><th>SoC</th><th>Grid £</th><th>Total £</th></tr>"
                 + "".join(rows) + "</table>")
-        plan_table_cols = ["slot", "import_p", "export_p", "pv_kwh", "load_kwh",
-                           "grid_kwh", "charge_kwh", "action", "ev_kwh", "soc_pct",
-                           "cost_delta_p", "total_gbp", "import_rank", "export_rank"]
         self.set_state("sensor.gridlock_soc_forecast", state=str(trace[0]),
                        attributes={"friendly_name": "GridLock SoC Forecast",
                                    "unit_of_measurement": "%",
@@ -1000,7 +1034,7 @@ class GridLock(hass.Hass):
                                    "plan_cost_24h": grid_cost,
                                    "plan_summary": summary,
                                    "learned_load_profile": learned,
-                                   "plan_table": {"columns": plan_table_cols,
+                                   "plan_table": {"columns": PLAN_TABLE_COLS,
                                                   "rows": plan_table,
                                                   "total_slots": len(slots)}})
         return html
