@@ -1,5 +1,92 @@
 # Changelog
 
+## 3.1.0
+- **Web UI visual overhaul**: action pill badges (CHARGE/EXPORT/ECO/
+  STORM_HOLD/BYPASS) with a glowing warning treatment for bypass;
+  price-heatmap-shaded rate columns (relative to your own configured
+  `cheap_rate_threshold`, not a fixed pence figure); mini SoC progress
+  bars in the plan table instead of raw percentages; KPI sparklines on
+  Import/Export/Today-net/Saved-7d/Plan-cost tiles, all from real
+  already-computed data (nothing fabricated); a live weather + Solcast
+  yield + Storm Watch status widget in the header; an animated "⚠️
+  BYPASS ACTIVE" banner and pulsing warning flow-line when the inverter
+  drops into bypass; the Forecast tab's solar/SoC chart replaced with 3
+  perfectly-aligned stacked charts (PV vs load, SoC curve, rate
+  step-bars) sharing one synced hover tooltip; the Tariffs tab is now an
+  interactive relative-cost bar comparison; the Entities tab groups
+  discovered entities into Battery/Inverter/Grid/EV/Weather/Tariff cards
+  with live connection-status dots; Log tab entries get a 🔴 prefix on
+  bypass/fault entries.
+- **New: switch `eco`/`balanced`/`max_profit` live from the web UI**, no
+  AppDaemon restart — a 3-way segmented control in the header now
+  actually changes the running strategy (via a new
+  `input_select.gridlock_mode_override` helper, auto-created the same
+  way `input_boolean.gridlock_enable` already was; "auto" defers to
+  apps.yaml's `battery_risk_profile`, unchanged for anyone who never
+  touches the control). This is the one functional change in this
+  release — everything else above is presentation-only, reading data
+  the engine already published.
+- New `daily_savings_history` on `sensor.gridlock_savings` (baseline
+  minus actual, per day) — feeds the Saved (7d) KPI sparkline; same
+  already-tracked numbers `_savings_totals` sums, just kept per-day.
+- New `cheap_rate_threshold` on `sensor.gridlock_status` — lets the web
+  UI's heatmap/price colouring scale to your actual configured
+  threshold instead of guessing at one.
+
+## 3.0.0
+- **Replaced the hill-climbing heuristic optimiser with a real linear
+  program** (PuLP, GLPK-backed on this add-on's Alpine image). Solves
+  the whole 48h/96-slot horizon jointly instead of searching step by
+  step — the plan-cost figures should be equal or better than before,
+  never worse, for the same rates/PV/load.
+- **`battery_risk_profile`'s three values (`eco`/`balanced`/`max_profit`)
+  are now real behavioural modes**, not just a degradation-cost scalar
+  under one shared behaviour: `eco` now hard-blocks all battery-to-grid
+  export (only direct solar surplus can be sold); `balanced` exports
+  only where the margin clears the degradation cost, with an optional
+  `target_daily_net_cost` cutoff; `max_profit` zeroes the degradation
+  cost and sells any profitable margin, preserving only enough SoC for
+  load until the next off-peak slot. Existing configs keep working
+  unchanged — nothing new to set unless you want the daily-cost cutoff.
+- **Hard on-peak reserve constraint**: the LP now guarantees enough SoC
+  survives an on-peak stretch to cover the rest of its forecasted load
+  before allowing further export/self-consumption drain, rather than the
+  old soft export-cap heuristic doing the same job on a best-effort basis.
+- **New 15-minute HA/Solcast failsafe**: if the SoC sensor or the
+  Solcast forecast (when configured) goes continuously unavailable for
+  more than 15 minutes, GridLock drops to local self-consumption
+  immediately rather than keep planning against stale data — separate
+  from, and faster to react to, the existing broad-exception safe mode.
+- **Real-time bypass guardrail**: the inverter's own mode entity is now
+  watched directly — an unexpected external change (manual override, a
+  fault reverting it to `Unknown`/bypass) triggers an immediate re-plan
+  instead of waiting up to 5 minutes for the next scheduled tick.
+- **EV load separation**: the learned house-load profile now subtracts
+  live EV draw while the car's actually charging, so plug-in events stop
+  distorting the learned per-half-hour baseline.
+- **Auto-reads nominal battery capacity and a hardware charge/discharge
+  rate ceiling** from HA where available (a capacity sensor; the
+  charge/discharge `number.*` entities' own declared `max`), clamping a
+  misconfigured `apps.yaml` rate to what the inverter actually supports.
+- **Multiple sites from one AppDaemon instance**: persisted state
+  (learned load profile, savings history, decision log, cost tracking)
+  is now namespaced per `apps.yaml` block, so a second `gridlock_<site>:`
+  block no longer shares/corrupts the first site's files. An existing
+  single-site install's state is migrated across automatically on first
+  start under this version — nothing manual needed.
+- **Internals split into a pure-Python `core/` package** (optimiser,
+  dedup, failsafe, HA entity discovery, inverter/tariff/forecast
+  providers) with no AppDaemon/HA dependency, plus a `tests/` unit-test
+  suite that runs without a live HA instance
+  (`pip install pulp pytest && pytest tests/`).
+- **`conserve_battery_for_peak` is superseded** — the LP always paces
+  battery use optimally across the whole horizon on its own; the key is
+  still parsed (logged, not an error) but no longer changes behaviour.
+- Read-only telemetry discovery added for GivTCP/Solis naming
+  conventions (capacity/SoC/power) — control (mode switching, charge/
+  discharge limits) stays Sigenergy-only; see the README's "Hardware
+  support" section for why.
+
 ## 2.30.0
 - **New `export_rate_kw` setting** — caps how fast EXPORT is allowed
   to sell per slot, separate from `discharge_rate_kw` (self-consumption

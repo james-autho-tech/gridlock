@@ -54,16 +54,28 @@ gridlock:
   battery_capacity_kwh: 36.0
   typical_daily_house_kwh: 12.0
   inverter_efficiency: 0.90
-  # How readily the optimiser cycles the battery for arbitrage —
-  # eco needs a bigger price spread before it'll discharge (shallower,
-  # less frequent cycling); max_profit takes any margin above cost;
-  # balanced is the default either way. Check the Forecast tab's
-  # Battery health panel for the SoH sensors that motivated this — and
-  # its current effective £/kWh threshold under whichever profile you
-  # pick. Not a real degradation-vs-cycling model (no solid data to
-  # build one from), just a sensible lever to have.
+  # Three real operational modes for the LP optimiser (core/optimizer.py),
+  # not just a degradation-cost scalar under one shared behaviour:
+  #   eco         — battery never exports (only direct solar surplus can);
+  #                 optimises purely for minimal import cost.
+  #   balanced     — exports allowed, but only slots where the LP finds
+  #                 export_rate - import_rate/efficiency actually clears
+  #                 the degradation cost below get sold; the default.
+  #   max_profit    — degradation cost forced to 0; sells any margin above
+  #                 round-trip cost, preserving only enough SoC for
+  #                 forecasted load until the next off-peak slot.
+  # Check the Forecast tab's Battery health panel for the SoH sensors
+  # that motivated the degradation-cost lever, and its current effective
+  # £/kWh threshold under whichever mode you pick. Not a real
+  # degradation-vs-cycling model (no solid data to build one from), just
+  # a sensible lever to have.
   battery_risk_profile: balanced      # eco | balanced | max_profit
-  # battery_degradation_cost: 0.03    # £/kWh — overrides the profile above if set
+  # battery_degradation_cost: 0.03    # £/kWh — overrides the mode's default above if set
+  # Optional (balanced mode only): once today's cumulative real grid
+  # cost drops to/below this £ figure, stop exporting for the rest of
+  # today (tomorrow gets its own fresh budget). Unset by default — the
+  # LP just keeps selling wherever it's profitable all day.
+  # target_daily_net_cost: 0.0
   # Reserve the plan won't discharge below, even if profitable. Default
   # 0 uses the full battery; raise this if you'd rather keep a buffer
   # against deep-discharge wear — most general battery guidance
@@ -87,14 +99,12 @@ gridlock:
   # contiguous export block below the threshold gets dropped back to
   # self-consumption; a genuinely good export window is untouched.
   min_export_pct: 5.0
-  # Default (false): use whatever's in the battery for self-consumption
-  # immediately, slot by slot - if there's charge above the floor, it
-  # spends it on the load in front of it rather than rationing it for
-  # a later slot the maths says is worth more. Set true to instead
-  # hold some back during an already-cheap slot, or ration it across a
-  # stretch heading toward a future off-peak window, spending it only
-  # where it's worth the most - cheaper in total, but can mean a slot
-  # with charge sitting right there still shows some grid cost.
+  # Superseded as of the LP optimiser (v3.0.0): the LP always paces
+  # battery use optimally across the whole horizon on its own — there's
+  # no longer an "immediate spend vs ration" choice to make by hand, the
+  # solver finds whichever is actually cheapest. Left parseable (logged,
+  # not an error) so an existing apps.yaml with this set doesn't break;
+  # it just no longer changes behaviour.
   # conserve_battery_for_peak: false
   # Max rate EXPORT is allowed to sell at, per slot - separate from
   # discharge_rate_kw (self-consumption still uses the full hardware

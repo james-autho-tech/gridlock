@@ -5,8 +5,17 @@ __pycache__/
 # Runtime state gridlock.py writes next to itself (addon_overrides.json
 # comes from the add-on's Configuration tab, the rest is learned/logged
 # at runtime) — never part of the template, only ever local state.
+# Namespaced per site since v3.0.0 (e.g. gridlock__load_profile.json);
+# the un-namespaced names are kept ignored too since they're still read
+# once as a migration source for an upgrading single-site install.
 load_profile.json
 decision_log.json
 savings_state.json
 savings_history.json
+cost_tracking_state.json
 addon_overrides.json
+*__load_profile.json
+*__decision_log.json
+*__savings_state.json
+*__savings_history.json
+*__cost_tracking_state.json

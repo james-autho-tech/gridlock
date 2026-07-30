@@ -46,9 +46,14 @@ if [ ! -f "${CONFIG_DIR}/secrets.yaml" ]; then
     touch "${CONFIG_DIR}/secrets.yaml"
 fi
 
-# gridlock.py always comes from the image (update by installing a new
-# add-on version), apps.yaml/secrets.yaml persist in addon_config.
+# gridlock.py and its core/ package always come from the image (update
+# by installing a new add-on version); apps.yaml/secrets.yaml and the
+# persisted state JSON files persist in addon_config. core/ has to be
+# copied as a tree, not just the one file, now that the optimiser/
+# adapters/providers live in that package alongside gridlock.py.
 cp /opt/appdaemon/apps/gridlock/gridlock.py "${CONFIG_DIR}/apps/gridlock/gridlock.py"
+rm -rf "${CONFIG_DIR}/apps/gridlock/core"
+cp -r /opt/appdaemon/apps/gridlock/core "${CONFIG_DIR}/apps/gridlock/core"
 
 # Entity overrides from the add-on's Configuration tab — written as a
 # small JSON file gridlock.py reads as an extra fallback source,
