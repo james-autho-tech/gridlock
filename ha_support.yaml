@@ -18,6 +18,24 @@ input_boolean:
     name: GridLock Storm Watch (manual)
     icon: mdi:weather-lightning-rainy
 
+input_select:
+  gridlock_mode_override:
+    name: GridLock Mode Override
+    icon: mdi:tune-vertical
+    options:
+      - auto
+      - eco
+      - balanced
+      - max_profit
+    initial: auto
+    # "auto" defers to apps.yaml's battery_risk_profile; picking eco/
+    # balanced/max_profit here (e.g. from the web UI's segmented
+    # control, or this helper directly) overrides it live, no AppDaemon
+    # restart needed. gridlock.py auto-creates this as a virtual entity
+    # if it's missing, same as gridlock_enable above, but a real helper
+    # here also makes it toggleable/visible from Settings > Helpers and
+    # any dashboard, not just the add-on's own web UI.
+
 automation:
   - alias: "GridLock fail-safe watchdog"
     description: >
