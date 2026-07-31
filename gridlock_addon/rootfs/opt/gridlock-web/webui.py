@@ -48,6 +48,19 @@ def is_on(state_obj):
     return bool(state_obj) and state_obj.get("state") == "on"
 
 
+def denudge(value, default=0):
+    """GridLock's own set_state() override nudges every literal 0 in an
+    attributes dict to 1e-9 before publishing (a separate workaround for
+    HA silently dropping true zero attribute values) — round that back
+    to a clean 0 for display so a genuinely-zero count doesn't render as
+    the literal string "1e-9"."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return default
+    return 0 if abs(v) < 1e-6 else v
+
+
 # Standard HA weather-integration condition strings -> emoji, so the
 # header widget doesn't depend on any particular weather integration's
 # own icon set (Met Office, OpenWeatherMap, etc. all report from this
@@ -198,7 +211,7 @@ def build_status():
         "storm_state": storm.get("state", "Clear"),
         "storm_reason": storm.get("attributes", {}).get("reason") or "No active alerts",
         "ssen_count": ssen.get("state", "0"),
-        "ssen_planned": ssen.get("attributes", {}).get("planned", 0),
+        "ssen_planned": denudge(ssen.get("attributes", {}).get("planned", 0)),
         "ssen_severe": bool(ssen.get("attributes", {}).get("network_severe_weather")),
         "ssen_postcode": status_attrs.get("ssen_postcode"),
         "saving_joined": saving_attrs.get("joined_events") or [],

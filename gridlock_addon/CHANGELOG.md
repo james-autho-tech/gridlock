@@ -1,5 +1,23 @@
 # Changelog
 
+## 3.2.4
+- **Fix: plan rows showing "⚠️ Bypass" when the battery fully covered
+  load with zero grid import.** The plan table relabeled any ECO slot
+  as Bypass purely because its *projected* SoC ended near the floor
+  with no forecast PV — it never checked whether the slot actually
+  needed the grid. Draining the battery down to the floor by the last
+  slot before a cheap recharge is the reserve mechanism working exactly
+  as intended, not a failure; only relabel a slot as Bypass when it
+  genuinely had to import for load that slot (`grid_kwh > 0`).
+- **Fix: "Planned outages" tile showing the literal string `1e-9`
+  instead of `0`.** GridLock's own `set_state()` override nudges every
+  real zero in a published attributes dict to `1e-9` (a workaround for
+  Home Assistant silently dropping true-zero attribute values) — the
+  web UI displayed that raw value unrounded, so zero planned outages
+  rendered as `1e-9` in the tile's "active outage" colour instead of a
+  clean `0` in green. Not a live-data problem — it happens regardless
+  of which SSEN postcode is configured.
+
 ## 3.2.3
 - **Fix: PV surplus could bypass the battery and export directly even
   while there was still headroom to charge.** The LP treated

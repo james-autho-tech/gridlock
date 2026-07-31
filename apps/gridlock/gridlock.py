@@ -1025,7 +1025,17 @@ class GridLock(hass.Hass):
                 act = core_optimizer.action(s)
                 colour = {"CHARGE": "#22c55e", "EXPORT": "#38bdf8",
                           "ECO": "#9ca3af"}[act]
-                if act == "ECO" and trace[i] <= self.floor_soc + 2.0 and s["pv"] <= 0.01:
+                # "Bypass" should mean the battery genuinely couldn't cover
+                # load and grid had to step in — not just "this slot's plan
+                # projects SoC ending up near the floor". A slot that fully
+                # covers load from the battery with zero grid import is the
+                # reserve mechanism working as intended (drain it down
+                # before the next cheap slot recharges it), not a failure;
+                # the old condition flagged that success as a warning
+                # purely on SoC proximity to floor, with no check on
+                # whether grid was actually needed that slot.
+                if (act == "ECO" and trace[i] <= self.floor_soc + 2.0
+                        and s["pv"] <= 0.01 and cost_trace[i]["grid_in"] > core_optimizer.EPS):
                     act = "ECO (Bypass)"
             ev_cell = (f"<span style='color:#38bdf8'>⚡ {s['ev_kwh']:.2f}</span>"
                        if s["dispatch"] else "—")
