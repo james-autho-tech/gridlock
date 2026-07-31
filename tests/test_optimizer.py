@@ -29,6 +29,7 @@ def test_val_replaces_nan_and_inf_not_just_none():
     assert optimizer._val(_FakeVar(0.0)) == 0.0
 
 CHEAP = 0.10
+EPS_COST = 1e-6
 
 
 def base_cfg(**overrides):
@@ -267,6 +268,70 @@ def test_reserve_margin_holds_back_more_than_the_bare_forecast():
     # And concretely: the margin case should still have real charge left
     # right before the closing cheap slot, not have ground down to 0%.
     assert result_b.trace[-2] > result_a.trace[-2]
+
+
+def test_pv_fills_battery_to_full_before_any_direct_export():
+    """Real hardware fact, not an economic choice: in self-consumption
+    mode the inverter's own firmware always routes surplus PV into the
+    battery until it's full before any of it can export — the LP has no
+    authority to sell PV directly while there's still headroom, no
+    matter how good the export price looks. Reproduces a real production
+    report: rate-limited overnight charging (3.5p import) leaves the
+    battery below full when a heavy solar day (50+kWh) starts at a
+    modest 15p export rate; if PV were treated as freely exportable
+    regardless of SoC, the battery would sit at whatever level overnight
+    charging left it at while every kWh of surplus PV exported straight
+    through, never climbing further — exactly the bug reported live: a
+    battery pegged at ~75% SoC all day while high solar exported around
+    it instead of finishing the top-up to 100% first."""
+    rows = ([{"imp": 0.035, "exp": 0.05, "pv": 0.0, "load": 0.3} for _ in range(4)]
+            + [{"imp": 0.28, "exp": 0.15, "pv": 0.0, "load": 0.3} for _ in range(3)]
+            + [{"imp": 0.28, "exp": 0.15, "pv": 2.5, "load": 0.3} for _ in range(20)]
+            # Evening reserve need after the sun goes down — without this
+            # the LP has nothing left to hold charge *for* by the end of
+            # the horizon and profitably drains the battery on the last
+            # few slots regardless of this test's concern, which isn't a
+            # bug, just a horizon-edge artefact that would otherwise
+            # contaminate the "stays full" assertions below.
+            + [{"imp": 0.28, "exp": 0.15, "pv": 0.0, "load": 1.5} for _ in range(10)])
+    slots = make_slots(rows, cheap_rate=0.035)
+    cfg = base_cfg(battery_kwh=20.0, floor_soc=5.0, cheap_rate=0.035,
+                    charge_kw=6.0, discharge_kw=20.0, export_rate_kw=20.0,
+                    mode=Mode.BALANCED, degradation=0.05)
+
+    result = optimizer.solve(slots, soc0_pct=5.0, cfg=cfg)
+    assert not result.infeasible
+
+    sunny = range(7, 27)  # the 20 heavy-PV slots, before the evening load kicks back in
+    still_filling = [i for i in sunny if result.trace[i] < 99.0]
+    already_full = [i for i in sunny if result.trace[i] >= 99.0]
+
+    # The rate-limited overnight charge can't have filled a 20kWh battery
+    # from 5% in 4 slots at 3kWh/slot — there must be real headroom left
+    # when the sun comes up, or this test isn't exercising the fill path.
+    assert still_filling, "fixture didn't leave any headroom for solar to fill — test is vacuous"
+    assert already_full, "battery never reached full — solar isn't topping it up"
+
+    # While there's still headroom, surplus PV must go into the battery,
+    # not straight to export — no export revenue should show up yet.
+    for i in still_filling:
+        assert result.cost_trace[i]["delta"] <= EPS_COST, (
+            f"slot {i}: exported PV revenue while battery still had headroom "
+            f"(soc={result.trace[i]}%) — PV bypassed the mandatory battery fill")
+
+    # SoC must actually climb slot over slot while filling, not sit flat
+    # (the exact bug reported: pegged SoC with solar draining straight
+    # past the battery all day instead of finishing the top-up).
+    for a, b in zip(still_filling, still_filling[1:]):
+        assert result.trace[b] > result.trace[a], (
+            "SoC should rise every slot while there's still headroom and "
+            "surplus PV available, not stay pegged")
+
+    # Once genuinely full, further surplus PV must export for real revenue.
+    for i in already_full:
+        assert result.cost_trace[i]["delta"] < -EPS_COST, (
+            f"slot {i}: battery is full (soc={result.trace[i]}%) but no "
+            "export revenue was recorded for the surplus PV")
 
 
 def test_storm_override_charges_regardless_of_price():

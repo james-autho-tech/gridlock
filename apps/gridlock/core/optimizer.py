@@ -52,6 +52,13 @@ def _val(var, default=0.0):
 # than planned would be strictly worse for a live battery controller.
 RESERVE_PENALTY = 1000.0
 
+# Big-M coefficient unlocking pv_to_grid once its slot's battery_full
+# binary is 1 — see the PV-routing-priority constraint in _solve_lp.
+# Only needs to dominate a realistic per-slot PV export (a few kW over a
+# half-hour slot), not the objective's price coefficients, so a fixed
+# constant unrelated to battery size or tariff rates is fine.
+PV_ROUTING_BIG_M = 1.0e5
+
 
 @dataclass
 class PlanResult:
@@ -97,6 +104,10 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
     max_d = cfg.discharge_kw / 2.0
     max_d_exp = cfg.export_rate_kw / 2.0
     degradation = 0.0 if cfg.mode == Mode.MAX_PROFIT else cfg.degradation
+    # "Full enough to export" tolerance — a fixed fraction of capacity
+    # rather than an absolute kWh so it scales sensibly across battery
+    # sizes; see the PV-routing-priority constraint below.
+    full_tol_kwh = max(0.01, 0.001 * cap)
 
     prob = pulp.LpProblem("gridlock", pulp.LpMinimize)
 
@@ -124,6 +135,32 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
         prob += pv_to_load[i] + pv_to_batt[i] + pv_to_grid[i] == pv
         prob += pv_to_load[i] + eff * batt_to_load[i] + grid_to_load[i] == load
         prob += batt_to_load[i] + batt_to_export[i] <= max_d
+
+        # Hardware PV-routing priority: in self-consumption mode the
+        # inverter's own firmware always routes surplus PV into the
+        # battery until it's full before any of it is allowed to export
+        # — that's fixed hardware behaviour, not an economic choice the
+        # LP gets to make. A plain Big-M gate on soc[i] alone doesn't
+        # work here: whenever soc[i] sits below the "full" threshold, the
+        # gate's RHS goes negative, which conflicts with pv_to_grid's own
+        # >=0 bound and makes the *entire* solve infeasible rather than
+        # just disallowing export (confirmed — the first version of this
+        # constraint broke every existing fixture that wasn't already at
+        # 100% SoC). This is a genuine complementarity condition
+        # (pv_to_grid > 0 implies headroom == 0), which a continuous LP
+        # can't express — it needs a binary indicator, making this one
+        # constraint per slot a small MILP rather than a pure LP. battery_full[i]
+        # is free to be 0 even when soc[i] happens to be at cap (that
+        # just leaves pv_to_grid gated shut in a case where it didn't
+        # need to be — harmless), but it can only be 1 when soc[i] is
+        # genuinely within full_tol_kwh of capacity, so the solver can't
+        # cheat its way to unlocking export without actually filling the
+        # battery first — there's nowhere else for the surplus PV to go
+        # (pv_to_load + pv_to_batt + pv_to_grid == pv, no "waste PV"
+        # variable exists), so it's forced into pv_to_batt instead.
+        battery_full = pulp.LpVariable(f"batt_full_{i}", cat="Binary")
+        prob += soc[i] >= (cap - full_tol_kwh) * battery_full
+        prob += pv_to_grid[i] <= PV_ROUTING_BIG_M * battery_full
 
         prev = soc0_kwh if i == 0 else soc[i - 1]
         prob += soc[i] == prev + eff * (charge[i] + pv_to_batt[i]) \

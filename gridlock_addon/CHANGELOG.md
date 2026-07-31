@@ -1,5 +1,34 @@
 # Changelog
 
+## 3.2.3
+- **Fix: PV surplus could bypass the battery and export directly even
+  while there was still headroom to charge.** The LP treated
+  `pv_to_battery` vs `pv_to_grid` as a free economic choice — and once
+  the on-peak reserve was satisfied, selling PV directly at a decent
+  export rate often looked cheaper than storing it for later use, so
+  the battery could sit pegged at whatever level overnight charging left
+  it (e.g. ~75%) for an entire high-solar day while every kWh of surplus
+  PV exported straight past it. That's not actually a choice the
+  software gets to make: a Sigenergy inverter running self-consumption
+  mode routes surplus PV into the battery until it's full in hardware,
+  before any of it can reach the grid — no matter what the plan's own
+  arithmetic says is more profitable. `pv_to_grid` is now hard-gated so
+  it can only be nonzero once a slot's SoC is genuinely at capacity;
+  since there's no "waste PV" variable, the solver's only way to
+  balance the energy equation while the battery isn't full is to route
+  surplus into `pv_to_batt` instead. A plain Big-M constraint on SoC
+  alone isn't sound here (it goes infeasible below full — this needed
+  one binary "battery full" indicator per slot instead, so it's
+  technically a small MILP now rather than a pure LP for this one
+  constraint). Separately verified — with the routing modeled correctly
+  — that charging fully overnight from a cheap rate is *still* the
+  right call whenever the export rate is decent, not a leftover bug:
+  any headroom deliberately left for "free" solar to fill just displaces
+  that same solar's real export revenue, which is worse than the small
+  overnight import cost. Reducing overnight charge to "just the morning
+  gap" on the assumption solar charging is free was the wrong fix; this
+  release fixes the actual hardware-modeling gap instead.
+
 ## 3.2.2
 - **Fix: battery cycling for load during genuinely cheap/off-peak
   slots.** With a fully-charged battery and nothing better to do with
