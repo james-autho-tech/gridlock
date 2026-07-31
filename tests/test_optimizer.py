@@ -125,6 +125,33 @@ def test_charging_blocked_outside_cheap_slots():
     assert all(s["charge"] == 0.0 for s in result.slots)
 
 
+def test_battery_never_drains_for_load_during_a_cheap_slot():
+    """Real-world report: with a fully-charged battery and nothing better
+    to do with the charge, the optimiser still drained it to serve load
+    during genuinely cheap slots, because battery self-consumption only
+    costs the degradation rate in the objective — and degradation
+    (typically ~5p/kWh) is very often *less* than a cheap import rate
+    (e.g. 10p), making the LP "prefer" cycling stored charge over
+    importing fresh at that same cheap rate. That's a real net loss, not
+    a saving: the charge came from the grid at this same cheap rate a
+    slot or two ago (or will be topped up at it again shortly), so the
+    round trip only adds efficiency loss and wear for nothing. Off-peak
+    load must come straight from grid (or PV) whenever the battery isn't
+    also being charged that slot, matching the old heuristic's own
+    explicit "leave the battery alone and import instead" rule."""
+    rows = [{"imp": CHEAP, "exp": 0.05, "load": 1.0} for _ in range(3)] + \
+        [{"imp": CHEAP, "exp": 0.05, "load": 0.0}]
+    slots = make_slots(rows, CHEAP)
+    cfg = base_cfg(battery_kwh=20.0, mode=Mode.BALANCED, degradation=0.05)
+    result = optimizer.solve(slots, soc0_pct=100.0, cfg=cfg)
+    assert not result.infeasible
+    assert all(t == 100.0 for t in result.trace[:3]), (
+        "the battery should stay untouched — load should come straight "
+        "from the grid at the same cheap rate, not cycle stored charge"
+    )
+    assert all(c["battery_kwh"] == 0.0 for c in result.cost_trace[:3])
+
+
 def test_daily_target_cutoff_halts_further_export():
     from datetime import timezone
     degradation = 0.05

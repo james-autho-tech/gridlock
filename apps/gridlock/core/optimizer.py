@@ -133,6 +133,23 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
         # a hard rule (upper bound 0), not just a cost discouragement.
         if imp > cfg.cheap_rate:
             prob += charge[i] == 0
+        else:
+            # Off-peak, symmetric case: don't drain the battery for THIS
+            # slot's own load either. Battery self-consumption only costs
+            # degradation in the objective, and degradation is very often
+            # *less* than a genuinely cheap import rate (e.g. 5p vs 10p) —
+            # so left alone, the LP happily cycles the battery here for a
+            # few pence of "savings" that are actually a pure loss: that
+            # charge came from the grid at this same cheap rate a slot or
+            # two ago (or will be topped up at it again shortly), so
+            # routing this slot's load through the battery instead of
+            # importing it directly adds a real round-trip efficiency
+            # loss and degradation cost for zero benefit — importing
+            # fresh at the same cheap rate is strictly cheaper than
+            # cycling stored charge to avoid paying that exact same rate.
+            # PV still serves load first regardless (pv_to_load is
+            # untouched) — this only blocks the battery's own discharge.
+            prob += batt_to_load[i] == 0
 
         # On-peak reserve: don't let this slot's export/self-consumption
         # eat into the SoC the rest of the current peak stretch needs to

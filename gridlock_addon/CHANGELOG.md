@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.2.2
+- **Fix: battery cycling for load during genuinely cheap/off-peak
+  slots.** With a fully-charged battery and nothing better to do with
+  the charge, the LP still drained it to serve load during cheap
+  slots — because battery self-consumption only costs the degradation
+  rate in the objective (e.g. 5p/kWh), and that's often *less* than a
+  genuinely cheap import rate (e.g. 10p), making the LP "prefer"
+  cycling stored charge to "save" a few pence that were never really
+  saved: that charge came from the grid at this same cheap rate a slot
+  or two earlier (or gets topped up at it again shortly), so routing
+  load through the battery instead of importing it directly is a real
+  net loss (round-trip efficiency + degradation) for zero benefit. The
+  old heuristic had this exact rule ("leave the battery alone and
+  import instead" once already in a cheap slot); the LP rewrite dropped
+  it. Off-peak load (whenever the battery isn't also charging that
+  slot) now comes straight from grid or PV, never the battery.
+
 ## 3.2.1
 - **New "Battery kWh" plan table column.** The only way to see how much
   battery a slot actually used was to subtract its SoC from the row
