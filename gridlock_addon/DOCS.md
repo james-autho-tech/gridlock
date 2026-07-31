@@ -1,5 +1,7 @@
 # GridLock add-on — setup
 
+## First start
+
 On first start the add-on writes a template config to its persistent
 storage folder, `/addon_configs/gridlock/` (visible over Samba / the
 File editor / Studio Code Server add-ons):
@@ -34,3 +36,97 @@ Also copy `ha_support.yaml` (from the main repo) to
 `/config/packages/gridlock.yaml` and restart Home Assistant — this
 add-on only runs the planning engine, the HA-side helpers/watchdog
 automation still need to live in HA core.
+
+## The dashboard
+
+Open via "Open Web UI" on the add-on's Info page, or the sidebar
+shortcut once enabled. Six tabs:
+
+- **Overview** — live KPIs (current SoC, today's net cost, solar so
+  far), the power-flow diagram, and a banner if the inverter is
+  currently in Bypass (grid-passthrough — the genuine hardware
+  fallback, not a normal state).
+- **Plan** — the full 48h slot-by-slot table shown in this add-on's
+  screenshots: import/export rate, PV/load/grid/charge/battery kWh,
+  the action taken (Charge / Export / ECO), SoC, and running cost —
+  plus the natural-language summary above it explaining the plan in
+  one or two sentences.
+- **Forecast** — three synced charts: SoC trace, solar forecast vs.
+  actual, and learned load profile.
+- **Tariffs** — how today's plan compares against other Octopus
+  products (see `compare_tariffs` in `apps.yaml`) at the rates you
+  actually saw today.
+- **Entities** — every entity GridLock discovered or was told about,
+  grouped by category, with current state — the same data as the
+  sidebar's Discovered Entities card, in more detail.
+- **Log** — the decision log: every action change and why, oldest at
+  the bottom, newest at the top (capped to the most recent ~200
+  entries).
+
+## Modes (`battery_risk_profile` in `apps.yaml`)
+
+The planning engine is a linear program, not a greedy heuristic — it
+solves the whole 48h horizon jointly, so mode changes how it *values*
+a slot, not a separate code path per mode:
+
+| Mode | Behaviour |
+|---|---|
+| `eco` | The battery never sells — only direct solar surplus can export once the battery is full. Optimises purely for minimal import cost. |
+| `balanced` (default) | Exports are allowed, but only where `export_rate − import_rate/efficiency` actually clears the degradation cost below — i.e. it only sells when doing so is a genuine net gain, not just non-negative. |
+| `max_profit` | Degradation cost forced to 0. Sells any margin above round-trip cost, keeping only enough SoC for forecasted load until the next off-peak slot. |
+
+`battery_degradation_cost` (£/kWh) overrides the mode's default
+degradation figure if set — check the Forecast tab's battery health
+panel for the SoH sensors this is meant to weigh against.
+
+## Other config knobs worth knowing about (`apps.yaml`)
+
+- `reserve_margin_pct` (default `0.15`) — extra slack the on-peak
+  reserve holds back on top of the bare forecasted load for the rest
+  of a peak stretch. The plan re-solves every 5 minutes and can't
+  claw back charge an earlier slot already sold — raise this if
+  you're seeing more Bypass than expected; lower it toward 0 to
+  squeeze closer to the theoretical maximum if your load is very
+  predictable.
+- `target_daily_net_cost` (balanced mode only, unset by default) —
+  once today's cumulative real grid cost drops to/below this figure,
+  stop exporting for the rest of today.
+- `floor_soc` (default `0`) — reserve the plan won't discharge below,
+  even if profitable.
+- `min_export_pct` (default `5.0`) — smallest export block worth
+  bothering with, as a % of battery capacity; a whole contiguous block
+  below this gets dropped back to self-consumption, but a genuinely
+  good window is never split up to satisfy it.
+- `cheap_rate_threshold` (default `0.10`) — import rate at/below which
+  a slot counts as "off-peak", both for pacing self-consumption toward
+  the next cheap window and as the hard floor for grid-charging.
+- `storm_watch_entity` / `storm_watch_target_soc` — MeteoAlarm-driven
+  override: charge to target and hold, no exports, regardless of
+  price, while an alert matching the configured severity is active.
+- `ssen_postcode` — enables SSEN Power Track outage polling directly
+  (no HA sensor needed); leave commented out to disable it.
+
+See the fully-commented `apps.yaml.example` shipped in the add-on
+image for every option, including hardware entity overrides and the
+tariff-comparison block.
+
+## Troubleshooting
+
+- **Dashboard looks frozen / plan hasn't updated in a while** — check
+  the add-on's own Supervisor log (Info page → Log tab) for
+  `Excessive time spent in callback` warnings. AppDaemon runs this app
+  on a single worker thread; if a tick genuinely hangs, nothing after
+  it (including the next scheduled tick) can run until it clears.
+  Restarting the add-on recovers immediately; if this happens
+  repeatedly, it's worth reporting with the log excerpt.
+- **A field in Discovered Entities has a red dot** — either the
+  integration it depends on isn't set up yet, or discovery guessed
+  wrong. Set the matching `*_override` key on this add-on's
+  Configuration tab, or the equivalent key in `apps.yaml` directly.
+- **Plan shows "⚠️ Bypass"** — this means the battery is genuinely at
+  its floor with grid import needed to cover load that slot, not just
+  that SoC happens to be low — a slot that fully covers load from the
+  battery with zero grid import is the reserve mechanism working as
+  intended, not a Bypass condition.
+- **A `!secret` tag in `apps.yaml` breaks everything** — see the note
+  under First start above; use literal values here instead.

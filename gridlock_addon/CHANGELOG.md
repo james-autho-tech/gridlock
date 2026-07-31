@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.2.6
+- **Docs only.** Expanded `README.md` (the add-on store's Info-tab
+  intro) and `DOCS.md` (the Documentation tab) — feature list and
+  hardware/account requirements, a tour of the dashboard's six tabs, a
+  table of the three optimiser modes, a reference for the config knobs
+  most worth knowing about (`reserve_margin_pct`, `target_daily_net_cost`,
+  `floor_soc`, `min_export_pct`, `cheap_rate_threshold`, Storm Watch,
+  SSEN), and a troubleshooting section (frozen dashboard/stuck tick,
+  red-dot discovery, the real meaning of a Bypass row, the `!secret`
+  gotcha). No code changed.
+
 ## 3.2.5
 - **Fix: the app could hang for hours with no error logged, freezing
   the plan and every dashboard reading it.** Confirmed in production —
