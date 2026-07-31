@@ -1,5 +1,28 @@
 # Changelog
 
+## 3.2.5
+- **Fix: the app could hang for hours with no error logged, freezing
+  the plan and every dashboard reading it.** Confirmed in production —
+  the add-on's own log showed a single AppDaemon worker thread stall
+  for over three hours mid-tick, then resume, with zero exception or
+  traceback anywhere. Root cause: 3.2.3's PV-routing-priority fix added
+  one binary "battery full" variable per slot, turning the solve from a
+  pure LP into a MILP — and neither solver backend (GLPK, CBC) had a
+  time limit configured, so a hard branch-and-bound instance on real
+  data could in principle run indefinitely, blocking the app's single
+  worker thread (and therefore every subsequent scheduled tick) until it
+  eventually finished. Two changes: (1) both solvers now get a hard
+  8-second `timeLimit` — if a solve can't finish in time it returns
+  whatever it has (or nothing), which surfaces as `PlanResult.infeasible`
+  and falls back to safe self-consumption, the same existing safety net
+  already used for a genuinely-unsolvable reserve; (2) the PV-routing
+  gate's Big-M coefficient is now `pv[i]` itself (the tightest valid
+  bound — `pv_to_grid` can never exceed that slot's own PV anyway)
+  instead of an arbitrary `1e5` constant, which was needlessly weakening
+  the MILP's relaxation at every branch-and-bound node and is the likely
+  reason it was slow to solve at all. A 96-slot solve on realistic data
+  now completes in well under a second.
+
 ## 3.2.4
 - **Fix: plan rows showing "⚠️ Bypass" when the battery fully covered
   load with zero grid import.** The plan table relabeled any ECO slot

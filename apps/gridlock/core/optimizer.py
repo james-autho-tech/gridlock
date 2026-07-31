@@ -52,12 +52,23 @@ def _val(var, default=0.0):
 # than planned would be strictly worse for a live battery controller.
 RESERVE_PENALTY = 1000.0
 
-# Big-M coefficient unlocking pv_to_grid once its slot's battery_full
-# binary is 1 — see the PV-routing-priority constraint in _solve_lp.
-# Only needs to dominate a realistic per-slot PV export (a few kW over a
-# half-hour slot), not the objective's price coefficients, so a fixed
-# constant unrelated to battery size or tariff rates is fine.
-PV_ROUTING_BIG_M = 1.0e5
+# Hard wall-clock cap (seconds) on a single solver invocation. solve()
+# can call _solve_lp up to 3 times a tick (initial pass + two correction
+# passes), so this bounds worst-case tick time to a multiple of this,
+# never unbounded. Non-negotiable for a live battery controller: adding
+# the PV-routing-priority binary below (one per slot) turned this from
+# a pure LP into a MILP, and a MILP's branch-and-bound can — on some
+# inputs — run far longer than a continuous LP ever would. Confirmed in
+# production: with no time limit set, a solve on real data hung the
+# single AppDaemon worker thread for over three hours with no exception
+# or log output, silently freezing the whole app (tick() never
+# returned, so nothing after it — including the next scheduled tick —
+# could run). If the solver can't finish in time it returns whatever
+# incumbent it has (or none), which surfaces as PlanResult.infeasible
+# and falls back to safe self-consumption — exactly the existing
+# soft-reserve safety net, just also covering "ran out of time" and not
+# only "truly has no solution."
+SOLVER_TIME_LIMIT_SEC = 8
 
 
 @dataclass
@@ -85,8 +96,8 @@ def _solver():
     machines and the separate Debian-based AppDaemon add-on."""
     path = shutil.which("glpsol")
     if path:
-        return pulp.GLPK_CMD(path=path, msg=False)
-    return pulp.PULP_CBC_CMD(msg=False)
+        return pulp.GLPK_CMD(path=path, msg=False, timeLimit=SOLVER_TIME_LIMIT_SEC)
+    return pulp.PULP_CBC_CMD(msg=False, timeLimit=SOLVER_TIME_LIMIT_SEC)
 
 
 def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
@@ -158,9 +169,20 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
         # battery first — there's nowhere else for the surplus PV to go
         # (pv_to_load + pv_to_batt + pv_to_grid == pv, no "waste PV"
         # variable exists), so it's forced into pv_to_batt instead.
+        # Gate coefficient is pv itself, not an arbitrary large constant:
+        # pv_to_grid[i] can never exceed pv[i] anyway (the balance
+        # equation above already enforces that with all-nonnegative
+        # terms), so this is the tightest valid bound available, not
+        # just "big enough". An oversized Big-M here weakens the MILP's
+        # LP relaxation at every branch-and-bound node (the binary can
+        # sit fractional far longer before the solver is forced to
+        # resolve it) — a well-known cause of MILP blow-up, and the
+        # likely reason a fixed 1e5 constant took hours to solve on real
+        # data. Using pv directly removes that risk without changing
+        # what's actually allowed.
         battery_full = pulp.LpVariable(f"batt_full_{i}", cat="Binary")
         prob += soc[i] >= (cap - full_tol_kwh) * battery_full
-        prob += pv_to_grid[i] <= PV_ROUTING_BIG_M * battery_full
+        prob += pv_to_grid[i] <= pv * battery_full
 
         prev = soc0_kwh if i == 0 else soc[i - 1]
         prob += soc[i] == prev + eff * (charge[i] + pv_to_batt[i]) \
