@@ -1,5 +1,26 @@
 # Changelog
 
+## 3.3.1
+- **Fix: a genuine solver timeout could surface as "Engine error"
+  instead of the intended safe reserve-infeasible fallback.** 3.2.5
+  added a hard time limit to both solver backends specifically so a
+  hard MILP instance could never hang the app indefinitely — assumed a
+  timeout would always come back as a plain non-optimal status. It
+  doesn't, for GLPK specifically: confirmed directly against a real
+  glpsol binary that when `--tmlim` cuts the search off *before* it
+  ever finds a first feasible solution (as opposed to finding one and
+  then running out of time), glpsol exits non-zero and PuLP raises
+  `PulpSolverError` rather than reporting a status — which escaped
+  `_solve_lp` entirely and hit the much broader "Engine error" handler
+  instead, exactly as seen live in production right after 3.2.5 shipped
+  (the failsafe still caught it and fell back to safe self-consumption
+  correctly — this wasn't a safety issue, just the wrong path with a
+  noisier error). `_solve_lp` now catches this and reports
+  `infeasible=True` like any other non-optimal status. Also raised the
+  solver time limit from 8s to 15s, since the real instance that
+  triggered this was genuinely solvable, just slower than 8s allowed —
+  still well within a single tick's budget even at 3 solves worst case.
+
 ## 3.3.0
 - **The fail-safe watchdog (HA core automation + helpers) is now
   installed and kept up to date automatically** — no more manually

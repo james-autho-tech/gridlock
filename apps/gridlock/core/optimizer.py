@@ -67,8 +67,18 @@ RESERVE_PENALTY = 1000.0
 # incumbent it has (or none), which surfaces as PlanResult.infeasible
 # and falls back to safe self-consumption — exactly the existing
 # soft-reserve safety net, just also covering "ran out of time" and not
-# only "truly has no solution."
-SOLVER_TIME_LIMIT_SEC = 8
+# only "truly has no solution." 15s (not the original 8s) after a
+# second real incident: on real production data an 8s limit was too
+# tight for a genuinely-solvable-but-slower instance, and GLPK's own
+# wrapper doesn't fail gracefully when --tmlim is hit before any
+# feasible solution is found — it raises PulpSolverError rather than
+# reporting a plain non-optimal status (see the try/except around
+# prob.solve below). That's now handled correctly either way, but
+# giving harder instances more headroom means falling back to safe
+# self-consumption less often for cases that were never truly
+# unsolvable, just slower than 8s. Worst case (3 solves a tick) is
+# still well within AppDaemon's 5-minute tick interval.
+SOLVER_TIME_LIMIT_SEC = 15
 
 
 @dataclass
@@ -246,9 +256,24 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
 
     prob += (pulp.lpSum(grid_cost_terms) + pulp.lpSum(degradation_terms)
              + RESERVE_PENALTY * pulp.lpSum(reserve_penalty_terms))
-    prob.solve(_solver())
-
-    infeasible = pulp.LpStatus[prob.status] != "Optimal"
+    try:
+        prob.solve(_solver())
+        infeasible = pulp.LpStatus[prob.status] != "Optimal"
+    except pulp.PulpSolverError:
+        # GLPK's own wrapper doesn't always fail gracefully on a timeout
+        # the way CBC does: confirmed directly against a real glpsol
+        # binary that when --tmlim cuts the search off *before* it ever
+        # reaches a first feasible/optimal solution (as opposed to
+        # finding one and then running out of time), glpsol exits
+        # non-zero and PuLP raises this instead of just reporting a
+        # non-optimal status — which would otherwise escape _solve_lp
+        # entirely and hit tick()'s much broader "Engine error" handler
+        # instead of the safe-fallback path this is actually meant to
+        # take. Every variable is still None here (nothing was ever
+        # solved) — _val() already treats that the same as any other
+        # missing value, so the rest of this function works unchanged;
+        # only the status needs forcing to infeasible.
+        infeasible = True
 
     out_slots = []
     trace, cost_trace = [], []

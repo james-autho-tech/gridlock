@@ -201,6 +201,37 @@ def test_reserve_shortfall_degrades_gracefully_instead_of_infeasible():
         prev = result.trace[i]
 
 
+def test_glpk_solver_error_on_timeout_is_treated_as_infeasible_not_raised():
+    """Confirmed directly against a real glpsol binary: GLPK's own PuLP
+    wrapper doesn't always fail gracefully on a timeout the way CBC
+    does. When --tmlim cuts the search off *before* it ever reaches a
+    first feasible/optimal solution (as opposed to finding one and then
+    running out of time), glpsol exits non-zero and PuLP raises
+    PulpSolverError instead of just reporting a non-optimal status —
+    which, uncaught, escaped _solve_lp entirely and hit gridlock.py's
+    much broader "Engine error" handler instead of the safe,
+    reserve-infeasible fallback this is actually meant to take (seen
+    live in production immediately after the solver time limit was
+    first added). _solve_lp must catch this and report infeasible=True,
+    the same as any other non-optimal status — not raise."""
+    class _RaisingSolver:
+        def actualSolve(self, lp):
+            raise optimizer.pulp.PulpSolverError("simulated glpsol timeout failure")
+
+    rows = [{"imp": CHEAP, "exp": 0.05, "load": 1.0} for _ in range(4)]
+    slots = make_slots(rows, CHEAP)
+    cfg = base_cfg(battery_kwh=10.0, mode=Mode.BALANCED)
+
+    original_solver = optimizer._solver
+    optimizer._solver = lambda: _RaisingSolver()
+    try:
+        result = optimizer.solve(slots, soc0_pct=50.0, cfg=cfg)
+    finally:
+        optimizer._solver = original_solver
+
+    assert result.infeasible
+
+
 def test_battery_kwh_is_anchored_to_its_own_slot_not_a_soc_delta():
     """Real-world confusion: reconstructing "how much battery did this
     slot use" from (this row's SoC - previous row's SoC) requires
