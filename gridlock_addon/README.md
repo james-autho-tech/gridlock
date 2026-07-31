@@ -29,6 +29,11 @@ against each other before driving the inverter directly.
 - **Failsafe** — falls back to safe self-consumption if Home Assistant
   or the Solcast link goes stale, or if the solver can't produce an
   answer in time, rather than acting on stale or partial data.
+- **Independent watchdog** — a second, HA-core-side safety net that
+  reverts the inverter to safe self-consumption if GridLock's own
+  heartbeat goes stale, so a hung/crashed AppDaemon process can't leave
+  the inverter stuck mid-command. Installed and kept up to date
+  automatically, no manual setup.
 
 ## Requirements
 

@@ -1,5 +1,29 @@
 # Changelog
 
+## 3.3.0
+- **The fail-safe watchdog (HA core automation + helpers) is now
+  installed and kept up to date automatically** — no more manually
+  copying `ha_support.yaml` into `/config/packages/` and restarting
+  Home Assistant yourself. On every start the add-on writes/refreshes
+  `packages/gridlock.yaml` directly into HA core's own config
+  directory and asks HA to reload it live (`automation.reload`,
+  `input_boolean.reload`, `input_select.reload`), so a brand-new or
+  updated watchdog picks up without a full HA restart in the common
+  case.
+  - Needs a new permission: `homeassistant_config:rw` (read/write
+    access to HA's own `/config`, not just this add-on's own
+    persistent storage). Supervisor will prompt for approval on
+    update; if it's declined or not yet granted, the add-on logs a
+    clear warning and skips the sync rather than failing to start —
+    the old manual copy-and-restart flow still works as a fallback.
+  - Why this matters: this is the safety net specifically meant to
+    survive AppDaemon itself hanging (see 3.2.5) — it's independent of
+    the AppDaemon process by design, so it can't be something
+    AppDaemon has to remember to set up for itself either. Making it
+    automatic closes the gap where it could be silently missing (or
+    stale) on a real, already-deployed install without anyone
+    noticing until an incident needed it.
+
 ## 3.2.6
 - **Docs only.** Expanded `README.md` (the add-on store's Info-tab
   intro) and `DOCS.md` (the Documentation tab) — feature list and

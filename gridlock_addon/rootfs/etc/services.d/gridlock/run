@@ -55,6 +55,60 @@ cp /opt/appdaemon/apps/gridlock/gridlock.py "${CONFIG_DIR}/apps/gridlock/gridloc
 rm -rf "${CONFIG_DIR}/apps/gridlock/core"
 cp -r /opt/appdaemon/apps/gridlock/core "${CONFIG_DIR}/apps/gridlock/core"
 
+# The fail-safe watchdog automation (+ the enable/mode-override
+# helpers) has to live in HA core, not AppDaemon — the whole point is
+# surviving AppDaemon itself hanging or dying, so it can't depend on
+# anything AppDaemon-side to install or apply it. Previously this
+# required the user to manually copy ha_support.yaml into
+# /config/packages/ and restart HA core themselves — easy to skip
+# entirely, or to silently drift out of date against what a newer
+# add-on version ships. Write/refresh it automatically instead, same
+# "shipped file, reset from the image every start" treatment already
+# used for gridlock.py/core above (not something to hand-edit — it
+# takes no user-specific values). Needs the homeassistant_config:rw
+# map entry in config.yaml, mounted here at /homeassistant_config.
+HA_CONFIG_DIR=/homeassistant_config
+if [ -d "$HA_CONFIG_DIR" ]; then
+    mkdir -p "${HA_CONFIG_DIR}/packages"
+    HA_PKG="${HA_CONFIG_DIR}/packages/gridlock.yaml"
+    OLD_SUM="$(sha256sum "$HA_PKG" 2>/dev/null | cut -d' ' -f1)" || OLD_SUM=""
+    cp /opt/appdaemon/apps/gridlock/ha_support.yaml "$HA_PKG"
+    NEW_SUM="$(sha256sum "$HA_PKG" 2>/dev/null | cut -d' ' -f1)" || NEW_SUM=""
+    if [ "$OLD_SUM" != "$NEW_SUM" ]; then
+        bashio::log.info "packages/gridlock.yaml (watchdog + helpers) installed/updated — reloading HA to apply it."
+        # Best-effort: these three reload services re-parse the whole
+        # merged configuration.yaml tree (packages included), so a
+        # brand-new automation/helper picks up without a full HA
+        # restart in the common case. If HA core isn't up yet, or a
+        # reload call fails for some other reason, this is silently
+        # best-effort — worst case the change applies on HA's next
+        # normal restart instead, same as the old manual-copy flow,
+        # just without the copying.
+        python3 - <<'PYEOF' || true
+import json
+import os
+import urllib.error
+import urllib.request
+
+token = os.environ["SUPERVISOR_TOKEN"]
+for domain, service in (("automation", "reload"), ("input_boolean", "reload"),
+                         ("input_select", "reload")):
+    req = urllib.request.Request(
+        f"http://supervisor/core/api/services/{domain}/{service}",
+        method="POST", data=b"{}",
+        headers={"Authorization": f"Bearer {token}",
+                 "Content-Type": "application/json"})
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        print(f"Reloaded {domain}.{service}")
+    except (urllib.error.URLError, TimeoutError) as exc:
+        print(f"Could not reload {domain}.{service}: {exc}")
+PYEOF
+    fi
+else
+    bashio::log.warning "HA config directory not mounted (homeassistant_config:rw) — the fail-safe watchdog automation was not installed. Re-approve this add-on's permissions (Info tab) and restart it, or set it up manually per DOCS.md."
+fi
+
 # Entity overrides from the add-on's Configuration tab — written as a
 # small JSON file gridlock.py reads as an extra fallback source,
 # rather than ever touching apps.yaml. Passed to python via env vars

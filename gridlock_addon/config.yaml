@@ -1,5 +1,5 @@
 name: GridLock
-version: "3.2.6"
+version: "3.3.0"
 slug: gridlock
 description: Battery optimisation engine for Sigenergy + Octopus IOG (bundled AppDaemon)
 url: https://github.com/james-autho-tech/gridlock
@@ -22,6 +22,13 @@ panel_title: GridLock
 map:
   - addon_config:rw
   - ssl
+  # Read/write access to HA core's own /config directory (mounted at
+  # /homeassistant_config inside this container) — needed so the
+  # add-on can write its own packages/gridlock.yaml (the fail-safe
+  # watchdog automation + helpers) automatically on every start,
+  # rather than requiring the user to copy it in by hand and restart
+  # HA core themselves. See the "run" script's sync_ha_support step.
+  - homeassistant_config:rw
 # Optional entity overrides for when auto-discovery picks the wrong
 # thing (check the web UI's "Discovered entities" panel first — these
 # only need setting if something there is wrong or missing). Leave

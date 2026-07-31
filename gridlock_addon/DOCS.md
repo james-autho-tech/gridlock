@@ -32,10 +32,28 @@ hand-edit it in `addon_config`, it won't persist across restarts.
 Ship code changes through the add-on itself (bump `config.yaml`'s
 `version`, tag a release) rather than editing the running container.
 
-Also copy `ha_support.yaml` (from the main repo) to
-`/config/packages/gridlock.yaml` and restart Home Assistant — this
-add-on only runs the planning engine, the HA-side helpers/watchdog
-automation still need to live in HA core.
+## The fail-safe watchdog (HA core, not AppDaemon)
+
+The watchdog automation that reverts the inverter to safe
+self-consumption if GridLock's heartbeat goes stale has to live in HA
+core, not AppDaemon — the whole point is surviving AppDaemon itself
+hanging or dying, so it can't depend on AppDaemon to install or run
+it. **The add-on installs and keeps this up to date automatically** —
+on every start it writes `packages/gridlock.yaml` (the watchdog
+automation plus the enable/mode-override helpers) directly into HA
+core's own config directory and asks HA to reload it live, no manual
+copying or restart required in the common case.
+
+This needs one extra permission granted to the add-on
+(`homeassistant_config:rw`, read/write access to HA's own `/config`).
+Supervisor will prompt you to approve it the first time you update to
+a version that added it — if you don't see the watchdog automation
+under Settings → Automations after that, check the add-on's own log
+for a `homeassistant_config:rw` warning: if the permission wasn't
+granted, the sync is skipped entirely and a one-time manual copy (of
+`ha_support.yaml` from the main repo, to
+`/config/packages/gridlock.yaml`, followed by restarting HA core) is
+the fallback.
 
 ## The dashboard
 
