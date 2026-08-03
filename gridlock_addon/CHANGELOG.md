@@ -1,5 +1,23 @@
 # Changelog
 
+## 3.3.2
+- **Balanced mode's default degradation cost raised from 5p to
+  15p/kWh** — the Risk Profile Comparison panel showed balanced
+  tracking max_profit within ~6% (£48.22 vs £51.47 forecasted), nowhere
+  near eco. Checked directly against a real day's plan (3.5p cheap
+  import, mostly 10-24p export): every single export slot in it
+  cleared a 5p degradation cost, so balanced was in practice selling
+  from the battery almost every day regardless of how good the window
+  actually was. Verified before picking the new number — doubling to
+  10p (the obvious first guess) only suppresses the weakest ~12 of 51
+  real slots; the 15-24p range that makes up most of what was actually
+  happening stays comfortably profitable even at 10p. 15p was chosen
+  as the number that leaves only the genuinely best few slots per day
+  (20-24p+) still clearing it, cutting out the routine daily cycling.
+  This is a real trade-off (less forecasted profit for less wear), not
+  a free improvement — override with `battery_degradation_cost` in
+  `apps.yaml` if you want a different point on that trade-off.
+
 ## 3.3.1
 - **Fix: a genuine solver timeout could surface as "Engine error"
   instead of the intended safe reserve-infeasible fallback.** 3.2.5

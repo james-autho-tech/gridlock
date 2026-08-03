@@ -29,15 +29,30 @@ class Mode(str, Enum):
 
 # Default £/kWh degradation cost per mode — the optimiser's only real
 # lever against cycling the battery for wafer-thin arbitrage margins.
-# eco needs a bigger price spread before it'll discharge at all (shallower,
-# less frequent cycling); balanced sits in the spec's 3.5-5.0p range;
-# max_profit always overrides this to 0 regardless of what's configured
-# here (see optimizer.solve). Not a real degradation-vs-cycle-depth model
-# — there's no solid Sigenergy SoH-vs-cycling data to build one from —
-# just a reasoned, documented lever.
+# eco needs a bigger price spread before it'll discharge at all
+# (shallower, less frequent cycling); max_profit always overrides this
+# to 0 regardless of what's configured here (see optimizer.solve). Not
+# a real degradation-vs-cycle-depth model — there's no solid Sigenergy
+# SoH-vs-cycling data to build one from — just a reasoned, documented
+# lever.
+#
+# balanced was originally 0.05 (the spec's 3.5-5.0p range) but that
+# turned out to be far too low against real Octopus Agile/IOG spreads:
+# checked directly against a real day's plan (3.5p cheap import, mostly
+# 10-24p export) and every single export slot in it cleared a 5p
+# degradation cost — balanced was, in practice, behaving almost
+# identically to max_profit (forecast comparison showed it within ~6%
+# of max_profit's total, nowhere near eco's). Raised to 0.15 — against
+# that same real data, only the genuinely best few slots per day (the
+# 20-24p range) still clear that; the routine 10-16p "sells nearly
+# every day" pattern doesn't. This is a real trade-off (less
+# forecasted profit, less battery wear), chosen deliberately over
+# "double it" (0.10), which checked out to barely change behaviour —
+# most of the real export slots above were still well above that
+# breakeven.
 RISK_PROFILES = {
     Mode.ECO: 0.09,
-    Mode.BALANCED: 0.05,
+    Mode.BALANCED: 0.15,
     Mode.MAX_PROFIT: 0.01,
 }
 
