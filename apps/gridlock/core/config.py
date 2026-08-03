@@ -27,14 +27,17 @@ class Mode(str, Enum):
             return cls(default)
 
 
-# Default £/kWh degradation cost per mode — the optimiser's only real
-# lever against cycling the battery for wafer-thin arbitrage margins.
-# eco needs a bigger price spread before it'll discharge at all
-# (shallower, less frequent cycling); max_profit always overrides this
-# to 0 regardless of what's configured here (see optimizer.solve). Not
-# a real degradation-vs-cycle-depth model — there's no solid Sigenergy
+# Default £/kWh degradation cost per mode, applied to battery
+# self-consumption (batt_to_load — using stored charge for your own
+# load instead of importing). The optimiser's only real lever against
+# cycling the battery for wafer-thin savings. Not a real
+# degradation-vs-cycle-depth model — there's no solid Sigenergy
 # SoH-vs-cycling data to build one from — just a reasoned, documented
-# lever.
+# lever. max_profit's self-consumption cost is 0 deliberately (no
+# hesitation to use the battery for your own load, at any spread) —
+# unlike degradation on the *export* side (see EXPORT_DEGRADATION_
+# OVERRIDES below), this isn't hard-forced in optimizer.py, just
+# defaulted to 0 here, so an explicit override still applies if set.
 #
 # balanced was originally 0.05 (the spec's 3.5-5.0p range) but that
 # turned out to be far too low against real Octopus Agile/IOG spreads:
@@ -53,7 +56,33 @@ class Mode(str, Enum):
 RISK_PROFILES = {
     Mode.ECO: 0.09,
     Mode.BALANCED: 0.15,
-    Mode.MAX_PROFIT: 0.01,
+    Mode.MAX_PROFIT: 0.0,
+}
+
+# Separate £/kWh cost specifically for battery *export* (selling to the
+# grid), applied via SiteConfig.export_degradation — deliberately not
+# the same number as RISK_PROFILES above. Export used to be handled as
+# a special case per mode (eco hard-blocked it outright regardless of
+# price; max_profit hard-forced its degradation to 0 regardless of what
+# was configured) rather than a genuine price-gated decision — both
+# replaced by this, so every mode now uses the same soft mechanism, just
+# at a different bar:
+#   eco (0.25) — the battery can still export, but only on a genuinely
+#     exceptional day; at typical Octopus Agile/IOG spreads this bar
+#     sits above nearly everything, so in practice it stays close to
+#     "never", just without hard-blocking the rare real outlier.
+#   max_profit (0.03) — "go ham", but with a small real floor rather
+#     than the old hard-0 (which sold at literally any positive margin,
+#     including a fraction of a penny) — a tiny buffer against
+#     pointless micro-cycling for near-zero gain, not a meaningful cap
+#     on real arbitrage.
+#   balanced isn't listed here — it falls through to the same value as
+#     self-consumption (RISK_PROFILES[BALANCED]), unchanged from before
+#     this split (already tuned above; not something this change should
+#     silently re-diverge).
+EXPORT_DEGRADATION_OVERRIDES = {
+    Mode.ECO: 0.25,
+    Mode.MAX_PROFIT: 0.03,
 }
 
 SLOT_MIN = 30
@@ -87,6 +116,7 @@ class SiteConfig:
 
     mode: Mode = Mode.BALANCED
     degradation: float = None  # None -> RISK_PROFILES[mode]
+    export_degradation: float = None  # None -> EXPORT_DEGRADATION_OVERRIDES[mode], or degradation if mode isn't in it
     target_daily_net_cost: float = None  # None disables the balanced-mode cutoff
 
     storm_target_soc: float = 100.0
@@ -111,3 +141,5 @@ class SiteConfig:
             self.export_rate_kw = self.discharge_kw
         if self.degradation is None:
             self.degradation = RISK_PROFILES[self.mode]
+        if self.export_degradation is None:
+            self.export_degradation = EXPORT_DEGRADATION_OVERRIDES.get(self.mode, self.degradation)

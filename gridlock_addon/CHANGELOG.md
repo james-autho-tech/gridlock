@@ -1,5 +1,39 @@
 # Changelog
 
+## 3.4.0
+- **Self-consumption and export now have separate £/kWh cost
+  thresholds per mode**, replacing two special cases that made eco and
+  max_profit harder to reason about (and, in eco's case, impossible to
+  tune at all):
+  - `eco` used to hard-block battery export outright (`export_ub`
+    forced to 0 regardless of price) — replaced with a soft, much
+    higher export-specific threshold (0.25 default). At typical
+    Octopus Agile/IOG spreads this still sits above nearly everything,
+    so day-to-day behaviour is effectively unchanged, but a genuinely
+    exceptional price can now clear it instead of being hard-blocked
+    no matter how good it gets. Self-consumption (using the battery
+    for your own load) is untouched — same 0.09 default as before.
+  - `max_profit` used to hard-force its degradation cost to 0
+    regardless of what was configured, self-consumption and export
+    alike — sold at literally any positive margin, including a
+    fraction of a penny, and silently ignored an explicit override.
+    Self-consumption cost is now a clean, respected 0 (unchanged
+    behaviour); export gets a small real floor instead (0.03 default)
+    — "go ham", but with a tiny buffer against pointless micro-cycling
+    rather than zero threshold at all.
+  - `balanced` is unchanged — same single 0.15 threshold (from 3.3.2)
+    for both self-consumption and export.
+  - New optional `export_degradation_cost` in `apps.yaml`, alongside
+    the existing `battery_degradation_cost` (which now applies to
+    self-consumption specifically).
+  - Fixed a bug this change would otherwise have introduced in the
+    Risk Profile Comparison panel: its per-mode forecast used
+    `dataclasses.replace()` to swap in each mode's degradation cost for
+    comparison, but only ever set `degradation`, not
+    `export_degradation` — every comparison profile would have
+    silently inherited whichever mode is *currently* live's export
+    threshold instead of its own. Fixed before it could ship broken.
+
 ## 3.3.2
 - **Balanced mode's default degradation cost raised from 5p to
   15p/kWh** — the Risk Profile Comparison panel showed balanced

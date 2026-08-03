@@ -55,22 +55,36 @@ gridlock:
   typical_daily_house_kwh: 12.0
   inverter_efficiency: 0.90
   # Three real operational modes for the LP optimiser (core/optimizer.py),
-  # not just a degradation-cost scalar under one shared behaviour:
-  #   eco         — battery never exports (only direct solar surplus can);
-  #                 optimises purely for minimal import cost.
-  #   balanced     — exports allowed, but only slots where the LP finds
-  #                 export_rate - import_rate/efficiency actually clears
-  #                 the degradation cost below get sold; the default.
-  #   max_profit    — degradation cost forced to 0; sells any margin above
-  #                 round-trip cost, preserving only enough SoC for
-  #                 forecasted load until the next off-peak slot.
+  # not just a degradation-cost scalar under one shared behaviour. Each
+  # mode has TWO separate £/kWh cost thresholds — one for using the
+  # battery for your own load (self-consumption), one specifically for
+  # selling it to the grid (export) — since "worth it to save on your
+  # own bill" and "worth it to sell" are genuinely different bars:
+  #   eco         — normal self-consumption threshold (0.09 default),
+  #                 but a deliberately very high export threshold
+  #                 (0.25 default) — the battery *can* still export on
+  #                 a genuinely exceptional day, but at typical Agile/
+  #                 IOG spreads that bar sits above nearly everything,
+  #                 so in practice it stays close to "never" without
+  #                 hard-blocking a real outlier.
+  #   balanced     — exports allowed wherever export_rate - import_rate/
+  #                 efficiency clears the degradation cost below
+  #                 (0.15 default, same number for both self-consumption
+  #                 and export); the default mode.
+  #   max_profit    — near-zero self-consumption cost (no hesitation to
+  #                 use the battery for your own load) but a small real
+  #                 export floor (0.03 default) rather than selling at
+  #                 literally any positive margin — preserving only
+  #                 enough SoC for forecasted load until the next
+  #                 off-peak slot.
   # Check the Forecast tab's Battery health panel for the SoH sensors
-  # that motivated the degradation-cost lever, and its current effective
-  # £/kWh threshold under whichever mode you pick. Not a real
+  # that motivated the degradation-cost lever, and the current effective
+  # £/kWh thresholds under whichever mode you pick. Not a real
   # degradation-vs-cycling model (no solid data to build one from), just
   # a sensible lever to have.
   battery_risk_profile: balanced      # eco | balanced | max_profit
-  # battery_degradation_cost: 0.03    # £/kWh — overrides the mode's default above if set
+  # battery_degradation_cost: 0.03    # £/kWh (self-consumption) — overrides the mode's default above if set
+  # export_degradation_cost: 0.20     # £/kWh (export specifically) — overrides the mode's export default if set
   # Optional (balanced mode only): once today's cumulative real grid
   # cost drops to/below this £ figure, stop exporting for the rest of
   # today (tomorrow gets its own fresh budget). Unset by default — the

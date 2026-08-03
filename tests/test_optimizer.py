@@ -57,15 +57,34 @@ def test_on_peak_import_zero_when_reserve_feasible():
                 f"slot {i} imported from the grid to serve load on an on-peak slot"
 
 
-def test_eco_mode_never_exports_from_battery():
-    rows = [{"imp": CHEAP, "exp": 0.05, "load": 1.0, "pv": 0.0}] + \
-        [{"imp": 0.10, "exp": 0.60, "load": 0.2, "pv": 0.0} for _ in range(4)]
-    slots = make_slots(rows, CHEAP)
-    cfg = base_cfg(mode=Mode.ECO, degradation=0.09)
-    result = optimizer.solve(slots, soc0_pct=100.0, cfg=cfg)
-    assert not result.infeasible
-    for s in result.slots:
-        assert s["export"] == 0.0
+def test_eco_only_exports_on_a_genuinely_exceptional_margin():
+    """eco used to hard-block battery export at any price (export_ub
+    forced to 0 regardless of cfg) — replaced by a soft, much higher
+    export-specific degradation cost (EXPORT_DEGRADATION_OVERRIDES),
+    so a normal good export slot still doesn't sell (same as before in
+    practice), but a genuinely exceptional one now can, rather than
+    being hard-blocked no matter how good the price gets."""
+    eff = 0.9
+    export_degradation = 0.25
+    # profit = 0.30*0.9 - 0.10/0.9 - 0.25 = 0.27 - 0.111 - 0.25 = -0.091
+    ordinary = [{"imp": CHEAP, "exp": 0.05, "load": 0.0}] + \
+        [{"imp": 0.30, "exp": 0.30, "load": 0.0} for _ in range(2)]
+    # profit = 0.60*0.9 - 0.10/0.9 - 0.25 = 0.54 - 0.111 - 0.25 = +0.179
+    exceptional = [{"imp": CHEAP, "exp": 0.05, "load": 0.0}] + \
+        [{"imp": 0.30, "exp": 0.60, "load": 0.0} for _ in range(2)]
+
+    cfg = base_cfg(mode=Mode.ECO, degradation=0.09,
+                    export_degradation=export_degradation, efficiency=eff)
+
+    slots_ordinary = make_slots(ordinary, CHEAP)
+    result_ordinary = optimizer.solve(slots_ordinary, soc0_pct=0.0, cfg=cfg)
+    assert all(s["export"] == 0 for s in result_ordinary.slots), \
+        "eco should still hold at an ordinary good export price"
+
+    slots_exceptional = make_slots(exceptional, CHEAP)
+    result_exceptional = optimizer.solve(slots_exceptional, soc0_pct=0.0, cfg=cfg)
+    assert any(s["export"] > 0 for s in result_exceptional.slots), \
+        "eco should sell when the margin genuinely clears its (high) export bar"
 
 
 def test_balanced_exports_only_when_profitable():
@@ -99,12 +118,18 @@ def test_balanced_exports_only_when_profitable():
 
 
 def test_max_profit_exports_fully_where_balanced_would_not():
+    """max_profit's export cost used to be hard-forced to 0 regardless
+    of what was configured (sold at literally any positive margin) —
+    replaced by a small real floor (EXPORT_DEGRADATION_OVERRIDES,
+    0.03) instead, still much lower than balanced's, but a genuine
+    number rather than a special-cased override."""
     degradation_balanced = 0.05
+    export_degradation_max_profit = 0.03
     eff = 0.9
-    # profit (balanced) = 0.15*0.9 - 0.10/0.9 - 0.05 = -0.026 (unprofitable)
-    # profit (max_profit, degradation=0) = 0.15*0.9 - 0.10/0.9 = +0.024 (profitable)
+    # profit (balanced) = 0.17*0.9 - 0.10/0.9 - 0.05 = -0.008 (unprofitable)
+    # profit (max_profit) = 0.17*0.9 - 0.10/0.9 - 0.03 = +0.012 (profitable)
     rows = [{"imp": CHEAP, "exp": 0.05, "load": 0.0}] + \
-        [{"imp": 0.30, "exp": 0.15, "load": 0.0} for _ in range(2)]
+        [{"imp": 0.30, "exp": 0.17, "load": 0.0} for _ in range(2)]
 
     slots_bal = make_slots(rows, CHEAP)
     cfg_bal = base_cfg(mode=Mode.BALANCED, degradation=degradation_balanced, efficiency=eff)
@@ -112,10 +137,11 @@ def test_max_profit_exports_fully_where_balanced_would_not():
     assert all(s["export"] == 0 for s in result_bal.slots)
 
     slots_mp = make_slots(rows, CHEAP)
-    cfg_mp = base_cfg(mode=Mode.MAX_PROFIT, degradation=degradation_balanced, efficiency=eff)
+    cfg_mp = base_cfg(mode=Mode.MAX_PROFIT, export_degradation=export_degradation_max_profit,
+                       efficiency=eff)
     result_mp = optimizer.solve(slots_mp, soc0_pct=0.0, cfg=cfg_mp)
     assert any(s["export"] > 0 for s in result_mp.slots), \
-        "max_profit ignores degradation cost and should still find this margin worth selling"
+        "max_profit's small export floor should still find this margin worth selling"
 
 
 def test_charging_blocked_outside_cheap_slots():

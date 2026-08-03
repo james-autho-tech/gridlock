@@ -14,7 +14,8 @@ VERSION = os.environ.get("GL_VERSION") or "dev"
 import appdaemon.plugins.hass.hassapi as hass
 from datetime import datetime, timedelta, timezone, time as dtime
 
-from core.config import Mode as OptMode, SiteConfig, RISK_PROFILES, SLOT_MIN, HORIZON_SLOTS
+from core.config import (Mode as OptMode, SiteConfig, RISK_PROFILES,
+                          EXPORT_DEGRADATION_OVERRIDES, SLOT_MIN, HORIZON_SLOTS)
 from core import slots as core_slots
 from core import optimizer as core_optimizer
 from core import failsafe as core_failsafe
@@ -275,6 +276,7 @@ class GridLock(hass.Hass):
             min_export_pct=self.min_export_pct, conserve_battery=self.conserve_battery,
             default_import=self.default_import, default_export=self.default_export,
             export_margin=self.export_margin, mode=self.mode, degradation=self.degradation,
+            export_degradation=self.export_degradation,
             target_daily_net_cost=self.target_daily_net_cost,
             storm_target_soc=float(a.get("storm_watch_target_soc", 100.0)),
             reserve_margin_pct=float(a.get("reserve_margin_pct", 0.15)),
@@ -522,8 +524,11 @@ class GridLock(hass.Hass):
         self.battery_risk_profile = raw
         self.mode = mode
         self.degradation = float(a.get("battery_degradation_cost", RISK_PROFILES[mode]))
+        self.export_degradation = float(a.get(
+            "export_degradation_cost", EXPORT_DEGRADATION_OVERRIDES.get(mode, self.degradation)))
         if hasattr(self, "cfg"):
-            self.cfg = replace(self.cfg, mode=mode, degradation=self.degradation)
+            self.cfg = replace(self.cfg, mode=mode, degradation=self.degradation,
+                               export_degradation=self.export_degradation)
 
     def _read_live_kw(self, entities):
         if isinstance(entities, str):
@@ -677,7 +682,17 @@ class GridLock(hass.Hass):
         since it only runs once a day."""
         comparison = {}
         for opt_mode in OptMode:
-            temp_cfg = replace(self.cfg, mode=opt_mode, degradation=RISK_PROFILES[opt_mode])
+            # export_degradation must be set explicitly here too, not
+            # just degradation — replace() only overrides what's named,
+            # so without this every comparison profile would silently
+            # inherit whichever mode is *currently* live's export
+            # threshold instead of its own (e.g. comparing "eco" while
+            # actually running "balanced" would compare eco's self-
+            # consumption cost against balanced's export bar, not
+            # eco's own).
+            temp_cfg = replace(self.cfg, mode=opt_mode, degradation=RISK_PROFILES[opt_mode],
+                               export_degradation=EXPORT_DEGRADATION_OVERRIDES.get(
+                                   opt_mode, RISK_PROFILES[opt_mode]))
             try:
                 result = core_optimizer.solve(slots, soc0, temp_cfg, today_date=now.date())
                 if result.infeasible:
@@ -1450,6 +1465,7 @@ class GridLock(hass.Hass):
                                    "discharge_cutoff_entity": self.ent_discharge_cutoff,
                                    "battery_risk_profile": self.battery_risk_profile,
                                    "battery_degradation_cost": self.degradation,
+                                   "export_degradation_cost": self.export_degradation,
                                    "cheap_rate_threshold": self.cheap_rate,
                                    "thermal_derate": derate,
                                    "storm_watch_entities": [e for e, _ in self.storm_sources if e] or None,

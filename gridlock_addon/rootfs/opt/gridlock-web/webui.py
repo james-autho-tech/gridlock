@@ -204,6 +204,7 @@ def build_status():
         "battery_soh": as_float(get(status_attrs.get("battery_soh_entity")), None),
         "battery_risk_profile": status_attrs.get("battery_risk_profile") or "balanced",
         "battery_degradation_cost": status_attrs.get("battery_degradation_cost"),
+        "export_degradation_cost": status_attrs.get("export_degradation_cost"),
         "thermal_derate": status_attrs.get("thermal_derate"),
         "solar_forecast_data": solar.get("attributes", {}).get("forecast_data") or [],
         "soc_forecast_data": forecast.get("attributes", {}).get("forecast_data") or [],
@@ -1158,7 +1159,7 @@ async function refresh() {
         ${d.thermal_derate !== null && d.thermal_derate !== undefined && Number(d.thermal_derate) < 1
           ? `<div class="gl-sub" style="margin-top:12px;color:var(--amber)">🌡️ Thermal derate active — charge/discharge commands reduced to <b>${(Number(d.thermal_derate) * 100).toFixed(0)}%</b> of configured rate while the inverter's this warm.</div>`
           : ''}
-        <div class="gl-sub" style="margin-top:12px">Cycling protection: <b style="color:var(--ink)">${esc(d.battery_risk_profile)}</b>${d.battery_degradation_cost === null || d.battery_degradation_cost === undefined ? '' : ` — needs at least ${(Number(d.battery_degradation_cost) * 100).toFixed(1)}p/kWh spread before exporting/discharging the battery`}. Set <code>battery_risk_profile</code> (eco / balanced / max_profit) in apps.yaml.</div>
+        <div class="gl-sub" style="margin-top:12px">Cycling protection: <b style="color:var(--ink)">${esc(d.battery_risk_profile)}</b>${d.battery_degradation_cost === null || d.battery_degradation_cost === undefined ? '' : ` — needs at least ${(Number(d.battery_degradation_cost) * 100).toFixed(1)}p/kWh spread to self-consume from the battery`}${d.export_degradation_cost === null || d.export_degradation_cost === undefined ? '' : `, ${(Number(d.export_degradation_cost) * 100).toFixed(1)}p/kWh to export it`}. Set <code>battery_risk_profile</code> (eco / balanced / max_profit) in apps.yaml.</div>
       </div>
       <div class="gl-wrap">
         <div class="gl-h">Daily cost history</div>

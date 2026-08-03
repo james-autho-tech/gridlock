@@ -124,7 +124,16 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
     max_c = cfg.charge_kw / 2.0
     max_d = cfg.discharge_kw / 2.0
     max_d_exp = cfg.export_rate_kw / 2.0
-    degradation = 0.0 if cfg.mode == Mode.MAX_PROFIT else cfg.degradation
+    # Self-consumption (batt_to_load) and export (batt_to_export) get
+    # separately configured £/kWh costs — see EXPORT_DEGRADATION_
+    # OVERRIDES in config.py for why these differ per mode (eco: high
+    # export bar but normal self-consumption; max_profit: near-zero
+    # self-consumption cost but a small real export floor instead of
+    # the old hard-0). Neither is special-cased here anymore — both
+    # come straight from cfg, which already resolved the right default
+    # per mode in SiteConfig.__post_init__.
+    degradation = cfg.degradation
+    export_degradation = cfg.export_degradation
     # "Full enough to export" tolerance — a fixed fraction of capacity
     # rather than an absolute kWh so it scales sensibly across battery
     # sizes; see the PV-routing-priority constraint below.
@@ -140,7 +149,12 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
     grid_to_load = [pulp.LpVariable(f"grid_load_{i}", 0) for i in range(n)]
     soc = [pulp.LpVariable(f"soc_{i}", floor_kwh, cap) for i in range(n)]
 
-    export_ub = [0.0 if cfg.mode == Mode.ECO else max_d_exp for _ in range(n)]
+    # No more mode-based hard block here — eco used to force this to 0
+    # regardless of price; now every mode shares the same rate ceiling
+    # and gets gated purely by export_degradation instead (eco's is set
+    # high enough that it behaves the same in practice on ordinary
+    # days, but a genuinely exceptional price can still clear it).
+    export_ub = [max_d_exp for _ in range(n)]
     if export_cap_override:
         for i, ub in export_cap_override.items():
             export_ub[i] = min(export_ub[i], max(0.0, ub))
@@ -252,7 +266,8 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
         grid_in = charge[i] + grid_to_load[i]
         grid_out = pv_to_grid[i] + eff * batt_to_export[i]
         grid_cost_terms.append(imp * grid_in - exp * grid_out)
-        degradation_terms.append(degradation * (batt_to_load[i] + batt_to_export[i]))
+        degradation_terms.append(degradation * batt_to_load[i]
+                                  + export_degradation * batt_to_export[i])
 
     prob += (pulp.lpSum(grid_cost_terms) + pulp.lpSum(degradation_terms)
              + RESERVE_PENALTY * pulp.lpSum(reserve_penalty_terms))
