@@ -234,6 +234,24 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
             # untouched) — this only blocks the battery's own discharge.
             prob += batt_to_load[i] == 0
 
+        # EV concurrently charging this slot: mirrors the live "EV
+        # Protection" override (gridlock.py's apply()) so the 48h plan
+        # itself reflects what will actually be commanded, not just
+        # the right-now slot. Previously this constraint didn't exist
+        # here at all — a future dispatch slot could show the battery
+        # charging at the full rate, or even discharging, neither of
+        # which would really happen once that slot arrived live: the
+        # battery never fights the EV for the same circuit (discharge
+        # forced to 0), and any grid-charging shares the circuit at
+        # ev_concurrent_charge_kw rather than the full charge_kw.
+        # Dispatch slots already get treated as cheap pricing
+        # (core/slots.py), so the cheap-rate branch above already
+        # zeroes batt_to_load here too — only export and the charge
+        # rate itself need this extra rule.
+        if s.get("dispatch"):
+            prob += charge[i] <= cfg.ev_concurrent_charge_kw / 2.0
+            prob += batt_to_export[i] == 0
+
         # On-peak reserve: don't let this slot's export/self-consumption
         # eat into the SoC the rest of the current peak stretch needs to
         # reach the next off-peak window without hitting the floor.

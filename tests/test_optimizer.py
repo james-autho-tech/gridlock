@@ -179,6 +179,37 @@ def test_battery_never_drains_for_load_during_a_cheap_slot():
     assert all(c["battery_kwh"] == 0.0 for c in result.cost_trace[:3])
 
 
+def test_ev_dispatch_slot_caps_charge_rate_and_blocks_export():
+    """The 48h plan used to have zero EV-awareness at all — only the
+    live, right-now slot (gridlock.py's "EV Protection" override)
+    clamped battery discharge to 0 and capped grid-charging to
+    ev_concurrent_charge_kw. A future dispatch slot in the plan could
+    show the battery charging at the full rate, or even exporting,
+    neither of which would actually happen once that slot arrived live
+    — confirmed against a real plan showing exactly that (ev_kwh and a
+    full-rate charge_kwh together in the same row). _solve_lp must
+    mirror the same live constraint for every dispatch slot, not just
+    the current one."""
+    ev_kw = 4.0
+    rows = [{"imp": CHEAP, "exp": 0.60, "load": 0.0, "dispatch": True, "ev_kwh": 3.7}]
+    slots = make_slots(rows, CHEAP)
+    cfg = base_cfg(battery_kwh=20.0, charge_kw=20.0, discharge_kw=20.0,
+                    export_rate_kw=20.0, mode=Mode.MAX_PROFIT,
+                    export_degradation=0.01, ev_concurrent_charge_kw=ev_kw)
+
+    result = optimizer.solve(slots, soc0_pct=50.0, cfg=cfg)
+    assert not result.infeasible
+    assert result.slots[0]["charge"] <= ev_kw / 2.0 + 1e-6, (
+        "charge rate should be capped to the shared EV-concurrent rate, "
+        "not the full charge_kw, during a dispatch slot"
+    )
+    assert result.slots[0]["export"] == 0.0, (
+        "battery export should be blocked during a dispatch slot, matching "
+        "the live 'EV Protection' override's discharge-clamped-to-0 rule, "
+        "even though this export price is otherwise very profitable"
+    )
+
+
 def test_daily_target_cutoff_halts_further_export():
     from datetime import timezone
     degradation = 0.05

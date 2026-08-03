@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.4.1 - 2026-08-03
+
+### Fix
+- The 48h plan now respects EV concurrent-charging during dispatch slots (charge rate capped to `ev_concurrent_charge_kw`, battery export blocked) instead of only applying that rule live, to the current slot
+
 ## 3.4.0
 - **Self-consumption and export now have separate £/kWh cost
   thresholds per mode**, replacing two special cases that made eco and
