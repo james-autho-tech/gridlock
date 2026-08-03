@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.4.2 - 2026-08-03
+
+### Improvement
+- Saving Session join notification now includes a fresh, best-effort plan note — how much of the battery it currently expects to discharge across that specific session's window
+- Plan table (and CSV export) now has a "Saving session" column marking every slot that falls inside a joined Saving Session window
+
 ## 3.4.1 - 2026-08-03
 
 ### Fix

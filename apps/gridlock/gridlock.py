@@ -33,7 +33,7 @@ STATE_FILES = ("load_profile.json", "savings_state.json", "savings_history.json"
 # two can never drift out of sync with each other.
 PLAN_TABLE_COLS = ["slot", "import_p", "export_p", "pv_kwh", "load_kwh",
                    "grid_kwh", "charge_kwh", "battery_kwh", "action", "ev_kwh",
-                   "dispatch", "soc_pct", "cost_delta_p", "total_gbp",
+                   "dispatch", "saving_session", "soc_pct", "cost_delta_p", "total_gbp",
                    "import_rank", "export_rank"]
 
 # Confirmed in production (2026-07-30): a value equal to exactly 0/0.0
@@ -804,8 +804,36 @@ class GridLock(hass.Hass):
                 start = ev.get("start", "")
                 end = ev.get("end", "")
                 rate = ev.get("octopoints_per_kwh", "?")
+                plan_note = self._saving_session_plan_note(start, end)
                 self._notify("GridLock: Saving Session joined",
-                            f"Joined {start} – {end} at {rate} pts/kWh.")
+                            f"Joined {start} – {end} at {rate} pts/kWh.{plan_note}")
+
+    def _saving_session_plan_note(self, start, end):
+        """Best-effort: solve a fresh plan and report how much battery
+        it currently expects to use across this specific session's own
+        window, so the join notification says something concrete
+        rather than just the raw times/rate. This runs off an HA event
+        (available_events updating), not the regular tick, so anything
+        going wrong here must never affect the join itself (already
+        submitted by the caller above) — only the notification text."""
+        try:
+            window_start, window_end = self._iso(start), self._iso(end)
+            now = self.get_now()
+            soc0 = self.get_float_state(self.ent_soc, 50.0)
+            slots = self.build_slots(now)
+            result = self._solve_plan(slots, soc0, now)
+            if result.infeasible:
+                return ""
+            battery_kwh = sum(
+                c["battery_kwh"] for i, c in enumerate(result.cost_trace)
+                if window_start <= slots[i]["start"] < window_end)
+            if battery_kwh <= 0:
+                return ""
+            pct = battery_kwh / self.battery_kwh * 100.0
+            return f" Plan currently expects to discharge ~{pct:.0f}% of the battery during this window."
+        except Exception as exc:  # noqa: BLE001 -- notification content only
+            self.log(f"Saving Session plan note failed: {exc!r}", level="WARNING")
+            return ""
 
     def active_saving_session(self, now):
         for ev in self._attr_list(self.ent_saving_events, "joined_events"):
@@ -1022,6 +1050,15 @@ class GridLock(hass.Hass):
         exp_rank = {idx: r + 1 for r, idx in
                     enumerate(sorted(range(len(slots)), key=lambda i: -slots[i]["exp"]))}
 
+        # Joined Saving Session windows, computed once rather than per
+        # slot — each slot just checks its own start against these.
+        saving_windows = []
+        for ev in self._attr_list(self.ent_saving_events, "joined_events"):
+            try:
+                saving_windows.append((self._iso(ev["start"]), self._iso(ev["end"])))
+            except (KeyError, ValueError, TypeError):
+                continue
+
         rows = []
         plan_table = []
         for i, s in enumerate(slots):
@@ -1054,6 +1091,8 @@ class GridLock(hass.Hass):
                     act = "ECO (Bypass)"
             ev_cell = (f"<span style='color:#38bdf8'>⚡ {s['ev_kwh']:.2f}</span>"
                        if s["dispatch"] else "—")
+            in_saving_session = any(ws <= s["start"] < we for ws, we in saving_windows)
+            saving_cell = "<span style='color:#facc15'>💰</span>" if in_saving_session else "—"
             delta_p = cost_trace[i]["delta"] * 100
             delta_colour = "#22c55e" if delta_p <= 0 else "#fbbf24"
             delta_sign = "+" if delta_p > 0 else ""
@@ -1076,6 +1115,7 @@ class GridLock(hass.Hass):
                 f"<td>{battery_kwh:.2f}</td>"
                 f"<td style='color:{colour};font-weight:600'>{act}</td>"
                 f"<td>{ev_cell}</td>"
+                f"<td>{saving_cell}</td>"
                 f"<td>{trace[i]:.0f}%</td>"
                 f"<td style='color:{delta_colour}'>{delta_sign}{delta_p:.1f}p</td>"
                 f"<td>£{cost_trace[i]['total']:.2f}</td></tr>")
@@ -1091,6 +1131,7 @@ class GridLock(hass.Hass):
                 # dispatch slot" now has its own explicit column instead.
                 round(s["ev_kwh"], 3) if s["dispatch"] else 0.0,
                 1 if s["dispatch"] else 0,
+                1 if in_saving_session else 0,
                 trace[i], round(delta_p, 2), cost_trace[i]["total"],
                 imp_rank[i], exp_rank[i]]
             plan_row = [self._json_safe(v) for v in plan_row]
@@ -1103,7 +1144,7 @@ class GridLock(hass.Hass):
         html = ("<table class='gridlock-plan'><tr><th>Slot</th><th>Import</th>"
                 "<th>Export</th><th>PV kWh</th><th>Load kWh</th>"
                 "<th>Grid kWh</th><th>Charge kWh</th><th>Battery kWh</th><th>Action</th>"
-                "<th>EV kWh</th><th>SoC</th><th>Grid £</th><th>Total £</th></tr>"
+                "<th>EV kWh</th><th>Saving session</th><th>SoC</th><th>Grid £</th><th>Total £</th></tr>"
                 + "".join(rows) + "</table>")
         self.set_state("sensor.gridlock_soc_forecast", state=str(trace[0]),
                        attributes={"friendly_name": "GridLock SoC Forecast",

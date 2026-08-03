@@ -187,6 +187,13 @@ gridlock:
   # HA (Settings > Notifications) — no setup needed. Optionally also
   # send to a specific notify service (e.g. your phone):
   # notify_service: notify.mobile_app_yourphone
+  #
+  # The Saving Session notification also includes a best-effort plan
+  # note — how much of the battery it currently expects to discharge
+  # across that specific session's window (e.g. "Plan currently
+  # expects to discharge ~40% of the battery during this window."),
+  # solved fresh at join time. Best-effort: if that solve fails for any
+  # reason the join itself still goes through, just without the note.
 
   # --- Battery health (Forecast tab) ---
   # Auto-discovered by default (Sigenergy "pcs"/"cell"/
