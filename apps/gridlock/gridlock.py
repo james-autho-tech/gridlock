@@ -34,7 +34,7 @@ STATE_FILES = ("load_profile.json", "savings_state.json", "savings_history.json"
 PLAN_TABLE_COLS = ["slot", "import_p", "export_p", "pv_kwh", "load_kwh",
                    "grid_kwh", "charge_kwh", "battery_kwh", "action", "ev_kwh",
                    "dispatch", "saving_session", "power_up_session", "session_reward_p",
-                   "session_baseline_kwh",
+                   "session_baseline_kwh", "session_export_baseline_kwh",
                    "soc_pct", "cost_delta_p", "total_gbp",
                    "import_rank", "export_rank"]
 
@@ -183,6 +183,23 @@ class GridLock(hass.Hass):
                                       or self.overrides.get("power_up_baseline_entity_override")
                                       or self.registry.find_sibling(
             import_stem, "sensor", ["_octoplus_power_up_baseline"]))
+        # Confirmed against a real account with export: the integration
+        # instantiates a baseline sensor per METER Octopus reports, not
+        # just the import one — if you export, there's a separate
+        # baseline predicting your EXPORT for the same session, meaning
+        # Power Down likely also rewards exporting MORE than this
+        # baseline (on top of importing less), not just the import
+        # side. Same graceful degrade if not found/enabled.
+        self.ent_power_down_export_baseline = (
+            a.get("power_down_export_baseline_entity")
+            or self.overrides.get("power_down_export_baseline_entity_override")
+            or self.registry.find_sibling(
+                export_stem, "sensor", ["_export_octoplus_power_down_baseline"]))
+        self.ent_power_up_export_baseline = (
+            a.get("power_up_export_baseline_entity")
+            or self.overrides.get("power_up_export_baseline_entity_override")
+            or self.registry.find_sibling(
+                export_stem, "sensor", ["_export_octoplus_power_up_baseline"]))
         self.ent_rates = [e for e in [
             a.get("import_rates_previous") or self.registry.find_sibling(
                 import_stem, "event", ["_previous_day_rates"]),
@@ -1138,6 +1155,9 @@ class GridLock(hass.Hass):
             power_down_windows=self._octoplus_session_windows(
                 self.ent_power_down_baseline, self._power_down_points_for_session),
             power_up_windows=self._octoplus_session_windows(self.ent_power_up_baseline),
+            power_down_export_windows=self._octoplus_session_windows(
+                self.ent_power_down_export_baseline, self._power_down_points_for_session),
+            power_up_export_windows=self._octoplus_session_windows(self.ent_power_up_export_baseline),
             horizon_slots=self.cfg.horizon_slots, slot_min=self.cfg.slot_min)
 
     def _solve_plan(self, slots, soc0, now):
@@ -1279,6 +1299,18 @@ class GridLock(hass.Hass):
                 session_baseline_kwh = s.get("power_up_baseline_kwh")
             if session_baseline_kwh is None:
                 session_baseline_kwh = 0.0
+            # A Power Down slot can have BOTH an import baseline (above)
+            # AND its own export baseline active at the same time — two
+            # separate sensors, two separate predicted curves for the
+            # same joined session (see core/optimizer.py's export-excess
+            # reward term). Reported as its own column rather than
+            # folded into session_baseline_kwh, so the dashboard can
+            # show both instead of silently picking one.
+            session_export_baseline_kwh = s.get("power_down_export_baseline_kwh")
+            if session_export_baseline_kwh is None:
+                session_export_baseline_kwh = s.get("power_up_export_baseline_kwh")
+            if session_export_baseline_kwh is None:
+                session_export_baseline_kwh = 0.0
             delta_p = cost_trace[i]["delta"] * 100
             delta_colour = "#22c55e" if delta_p <= 0 else "#fbbf24"
             delta_sign = "+" if delta_p > 0 else ""
@@ -1322,6 +1354,7 @@ class GridLock(hass.Hass):
                 1 if in_power_up_session else 0,
                 round(session_reward_p, 2),
                 round(session_baseline_kwh, 3),
+                round(session_export_baseline_kwh, 3),
                 trace[i], round(delta_p, 2), cost_trace[i]["total"],
                 imp_rank[i], exp_rank[i]]
             plan_row = [self._json_safe(v) for v in plan_row]

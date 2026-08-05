@@ -98,3 +98,46 @@ def test_power_down_and_power_up_windows_populate_only_their_own_slots():
     assert all(s["power_down_baseline_kwh"] is None
                and s["power_up_baseline_kwh"] is None for s in others), \
         "slots outside both windows must stay None, not leak a neighbour's data"
+
+
+def test_power_down_and_power_up_export_windows_populate_only_their_own_slots():
+    """Same as above but for the separate export-side baseline sensors
+    (confirmed real via a user's own HA entity data — the integration
+    creates a matching baseline per meter, including export, for the
+    same joined session). Export windows are independent lists from
+    their import-side counterparts, so a slot can in principle have
+    both populated at once — this only confirms they land on the right
+    slots and don't leak, same as the import-side test."""
+    pd_start = NOW.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    pd_end = pd_start + timedelta(minutes=30)
+    pu_start = pd_start + timedelta(hours=3)
+    pu_end = pu_start + timedelta(minutes=30)
+
+    slots = build_slots(
+        NOW,
+        import_windows=[(NOW, NOW + timedelta(hours=72), 0.20)],
+        export_windows=[(NOW, NOW + timedelta(hours=72), 0.10)],
+        dispatch_windows=[],
+        pv_curve={},
+        load_kwh_fn=lambda s: 0.4,
+        cheap_rate=0.10,
+        live_import_rate=0.20, live_export_rate=0.10,
+        default_import_rate=0.20, default_export_rate=0.10,
+        horizon_slots=12, slot_min=30,
+        power_down_export_windows=[(pd_start, pd_end, 0.6, 350)],
+        power_up_export_windows=[(pu_start, pu_end, 0.2, None)])
+
+    pd_slot = next(s for s in slots if s["start"] == pd_start)
+    pu_slot = next(s for s in slots if s["start"] == pu_start)
+    assert pd_slot["power_down_export_baseline_kwh"] == 0.6
+    assert pd_slot["power_up_export_baseline_kwh"] is None, \
+        "a Power Down export slot shouldn't pick up Power Up export data"
+    assert pu_slot["power_up_export_baseline_kwh"] == 0.2
+    assert pu_slot["power_down_export_baseline_kwh"] is None, \
+        "a Power Up export slot shouldn't pick up Power Down export data"
+
+    others = [s for s in slots if s["start"] not in (pd_start, pu_start)]
+    assert others, "fixture should include slots outside both windows"
+    assert all(s["power_down_export_baseline_kwh"] is None
+               and s["power_up_export_baseline_kwh"] is None for s in others), \
+        "slots outside both windows must stay None, not leak a neighbour's data"

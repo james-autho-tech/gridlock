@@ -289,6 +289,82 @@ def test_power_up_reward_big_m_covers_baseline_exceeding_slot_capacity():
     assert result.cost_trace[0]["session_reward_gbp"] == 0.0
 
 
+def test_power_down_export_reward_incentivizes_exporting_above_baseline():
+    """Power Down's export-side baseline (confirmed real via a user's
+    own HA entity data — a genuine, separately-forecast per-half-hour
+    export curve alongside the import baseline, for the same joined
+    session) is modelled as a reward for exporting MORE than that
+    prediction, on the reasoning that "reduce your net demand on the
+    grid" extends naturally to "push more back onto it" — it reuses the
+    same session's points_per_kwh rather than a separate rate. Set up a
+    slot where, without the reward, discharging to export is a net loss
+    (export_degradation costs more than the export rate earns) — so the
+    LP should keep the battery charged. With a large enough reward, it
+    should discharge specifically to beat the export baseline."""
+    export_degradation = 0.40  # deliberately more than the 0.05 export rate
+    baseline = 1.0
+    points_per_kwh = 500  # 500/800 = 0.625 £/kWh reward
+    rows_with = [{"imp": 0.30, "exp": 0.05, "load": 0.0,
+                  "power_down_export_baseline_kwh": baseline,
+                  "power_down_points_per_kwh": points_per_kwh}]
+    rows_without = [{"imp": 0.30, "exp": 0.05, "load": 0.0}]
+    cfg = base_cfg(battery_kwh=10.0, floor_soc=0.0, discharge_kw=20.0,
+                    mode=Mode.BALANCED, export_degradation=export_degradation)
+
+    result_without = optimizer.solve(make_slots(rows_without, CHEAP), soc0_pct=100.0, cfg=cfg)
+    result_with = optimizer.solve(make_slots(rows_with, CHEAP), soc0_pct=100.0, cfg=cfg)
+    assert not result_without.infeasible and not result_with.infeasible
+
+    assert result_without.slots[0]["export"] < 1e-3, \
+        "without the reward, export_degradation exceeds the export rate — should not discharge to export"
+    assert result_with.slots[0]["export"] > 1.0, \
+        "with a reward that clears the net cost of discharging, should export above the baseline"
+    assert result_with.cost_trace[0]["session_reward_gbp"] > 0.5, \
+        "should report real, non-trivial reward credit for beating the export baseline"
+    real_delta = -0.05 * (cfg.efficiency * result_with.slots[0]["export"])
+    assert abs(result_with.cost_trace[0]["delta"] - real_delta) < 1e-3, \
+        "delta must reflect only the real export revenue, not the session reward"
+
+
+def test_power_down_export_reward_stays_feasible_when_naturally_below_baseline():
+    """A predicted export baseline is just a historical average — with
+    no PV and no discharge capability at all, grid_out can never reach
+    it. This must stay solvable and report zero reward, never negative,
+    for that slot."""
+    rows = [{"imp": 0.30, "exp": 0.05, "load": 0.0, "pv": 0.0,
+             "power_down_export_baseline_kwh": 5.0, "power_down_points_per_kwh": 500}]
+    cfg = base_cfg(battery_kwh=10.0, floor_soc=0.0, discharge_kw=0.0,
+                    mode=Mode.BALANCED)
+    result = optimizer.solve(make_slots(rows, CHEAP), soc0_pct=50.0, cfg=cfg)
+    assert not result.infeasible
+    assert result.slots[0]["export"] < 1e-3, \
+        "no discharge capability — export must stay at 0 regardless of baseline"
+    assert result.cost_trace[0]["session_reward_gbp"] == 0.0, \
+        "genuinely unable to reach baseline should report zero reward, not a negative one"
+
+
+def test_power_down_export_reward_big_m_covers_pv_exceeding_import_range():
+    """The export-side Big-M must be scoped to grid_out's own natural
+    range (pv + eff*max_export_kw), not reused from the import-side
+    session_big_m (max_c + load) — a small max_c/load combined with a
+    large PV means the true achievable grid_out can comfortably exceed
+    the import-side range, and an undersized M silently caps the earned
+    reward below what was actually earned (same class of bug as the
+    original Power Down/Up Big-M fix, just the other variable). With no
+    load and a battery that's already full, all 20kWh of PV is forced
+    onto pv_to_grid (nowhere else for it to go), so the true reward is
+    ~0.625 * (20 - 0.5) ≈ 12.19 — an undersized M reusing session_big_m
+    (max_c + load = 1.0 here) would instead cap it at ~0.625 * 1.0."""
+    rows = [{"imp": 0.30, "exp": 0.05, "load": 0.0, "pv": 20.0,
+             "power_down_export_baseline_kwh": 0.5, "power_down_points_per_kwh": 500}]
+    cfg = base_cfg(battery_kwh=1.0, floor_soc=0.0, charge_kw=2.0, discharge_kw=0.0,
+                    export_rate_kw=20.0, mode=Mode.BALANCED)
+    result = optimizer.solve(make_slots(rows, CHEAP), soc0_pct=100.0, cfg=cfg)
+    assert not result.infeasible
+    assert result.cost_trace[0]["session_reward_gbp"] > 10.0, \
+        "reward must reflect the true ~19.5kWh excess over baseline, not be capped by an undersized Big-M"
+
+
 def test_ev_dispatch_slot_caps_charge_rate_and_blocks_export():
     """The 48h plan used to have zero EV-awareness at all — only the
     live, right-now slot (gridlock.py's "EV Protection" override)

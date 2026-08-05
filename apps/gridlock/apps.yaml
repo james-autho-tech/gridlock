@@ -59,6 +59,20 @@ gridlock:
   # power_up_baseline_entity: sensor.octopus_energy_electricity_XXXXXXXX_1111111111111_octoplus_power_up_baseline
   # octopoint_value_gbp: 0.00125    # £ per octopoint (1/800) — community-consensus rate, override if Octopus changes it
 
+  # Power Down also has its own SEPARATE export-side baseline sensor
+  # (confirmed real via a user's own HA entity data) — a genuine
+  # predicted per-half-hour EXPORT curve alongside the import baseline
+  # above, for the same joined session. GridLock models exporting MORE
+  # than this as earning the same session's octopoints, on top of any
+  # import-side reduction credit. Auto-discovered off the export meter's
+  # own serial/MPAN; also disabled by default in HA, same as the import
+  # baseline above. (Power Up's export-side baseline is discovered too,
+  # but deliberately not weighed into the plan yet — whether/how it
+  # affects Power Up's reward isn't confirmed, so it's exposed for
+  # visibility only, not used as an economic incentive.)
+  # power_down_export_baseline_entity: sensor.octopus_energy_electricity_XXXXXXXX_2222222222222_export_octoplus_power_down_baseline
+  # power_up_export_baseline_entity: sensor.octopus_energy_electricity_XXXXXXXX_2222222222222_export_octoplus_power_up_baseline
+
   # Solcast half-hourly curves
   solcast_detail_today: sensor.solcast_pv_forecast_forecast_today
   solcast_detail_tomorrow: sensor.solcast_pv_forecast_forecast_tomorrow

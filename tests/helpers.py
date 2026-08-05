@@ -26,7 +26,9 @@ def make_slots(rows, cheap_rate):
             "ev_kwh": row.get("ev_kwh", 0.0),
             "power_down_baseline_kwh": row.get("power_down_baseline_kwh"),
             "power_down_points_per_kwh": row.get("power_down_points_per_kwh"),
+            "power_down_export_baseline_kwh": row.get("power_down_export_baseline_kwh"),
             "power_up_baseline_kwh": row.get("power_up_baseline_kwh"),
+            "power_up_export_baseline_kwh": row.get("power_up_export_baseline_kwh"),
             "charge": 0.0, "export": 0.0,
         })
     annotate_reserve(slots, cheap_rate)

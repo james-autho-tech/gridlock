@@ -49,11 +49,13 @@ def build_slots(now, *, import_windows, export_windows, dispatch_windows,
                  live_import_rate, live_export_rate,
                  default_import_rate, default_export_rate,
                  horizon_slots, slot_min,
-                 power_down_windows=(), power_up_windows=()):
+                 power_down_windows=(), power_up_windows=(),
+                 power_down_export_windows=(), power_up_export_windows=()):
     """Returns a list of slot dicts:
     {start, end, imp, exp, pv, load, dispatch, ev_kwh, charge, export,
      power_down_baseline_kwh, power_down_points_per_kwh,
-     power_up_baseline_kwh, next_cheap_idx, remaining_deficit}
+     power_down_export_baseline_kwh, power_up_baseline_kwh,
+     power_up_export_baseline_kwh, next_cheap_idx, remaining_deficit}
 
     charge/export start at 0.0 — optimizer.solve() fills them in.
     """
@@ -88,9 +90,18 @@ def build_slots(now, *, import_windows, export_windows, dispatch_windows,
         })
         pd_baseline, pd_points = _octoplus_baseline_for_slot(power_down_windows, s)
         pu_baseline, _ = _octoplus_baseline_for_slot(power_up_windows, s)
+        # Export-side baselines reuse the same session's points rate as
+        # their import-side counterpart (one joined/announced session,
+        # same points currency) — the export sensor carries no separate
+        # points figure of its own, so optimizer.py reads pd_points from
+        # the import-side field above rather than duplicating it here.
+        pd_export_baseline, _ = _octoplus_baseline_for_slot(power_down_export_windows, s)
+        pu_export_baseline, _ = _octoplus_baseline_for_slot(power_up_export_windows, s)
         slots[-1]["power_down_baseline_kwh"] = pd_baseline
         slots[-1]["power_down_points_per_kwh"] = pd_points
+        slots[-1]["power_down_export_baseline_kwh"] = pd_export_baseline
         slots[-1]["power_up_baseline_kwh"] = pu_baseline
+        slots[-1]["power_up_export_baseline_kwh"] = pu_export_baseline
 
     annotate_reserve(slots, cheap_rate)
     return slots

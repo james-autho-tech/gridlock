@@ -341,6 +341,14 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
         # gap in either direction for either variable, so the same
         # formula is correct for both.
         session_big_m = max(max_c + load, EPS)
+        # Natural max of grid_out (pv_to_grid + eff*batt_to_export) —
+        # the export-side counterpart of session_big_m above. Deliberately
+        # separate rather than reusing session_big_m: on a large-PV/small-
+        # load site pv + eff*max_d_exp can exceed max_c + load, and a
+        # Big-M that's too small for the "cap" direction silently caps the
+        # earned reward below what was actually earned (same class of bug
+        # as the original session_big_m fix, just the other variable).
+        session_export_big_m = max(pv + eff * max_d_exp, EPS)
 
         pd_baseline = s.get("power_down_baseline_kwh")
         pd_points_per_kwh = s.get("power_down_points_per_kwh") or 0.0
@@ -364,6 +372,35 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
             prob += pu_excess <= pu_big_m * pu_above
             session_reward_terms.append(reward_rate * pu_excess)
             session_reward_components[i].append((pu_excess, reward_rate))
+
+        # Power Down export baseline: confirmed real via the user's own
+        # HA entity data (a genuine, separately-forecast per-half-hour
+        # export curve alongside the import baseline above, for the
+        # same joined session) — modelled here as a reward for
+        # exporting MORE than that predicted baseline, on the reasoning
+        # that "reduce your net demand on the grid" extends naturally
+        # to "push more back onto it", and it reuses the same session's
+        # points_per_kwh (there's only one points currency per session,
+        # not a separate rate for the export sensor). NOT modelling the
+        # mirror case for Power Up's export baseline here: the sign of
+        # that incentive is genuinely ambiguous (does Power Up — "use
+        # more" — reward exporting less, or is export simply untouched
+        # by it?) and I can't confirm Octopus's actual backend
+        # calculation either way from client-side code alone, so
+        # guessing risks steering the battery in the wrong direction on
+        # real money — left out until confirmed rather than encoded as
+        # a guess.
+        pd_export_baseline = s.get("power_down_export_baseline_kwh")
+        if pd_export_baseline is not None and pd_points_per_kwh > 0:
+            export_reward_rate = pd_points_per_kwh * cfg.octopoint_value_gbp
+            pd_exp_big_m = max(pd_export_baseline, session_export_big_m)
+            pd_exp_above = pulp.LpVariable(f"pd_exp_above_{i}", cat="Binary")
+            pd_exp_excess = pulp.LpVariable(f"pd_exp_excess_{i}", 0)
+            prob += pd_exp_excess <= (grid_out - pd_export_baseline) + pd_exp_big_m * (1 - pd_exp_above)
+            prob += pd_exp_excess <= pd_exp_big_m * pd_exp_above
+            session_reward_terms.append(export_reward_rate * pd_exp_excess)
+            session_reward_components[i].append((pd_exp_excess, export_reward_rate))
+
         degradation_terms.append(degradation * batt_to_load[i]
                                   + export_degradation * batt_to_export[i])
 
