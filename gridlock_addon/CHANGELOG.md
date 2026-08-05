@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.5.2 - 2026-08-05
+
+### Improvement
+- Plan table's Saving/Power Up cells now show the expected reward in pence directly on the row, not just in a hover tooltip, and the column headers explain what each programme actually rewards (importing less / consuming more, not exporting) so a row showing ECO with 0 grid import doesn't read as "the reward wasn't worth it"
+- Added Intelligent Octopus Go, EDF GoElectric, and E.ON Next Drive to the tariff comparison list (`compare_tariffs`) — rates checked against each supplier's own published figures; IOG's variable smart-dispatch bonus hours can't be represented in a static comparison, so it only reflects the guaranteed overnight window
+
 ## 3.5.1 - 2026-08-05
 
 ### Improvement

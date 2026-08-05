@@ -764,8 +764,8 @@ function renderPlanTable(table, opts) {
       <td class="num" title="Battery-side kWh discharged this slot (self-consumption + export combined) — read directly off this row, not a SoC difference against the row above">${Number(r.battery_kwh).toFixed(2)}</td>
       <td>${actionPill(r.action)}</td>
       <td>${Number(r.dispatch) > 0.5 ? `<span style="color:var(--cyan)">⚡ ${Number(r.ev_kwh).toFixed(2)}</span>` : '—'}</td>
-      <td>${Number(r.saving_session) > 0.5 ? `<span title="Joined Octopus Saving Session${Number(r.session_reward_p) > 0 ? ` — expects ~${Number(r.session_reward_p).toFixed(1)}p reward this slot` : ''}" style="color:#facc15">💰</span>` : '—'}</td>
-      <td>${Number(r.power_up_session) > 0.5 ? `<span title="Octopus Power Up (Free Electricity) window${Number(r.session_reward_p) > 0 ? ` — expects ~${Number(r.session_reward_p).toFixed(1)}p credit this slot` : ''}" style="color:#4ade80">⚡🆓</span>` : '—'}</td>
+      <td>${Number(r.saving_session) > 0.5 ? `<span title="Joined Octopus Saving Session (Power Down) — rewards importing LESS than a predicted baseline this window, not exporting more. A slot showing ECO with 0 grid import is already earning the full available credit; whether to also export is a separate decision." style="color:#facc15">💰${Number(r.session_reward_p) > 0 ? `<br><span class="num" style="font-size:11px">+${Number(r.session_reward_p).toFixed(1)}p</span>` : ''}</span>` : '—'}</td>
+      <td>${Number(r.power_up_session) > 0.5 ? `<span title="Octopus Power Up (Free Electricity) — credits consuming MORE than a predicted baseline this window, at your own unit rate. Separate from export: this rewards using extra power (e.g. charging harder), not selling it." style="color:#4ade80">⚡🆓${Number(r.session_reward_p) > 0 ? `<br><span class="num" style="font-size:11px">+${Number(r.session_reward_p).toFixed(1)}p</span>` : ''}</span>` : '—'}</td>
       <td>${socMiniBar(r.soc_pct)}</td>
       <td style="color:${Number(r.cost_delta_p) <= 0 ? 'var(--green)' : 'var(--amber)'}">${Number(r.cost_delta_p) > 0 ? '+' : ''}${Number(r.cost_delta_p).toFixed(1)}p</td>
       <td>£${Number(r.total_gbp).toFixed(2)}</td>
@@ -773,7 +773,10 @@ function renderPlanTable(table, opts) {
   }).join('');
   return `<div class="gl-table-scroll"><table class="gl-plan">
     <tr><th>Slot</th><th>Import</th><th>Export</th><th>PV kWh</th><th>Load kWh</th>
-        <th>Grid kWh</th><th>Charge kWh</th><th title="Battery kWh discharged this slot, self-consumption + export combined">Battery kWh</th><th>Action</th><th>EV kWh</th><th>Saving</th><th>Power Up</th><th>SoC</th>
+        <th>Grid kWh</th><th>Charge kWh</th><th title="Battery kWh discharged this slot, self-consumption + export combined">Battery kWh</th><th>Action</th><th>EV kWh</th>
+        <th title="Rewards importing LESS than a predicted baseline — not exporting more. These are separate decisions; ECO with 0 grid import is already earning the full credit available.">Saving</th>
+        <th title="Credits consuming MORE than a predicted baseline, at your own unit rate — not exporting more. Separate from the export decision.">Power Up</th>
+        <th>SoC</th>
         <th>Grid £</th><th>Total £</th></tr>
     ${trs}
   </table></div>`;

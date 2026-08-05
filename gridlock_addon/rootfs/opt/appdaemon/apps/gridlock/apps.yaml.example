@@ -167,7 +167,21 @@ gridlock:
   # load_hourly_weights: [2,2,2,2,2,2,4,6,5,4,4,4,4,4,4,5,7,9,9,8,6,5,4,3]
 
   # --- Tariff comparison ---
+  # Intelligent Octopus Go (IOG) is listed here too even though it's
+  # the tariff this whole app is built around — this comparison uses
+  # today's actual usage against each tariff's own static rate
+  # structure, so IOG needs its own entry like any other option rather
+  # than being silently assumed. Only the guaranteed overnight window
+  # (23:30-05:30) is representable here — IOG's other lever, up to 6h/
+  # day of variable smart-dispatch bonus slots, is decided by Octopus
+  # day to day and has no fixed clock-time window to encode in a static
+  # comparison, so this understates how cheap a real IOG day can get
+  # whenever extra dispatch hours are actually granted.
   compare_tariffs:
+    - name: "Intelligent Octopus Go"
+      import_default: 0.274
+      import: [{ start: "23:30", end: "05:30", rate: 0.035 }]
+      export: 0.15
     - name: "Octopus Go"
       import_default: 0.2662
       import: [{ start: "00:30", end: "05:30", rate: 0.085 }]
@@ -187,6 +201,20 @@ gridlock:
       import_default: 0.2950
       import: [{ start: "00:30", end: "07:30", rate: 0.13 }]
       export: 0.04
+    # EDF GoElectric and E.ON Next Drive rates below checked against
+    # each supplier's own published figures (2026) — both suppliers'
+    # actual rates vary by region/meter type/fixed-vs-smart variant, so
+    # treat these as illustrative starting points and check your own
+    # postcode's real published rate rather than assuming these match
+    # exactly, same caveat as every other entry in this list.
+    - name: "EDF GoElectric"
+      import_default: 0.2891
+      import: [{ start: "23:00", end: "06:00", rate: 0.0699 }]
+      export: 0.15
+    - name: "E.ON Next Drive"
+      import_default: 0.30625
+      import: [{ start: "00:00", end: "06:00", rate: 0.08 }]
+      export: 0.15
 
   # --- Storm Watch ---
   # Charge to target and hold (no exports) while a weather alert is active.
