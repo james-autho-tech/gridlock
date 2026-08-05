@@ -3,10 +3,9 @@
 ## 3.5.4 - 2026-08-05
 
 ### Improvement
-- Power Down now also weighs its own separate export-side baseline (confirmed real from a user's own HA entity data): exporting more than that predicted curve earns the same session's octopoints, on top of any import-side reduction credit — auto-discovered off the export meter, same MILP-safe formulation (proven feasible in both directions via dedicated tests) as the existing import-side reward
-- Plan table's Saving Session tooltip now reports the export baseline too when one's active for that window, alongside the existing import baseline
-- New `session_export_baseline_kwh` field in the plan table and CSV export
-- Power Up's export-side baseline is discovered too, but deliberately not weighed into the plan yet — whether/how it affects Power Up's reward isn't confirmed from client-side code alone, so it's exposed for visibility only rather than guessed at
+- Power Down now also rewards exporting above its own export-side baseline, on top of the existing import-reduction credit
+- Saving Session tooltip and CSV export now show the export baseline alongside the import one
+- Power Up's export baseline is discovered but not yet used in the plan
 
 ## 3.5.3 - 2026-08-05
 
