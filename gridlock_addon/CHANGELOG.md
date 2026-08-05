@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.5.1 - 2026-08-05
+
+### Improvement
+- Date/time axis labels added to the Forecast tab's three bar charts (Learned House Usage, Carbon Intensity, Real grid spend per day) — previously bare bars with no ticks, only a hover tooltip
+
 ## 3.5.0 - 2026-08-03
 
 ### Improvement

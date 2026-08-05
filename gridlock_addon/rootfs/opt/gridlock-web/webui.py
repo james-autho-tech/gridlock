@@ -308,6 +308,14 @@ PAGE = r"""<!doctype html>
                  background:linear-gradient(180deg,var(--amber),rgba(251,191,36,.15)); }
   .gl-bar-fill-soc { background:linear-gradient(180deg,var(--cyan),rgba(56,189,248,.15)); }
   .gl-bar-fill-load { background:linear-gradient(180deg,var(--violet),rgba(167,139,250,.15)); }
+  /* Same flex/gap shape as .gl-bars/.gl-bar-col above so each labelled
+     column lines up exactly under its own bar — empty columns in
+     between just render blank, letting a label's text overflow into
+     that free space either side rather than every column needing its
+     own (unreadable, 4px-wide) label. */
+  .gl-bar-axis { display:flex; gap:2px; margin-top:4px; }
+  .gl-bar-axis-col { flex:1; min-width:2px; font-size:10px; color:var(--dim);
+                      text-align:center; white-space:nowrap; overflow:visible; }
   .gl-sub { color:var(--dim); font-size:12px; margin:-4px 0 10px; }
   .gl-combo-svg { width:100%; height:220px; display:block; margin-top:6px; }
   .gl-combo-legend { display:flex; gap:18px; font-size:12px; color:var(--dim); margin-top:6px; }
@@ -845,6 +853,16 @@ function fmtTime(iso) {
     return new Date(iso).toLocaleString(undefined, { hour: '2-digit', minute: '2-digit' });
   } catch (e) { return iso; }
 }
+function fmtShortDate(dateStr) {
+  // dateStr: "YYYY-MM-DD" (daily_cost_history's own date key) -> "4 Aug".
+  // Parsed as local, not UTC-shifted-then-relocalized like fmtDate does
+  // for full ISO timestamps — a bare date has no time/zone component to
+  // shift in the first place.
+  try {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+  } catch (e) { return dateStr; }
+}
 function renderLog(entries) {
   if (!entries || !entries.length) {
     return '<div style="color:var(--dim)">No decisions logged yet — entries appear here as the plan changes.</div>';
@@ -968,6 +986,17 @@ function triadLeave() {
   const tt = document.getElementById('gl-triad-tooltip');
   if (tt) tt.style.display = 'none';
 }
+// Shared tick-label row for the flex `.gl-bars` charts — one column per
+// bar so labels line up with renderLoadProfileChart/renderCarbonChart's
+// own `.gl-bar-col` grid exactly, but only every Nth column gets text so
+// 48 half-hour bars don't turn into 48 crowded, unreadable labels.
+function barAxisLabels(count, everyN, labelFor) {
+  let cols = '';
+  for (let i = 0; i < count; i++) {
+    cols += `<div class="gl-bar-axis-col">${i % everyN === 0 ? esc(labelFor(i)) : ''}</div>`;
+  }
+  return `<div class="gl-bar-axis">${cols}</div>`;
+}
 function renderLoadProfileChart(data) {
   if (!data || !data.length) {
     return '<div style="color:var(--dim)">Still learning your usage pattern — builds up over the first few days and gets more accurate over time.</div>';
@@ -979,7 +1008,9 @@ function renderLoadProfileChart(data) {
       <div class="gl-bar-fill gl-bar-fill-load" style="height:${h}%"></div>
     </div>`;
   }).join('');
-  return `<div class="gl-bars">${bars}</div>`;
+  // Every 4th half-hour slot -> a label every 2 hours (00:00, 02:00, ...).
+  const axis = barAxisLabels(data.length, 4, i => data[i].x);
+  return `<div class="gl-bars">${bars}</div>${axis}`;
 }
 function renderDailyCostChart(data) {
   if (!data || !data.length) {
@@ -997,10 +1028,20 @@ function renderDailyCostChart(data) {
     const color = v >= 0 ? 'var(--amber)' : 'var(--green)';
     return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${Math.max(0.5, bw - 2).toFixed(1)}" height="${h.toFixed(1)}" fill="${color}" opacity="0.75"><title>${esc(p.date)}: £${v.toFixed(2)}</title></rect>`;
   }).join('');
+  // A plain HTML row below the SVG, not <text> inside it — this SVG
+  // uses preserveAspectRatio="none" (deliberately non-uniform stretch
+  // to fill the container), which would squash or stretch actual text
+  // glyphs unevenly; flex columns underneath aren't affected by that at
+  // all and reuse the exact same alignment helper as the other two
+  // bar charts. ~7 labels regardless of how many days of history exist
+  // yet, rather than one per day (unreadable at 28+).
+  const everyN = Math.max(1, Math.ceil(data.length / 7));
+  const axis = barAxisLabels(data.length, everyN, i => fmtShortDate(data[i].date));
   return `<svg viewBox="0 0 ${W} ${H}" class="gl-combo-svg" preserveAspectRatio="none" style="height:170px">
       <line x1="0" y1="${mid}" x2="${W}" y2="${mid}" stroke="var(--line)" stroke-width="1" />
       ${bars}
     </svg>
+    ${axis}
     <div class="gl-combo-legend">
       <span><span class="gl-legend-dot" style="background:var(--green)"></span>Credit day</span>
       <span><span class="gl-legend-dot" style="background:var(--amber)"></span>Cost day</span>
@@ -1022,7 +1063,10 @@ function renderCarbonChart(data) {
       <div class="gl-bar-fill" style="height:${h}%;background:linear-gradient(180deg,${carbonColor(p.index)},transparent)"></div>
     </div>`;
   }).join('');
-  return `<div class="gl-bars">${bars}</div>`;
+  // Every 4th half-hour slot -> a label every 2 hours, same spacing as
+  // the load-profile chart's own axis.
+  const axis = barAxisLabels(data.length, 4, i => fmtTime(data[i].x));
+  return `<div class="gl-bars">${bars}</div>${axis}`;
 }
 function renderProfileComparison(totals) {
   totals = totals || {};
