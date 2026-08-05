@@ -256,6 +256,48 @@ def test_reserve_shortfall_degrades_gracefully_instead_of_infeasible():
         assert result.trace[i] <= prev + max_gain_pct, \
             f"slot {i} SoC rose more than its own charge decision can explain"
         prev = result.trace[i]
+    # The genuinely-unreachable reserve must be visible in cost_trace too
+    # (not just "the LP didn't crash") — this is what a "will tomorrow's
+    # solar be enough" check reads to tell a real shortfall from a
+    # perfectly normal low SoC.
+    assert result.cost_trace[0]["reserve_shortfall_kwh"] > 0, (
+        "a battery this depleted, this far from the next cheap slot, "
+        "should show a real reported shortfall, not a silently-absorbed one"
+    )
+    # And it should shrink slot to slot as the reserve requirement eases
+    # closer to the cheap slot, never grow.
+    shortfalls = [c["reserve_shortfall_kwh"] for c in result.cost_trace]
+    assert all(a >= b for a, b in zip(shortfalls, shortfalls[1:])), (
+        "reserve shortfall should ease monotonically toward the cheap slot, not grow"
+    )
+
+
+def test_low_starting_soc_shows_zero_shortfall_when_solar_will_refill_it():
+    """The whole point of reading the LP's own reserve_shortfall (rather
+    than a naive "does tomorrow's forecast cover load" comparison) as a
+    solar-deficit signal is that it must NOT false-positive on a battery
+    that's deliberately low because abundant solar is coming and will
+    refill it before it's actually needed — the normal, correct pattern
+    on a good solar day (a real concern raised about this feature: a
+    naive comparison would trigger constantly in summer, since the
+    battery is routinely sold down low overnight trusting next-day sun
+    to refill it). Confirmed against exactly that shape: battery starts
+    at 5%, rate-limited overnight charging can't fill it, heavy midday
+    PV, then a genuine evening reserve need — shortfall must come out
+    genuinely zero throughout, not just "small"."""
+    rows = ([{"imp": CHEAP, "exp": 0.05, "pv": 0.0, "load": 0.4} for _ in range(4)]
+            + [{"imp": 0.28, "exp": 0.15, "pv": 0.0, "load": 0.4} for _ in range(3)]
+            + [{"imp": 0.28, "exp": 0.15, "pv": 3.0, "load": 0.4} for _ in range(20)]
+            + [{"imp": 0.28, "exp": 0.15, "pv": 0.0, "load": 1.0} for _ in range(10)])
+    slots = make_slots(rows, CHEAP)
+    cfg = base_cfg(battery_kwh=20.0, floor_soc=5.0, charge_kw=6.0, discharge_kw=20.0,
+                    export_rate_kw=20.0, mode=Mode.BALANCED, reserve_margin_pct=0.15)
+    result = optimizer.solve(slots, soc0_pct=5.0, cfg=cfg)
+    assert not result.infeasible
+    assert all(c["reserve_shortfall_kwh"] == 0.0 for c in result.cost_trace), (
+        "abundant solar later in the horizon should fully satisfy the "
+        "reserve with zero shortfall, even starting from a nearly-empty battery"
+    )
 
 
 def test_glpk_solver_error_on_timeout_is_treated_as_infeasible_not_raised():

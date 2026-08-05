@@ -178,6 +178,7 @@ class GridLock(hass.Hass):
         self.savings_history = self._load_json("savings_history.json", {})
         self.plan_accuracy_day = None
         self.day_start_forecast = 0.0
+        self.solar_deficit_day = None
         self._load_savings_state()
 
         self.ent_pv_power_entities = a.get("pv_power_entities") or self.registry.find_pv_power()
@@ -574,13 +575,15 @@ class GridLock(hass.Hass):
         self.baseline_cost_today = state.get("baseline_cost_today", 0.0)
         self.plan_accuracy_day = state.get("plan_accuracy_day")
         self.day_start_forecast = state.get("day_start_forecast", 0.0)
+        self.solar_deficit_day = state.get("solar_deficit_day")
 
     def _save_savings_state(self):
         self._save_json("savings_state.json", {
             "day": self.savings_day, "baseline_soc": self.baseline_soc,
             "baseline_cost_today": self.baseline_cost_today,
             "plan_accuracy_day": self.plan_accuracy_day,
-            "day_start_forecast": self.day_start_forecast})
+            "day_start_forecast": self.day_start_forecast,
+            "solar_deficit_day": self.solar_deficit_day})
 
     def _roll_savings_day(self, now):
         today_iso = now.date().isoformat()
@@ -703,6 +706,60 @@ class GridLock(hass.Hass):
         today_iso = now.date().isoformat()
         self.savings_history.setdefault(today_iso, {})["profile_comparison"] = comparison
         self._save_json("savings_history.json", self.savings_history)
+
+    # Reserve shortfall (a genuine, unavoidable-even-with-optimal-play gap
+    # — see optimizer.py's reserve constraint) below which a solar-deficit
+    # notification isn't worth firing: guards against a floating-point
+    # residual from the solver reading as a "real" shortfall.
+    SOLAR_DEFICIT_MIN_KWH = 0.05
+
+    def _check_solar_deficit(self, now, slots, cost_trace):
+        """Once daily, in the evening (giving time to act that night):
+        does tomorrow's plan show a genuine reserve shortfall — i.e.
+        even with an optimal charge/discharge schedule against the real
+        solar forecast, does the LP itself still fall short? That's the
+        actual answer to "is tomorrow's solar not enough", not a
+        hand-rolled comparison against a fixed daily load figure, which
+        would false-positive on a battery that's deliberately low
+        because abundant solar is coming to refill it (the normal,
+        correct pattern on a good day, and a real concern raised about
+        this feature — verified this can't happen against a scenario
+        shaped exactly like that: test_low_starting_soc_shows_zero_
+        shortfall_when_solar_will_refill_it). Advisory only — GridLock
+        has no way to request or influence when Octopus actually grants
+        smart-charging dispatch, only to flag that plugging in improves
+        the odds of getting some."""
+        if now.hour < 18:
+            return
+        today_iso = now.date().isoformat()
+        if self.solar_deficit_day == today_iso:
+            return
+        self.solar_deficit_day = today_iso
+        self._save_savings_state()
+
+        # This is advisory only — a bug here must never be able to fall
+        # back the whole tick to safe self-consumption (tick()'s own
+        # top-level try/except would do exactly that for anything
+        # raised this far up the call chain), same reasoning as
+        # _saving_session_plan_note's own try/except.
+        try:
+            tomorrow = now.date() + timedelta(days=1)
+            tomorrow_shortfalls = [
+                c["reserve_shortfall_kwh"] for s, c in zip(slots, cost_trace)
+                if s["start"].date() == tomorrow]
+            if not tomorrow_shortfalls:
+                return  # horizon doesn't reach tomorrow (shouldn't happen at 48h, but don't guess)
+            max_shortfall = max(tomorrow_shortfalls)
+            if max_shortfall <= self.SOLAR_DEFICIT_MIN_KWH:
+                return
+            self._notify(
+                "GridLock: Possible solar shortfall tomorrow",
+                f"Tomorrow's plan shows a reserve shortfall of up to {max_shortfall:.1f} kWh "
+                "even with optimal charging — solar alone may not cover your battery's needs. "
+                "Plugging in the EV improves your odds of extra smart-charging dispatch during "
+                "the day, not just the overnight window.")
+        except Exception as exc:  # noqa: BLE001 — advisory notification only
+            self.log(f"Solar deficit check failed: {exc!r}", level="WARNING")
 
     def _publish_savings(self, now):
         today, week, month, all_time = self._savings_totals(now)
@@ -1345,6 +1402,7 @@ class GridLock(hass.Hass):
             return
         slots, trace, cost_trace, grid_cost = result.slots, result.trace, result.cost_trace, result.grid_cost
         self._track_plan_accuracy(now, grid_cost, slots, soc0)
+        self._check_solar_deficit(now, slots, cost_trace)
 
         cur = slots[0]
         action = core_optimizer.action(cur)

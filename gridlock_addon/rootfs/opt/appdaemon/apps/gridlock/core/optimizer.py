@@ -163,6 +163,14 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
     grid_cost_terms = []
     degradation_terms = []
     reserve_penalty_terms = []
+    # Indexed by slot, unlike reserve_penalty_terms (which is just a flat
+    # list for the objective sum and doesn't preserve which slot each
+    # shortfall belongs to) — needed to report per-slot shortfall in
+    # cost_trace. None for any slot that never got a reserve constraint
+    # at all (no next_cheap_idx, or this slot IS the cheap slot) — pulp.
+    # value(None) raises AttributeError rather than returning None, so
+    # this must be checked explicitly below, not passed through _val().
+    reserve_shortfall_vars = [None] * n
 
     for i, s in enumerate(slots):
         pv, load, imp, exp = s["pv"], s["load"], s["imp"], s["exp"]
@@ -280,6 +288,7 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
             shortfall = pulp.LpVariable(f"reserve_shortfall_{i}", 0)
             prob += soc[i] + shortfall >= floor_kwh + future_deficit / eff
             reserve_penalty_terms.append(shortfall)
+            reserve_shortfall_vars[i] = shortfall
 
         grid_in = charge[i] + grid_to_load[i]
         grid_out = pv_to_grid[i] + eff * batt_to_export[i]
@@ -333,9 +342,18 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
         # backwards. This number needs no such alignment — it's already
         # anchored to slot i.
         battery_kwh = _val(batt_to_load[i]) + _val(batt_to_export[i])
+        # 0.0 for any slot with no reserve constraint at all (see
+        # reserve_shortfall_vars' definition above) — genuinely
+        # different from "constrained but satisfied with zero slack",
+        # though both report as 0.0 here; that distinction doesn't
+        # matter to a caller checking "is there a real shortfall",
+        # only "was one needed and not fully covered".
+        shortfall_var = reserve_shortfall_vars[i]
+        reserve_shortfall_kwh = _val(shortfall_var) if shortfall_var is not None else 0.0
         cost_trace.append({"delta": round(delta, 4), "total": round(grid_cost_total, 4),
                             "grid_in": round(grid_in, 3), "charge_in": round(s["charge"], 3),
-                            "battery_kwh": round(battery_kwh, 3)})
+                            "battery_kwh": round(battery_kwh, 3),
+                            "reserve_shortfall_kwh": round(reserve_shortfall_kwh, 4)})
 
     total_cost = _val(prob.objective, grid_cost_total) if prob.objective is not None else grid_cost_total
     return out_slots, trace, cost_trace, round(grid_cost_total, 4), round(total_cost, 4), infeasible

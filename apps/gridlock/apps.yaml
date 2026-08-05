@@ -194,6 +194,19 @@ gridlock:
   # expects to discharge ~40% of the battery during this window."),
   # solved fresh at join time. Best-effort: if that solve fails for any
   # reason the join itself still goes through, just without the note.
+  #
+  # Once daily (evening, from 18:00), GridLock also checks tomorrow's
+  # plan for a genuine reserve shortfall — i.e. even with an optimal
+  # charge/discharge schedule against the real solar forecast, does the
+  # LP still fall short? If so it fires "GridLock: Possible solar
+  # shortfall tomorrow", suggesting plugging in the EV to improve the
+  # odds of extra smart-charging dispatch during the day. This reads
+  # the solver's own reported shortfall, not a hand-rolled comparison
+  # against a fixed daily load figure — deliberately, so it doesn't
+  # false-positive on a battery that's routinely low overnight because
+  # abundant solar is coming to refill it (the normal pattern on a good
+  # day). Advisory only: GridLock can't request or influence when
+  # Octopus actually grants dispatch, only flag that it's worth trying.
 
   # --- Battery health (Forecast tab) ---
   # Auto-discovered by default (Sigenergy "pcs"/"cell"/

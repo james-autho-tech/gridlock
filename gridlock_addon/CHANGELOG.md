@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.4.3 - 2026-08-03
+
+### Improvement
+- New notification: once daily in the evening, GridLock checks tomorrow's plan for a genuine solar shortfall (reads the LP's own reserve_shortfall, not a hand-rolled load comparison, so it can't false-positive on a normal low-overnight-SoC summer day) and suggests plugging in the EV if solar alone won't cover the reserve
+
 ## 3.4.2 - 2026-08-03
 
 ### Improvement
