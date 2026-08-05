@@ -55,3 +55,46 @@ def test_pv_defaults_to_zero_when_no_data_exists_at_all():
     preferring real prior-day data over a bare default when it exists."""
     slots = _build(pv_curve={}, horizon_slots=4)
     assert all(s["pv"] == 0.0 for s in slots)
+
+
+def test_power_down_and_power_up_windows_populate_only_their_own_slots():
+    """power_down_windows/power_up_windows come from gridlock.py's own
+    _octoplus_session_windows() — real per-half-hour baseline data from
+    Octopus, when the two programmes' baseline sensors are enabled.
+    Confirms the per-slot fields land only on slots genuinely inside a
+    known window (not leaking onto neighbours) and stay None everywhere
+    else, including when only one of the two programmes has data."""
+    pd_start = NOW.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    pd_end = pd_start + timedelta(minutes=30)
+    pu_start = pd_start + timedelta(hours=3)
+    pu_end = pu_start + timedelta(minutes=30)
+
+    slots = build_slots(
+        NOW,
+        import_windows=[(NOW, NOW + timedelta(hours=72), 0.20)],
+        export_windows=[(NOW, NOW + timedelta(hours=72), 0.10)],
+        dispatch_windows=[],
+        pv_curve={},
+        load_kwh_fn=lambda s: 0.4,
+        cheap_rate=0.10,
+        live_import_rate=0.20, live_export_rate=0.10,
+        default_import_rate=0.20, default_export_rate=0.10,
+        horizon_slots=12, slot_min=30,
+        power_down_windows=[(pd_start, pd_end, 0.8, 350)],
+        power_up_windows=[(pu_start, pu_end, 0.3, None)])
+
+    pd_slot = next(s for s in slots if s["start"] == pd_start)
+    pu_slot = next(s for s in slots if s["start"] == pu_start)
+    assert pd_slot["power_down_baseline_kwh"] == 0.8
+    assert pd_slot["power_down_points_per_kwh"] == 350
+    assert pd_slot["power_up_baseline_kwh"] is None, \
+        "a Power Down slot shouldn't pick up Power Up data"
+    assert pu_slot["power_up_baseline_kwh"] == 0.3
+    assert pu_slot["power_down_baseline_kwh"] is None, \
+        "a Power Up slot shouldn't pick up Power Down data"
+
+    others = [s for s in slots if s["start"] not in (pd_start, pu_start)]
+    assert others, "fixture should include slots outside both windows"
+    assert all(s["power_down_baseline_kwh"] is None
+               and s["power_up_baseline_kwh"] is None for s in others), \
+        "slots outside both windows must stay None, not leak a neighbour's data"

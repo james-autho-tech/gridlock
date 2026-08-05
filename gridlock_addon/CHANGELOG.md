@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.5.0 - 2026-08-03
+
+### Improvement
+- Octopus Saving Sessions discovery now recognises both the new "Power Down" entity naming and the old "Saving Sessions" naming, and joins sessions via whichever service actually exists — old entities/services are removed in January 2027 per Octopus's own deprecation notice
+- New: Octoplus "Power Up" (formerly Free Electricity Sessions) support — a genuinely separate programme from Power Down (rewards consuming *more* than a predicted baseline, credited in £ at your own unit rate, not octopoints; no join step, automatic once enrolled)
+- The LP now weighs both programmes' real economics directly: Power Down's octopoints-per-kWh reward for reducing below a predicted baseline, and Power Up's £-per-kWh credit for exceeding one — both read from the integration's own baseline sensor (a genuine forward-looking per-half-hour prediction, not a guess), modelled with a MILP-safe formulation that can't be gamed and stays solvable even when a slot is unavoidably forced past its baseline in either direction
+- Plan table (and dashboard) now shows a Power Up marker alongside the existing Saving Session one, plus the expected £ reward/credit per slot
+- Session rewards are reported as their own figure, kept fully separate from the real grid import/export cost figures — they're real money, but not money reflected on the electricity bill
+
+### Fix
+- Caught and fixed a real Big-M bug before it shipped: the two session-reward MILP constraints each need a bound big enough to cover the "release" case in *both* directions, not just one — the initial version was infeasible (and reported a negative reward) whenever a slot was genuinely forced above a Power Down baseline, caught by a dedicated regression test built specifically to probe that case
+
 ## 3.4.3 - 2026-08-03
 
 ### Improvement

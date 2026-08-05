@@ -163,6 +163,7 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
     grid_cost_terms = []
     degradation_terms = []
     reserve_penalty_terms = []
+    session_reward_terms = []
     # Indexed by slot, unlike reserve_penalty_terms (which is just a flat
     # list for the objective sum and doesn't preserve which slot each
     # shortfall belongs to) — needed to report per-slot shortfall in
@@ -171,6 +172,16 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
     # value(None) raises AttributeError rather than returning None, so
     # this must be checked explicitly below, not passed through _val().
     reserve_shortfall_vars = [None] * n
+    # Per slot list of (variable, £-per-kWh rate) pairs contributing to
+    # that slot's Octoplus Power Down/Up reward — kept separate from
+    # grid_cost_terms deliberately: these rewards are real money, but
+    # not money reflected on the electricity bill (octopoints are
+    # redeemed separately; Power Up credit isn't the same ledger as the
+    # per-kWh tariff), so cost_trace's "real £" grid_cost/delta figures
+    # must never include them — only the objective (decision-making)
+    # should see this incentive. Reported to the caller as its own
+    # session_reward_gbp field instead.
+    session_reward_components = [[] for _ in range(n)]
 
     for i, s in enumerate(slots):
         pv, load, imp, exp = s["pv"], s["load"], s["imp"], s["exp"]
@@ -293,11 +304,72 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
         grid_in = charge[i] + grid_to_load[i]
         grid_out = pv_to_grid[i] + eff * batt_to_export[i]
         grid_cost_terms.append(imp * grid_in - exp * grid_out)
+
+        # Octoplus Power Down (formerly Saving Sessions): reward for
+        # importing LESS than the predicted per-slot baseline, paid in
+        # octopoints. Power Up (formerly Free Electricity Sessions):
+        # reward for importing MORE than baseline, credited at this
+        # slot's own unit rate (i.e. the excess above baseline is
+        # effectively free) — see gridlock.py for where these baseline
+        # figures actually come from (Octopus's own predicted-consumption
+        # sensor, a genuine forward-looking per-half-hour curve, not a
+        # guess). Both are max(0, ...) of a *maximised* quantity, which a
+        # continuous LP can't express safely: a plain "<=" tied straight
+        # to grid_in risks exactly the same false-infeasibility bug as
+        # the PV-routing constraint above whenever grid_in is forced past
+        # the baseline by real load (Power Down) or naturally sits below
+        # it, the routine case (Power Up) — confirmed by first testing
+        # this in isolation against a standalone PuLP model before it
+        # ever touched the real optimiser (both directions, including
+        # the "can the solver claim reward without earning it" check).
+        # Needs its own binary per session slot, same proven pattern as
+        # battery_full above — only adds one for slots actually inside
+        # an announced/joined session, not every slot in the horizon.
+        # Big-M must cover BOTH the "release" direction (the binary's
+        # opposite state must never force the credited amount negative
+        # against its own >=0 bound — confirmed to fail in exactly the
+        # way described above when this only accounted for one of the
+        # two directions: a genuinely-forced-above-baseline slot came
+        # back with the whole solve reported infeasible AND a negative
+        # reward, caught by test_power_down_reward_stays_feasible_
+        # when_forced_above_baseline) AND the "cap" direction (the
+        # credited amount must be able to reach the full baseline/
+        # excess when genuinely earned, not be artificially capped
+        # below it). grid_in ranges [0, max_c+load] and baseline is an
+        # independent forecast that could in principle sit outside that
+        # range — max(baseline, max_c+load) safely dominates the true
+        # gap in either direction for either variable, so the same
+        # formula is correct for both.
+        session_big_m = max(max_c + load, EPS)
+
+        pd_baseline = s.get("power_down_baseline_kwh")
+        pd_points_per_kwh = s.get("power_down_points_per_kwh") or 0.0
+        if pd_baseline is not None and pd_points_per_kwh > 0:
+            reward_rate = pd_points_per_kwh * cfg.octopoint_value_gbp
+            pd_big_m = max(pd_baseline, session_big_m)
+            pd_below = pulp.LpVariable(f"pd_below_{i}", cat="Binary")
+            pd_reduction = pulp.LpVariable(f"pd_reduction_{i}", 0)
+            prob += pd_reduction <= (pd_baseline - grid_in) + pd_big_m * (1 - pd_below)
+            prob += pd_reduction <= pd_big_m * pd_below
+            session_reward_terms.append(reward_rate * pd_reduction)
+            session_reward_components[i].append((pd_reduction, reward_rate))
+
+        pu_baseline = s.get("power_up_baseline_kwh")
+        if pu_baseline is not None:
+            reward_rate = imp  # excess above baseline is credited at this slot's own unit rate
+            pu_big_m = max(pu_baseline, session_big_m)
+            pu_above = pulp.LpVariable(f"pu_above_{i}", cat="Binary")
+            pu_excess = pulp.LpVariable(f"pu_excess_{i}", 0)
+            prob += pu_excess <= (grid_in - pu_baseline) + pu_big_m * (1 - pu_above)
+            prob += pu_excess <= pu_big_m * pu_above
+            session_reward_terms.append(reward_rate * pu_excess)
+            session_reward_components[i].append((pu_excess, reward_rate))
         degradation_terms.append(degradation * batt_to_load[i]
                                   + export_degradation * batt_to_export[i])
 
     prob += (pulp.lpSum(grid_cost_terms) + pulp.lpSum(degradation_terms)
-             + RESERVE_PENALTY * pulp.lpSum(reserve_penalty_terms))
+             + RESERVE_PENALTY * pulp.lpSum(reserve_penalty_terms)
+             - pulp.lpSum(session_reward_terms))
     try:
         prob.solve(_solver())
         infeasible = pulp.LpStatus[prob.status] != "Optimal"
@@ -350,10 +422,16 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
         # only "was one needed and not fully covered".
         shortfall_var = reserve_shortfall_vars[i]
         reserve_shortfall_kwh = _val(shortfall_var) if shortfall_var is not None else 0.0
+        # Real money, but never billed on the electricity account the
+        # way grid_in/grid_out are — octopoints are redeemed separately,
+        # Power Up credit isn't the per-kWh tariff — so this is reported
+        # as its own figure, never folded into delta/total above.
+        session_reward_gbp = sum(_val(var) * rate for var, rate in session_reward_components[i])
         cost_trace.append({"delta": round(delta, 4), "total": round(grid_cost_total, 4),
                             "grid_in": round(grid_in, 3), "charge_in": round(s["charge"], 3),
                             "battery_kwh": round(battery_kwh, 3),
-                            "reserve_shortfall_kwh": round(reserve_shortfall_kwh, 4)})
+                            "reserve_shortfall_kwh": round(reserve_shortfall_kwh, 4),
+                            "session_reward_gbp": round(session_reward_gbp, 4)})
 
     total_cost = _val(prob.objective, grid_cost_total) if prob.objective is not None else grid_cost_total
     return out_slots, trace, cost_trace, round(grid_cost_total, 4), round(total_cost, 4), infeasible

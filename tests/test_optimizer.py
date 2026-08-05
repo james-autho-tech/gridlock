@@ -179,6 +179,116 @@ def test_battery_never_drains_for_load_during_a_cheap_slot():
     assert all(c["battery_kwh"] == 0.0 for c in result.cost_trace[:3])
 
 
+def test_power_down_reward_incentivizes_reducing_below_baseline():
+    """Octoplus Power Down (formerly Saving Sessions) pays octopoints for
+    importing LESS than a predicted per-slot baseline. Set up a slot
+    where, WITHOUT the reward, self-consuming from the battery instead
+    of importing is a net loss (degradation costs more than the import
+    it avoids) — so the LP should import normally. WITH a large enough
+    reward (500 pts/kWh here, well within real session ranges), the
+    reward per kWh reduced (500/800=0.625) comfortably beats that net
+    loss (0.40-0.30=0.10/kWh), so the LP should drain the battery
+    instead specifically to beat the baseline and claim it."""
+    degradation = 0.40  # deliberately more than the 0.30 import rate
+    baseline = 1.0
+    points_per_kwh = 500  # 500/800 = 0.625 £/kWh reward
+    rows_with = [{"imp": 0.30, "exp": 0.05, "load": 1.0,
+                  "power_down_baseline_kwh": baseline,
+                  "power_down_points_per_kwh": points_per_kwh}]
+    rows_without = [{"imp": 0.30, "exp": 0.05, "load": 1.0}]
+    cfg = base_cfg(battery_kwh=10.0, floor_soc=0.0, discharge_kw=20.0,
+                    mode=Mode.BALANCED, degradation=degradation)
+
+    result_without = optimizer.solve(make_slots(rows_without, CHEAP), soc0_pct=100.0, cfg=cfg)
+    result_with = optimizer.solve(make_slots(rows_with, CHEAP), soc0_pct=100.0, cfg=cfg)
+    assert not result_without.infeasible and not result_with.infeasible
+
+    assert result_without.cost_trace[0]["grid_in"] > 0.99, \
+        "without the reward, importing is cheaper than draining the battery — should just import"
+    assert result_with.cost_trace[0]["grid_in"] < 0.5, \
+        "with a reward that clears the net cost of discharging instead, should drain the battery below baseline"
+    assert result_with.cost_trace[0]["session_reward_gbp"] > 0.5, \
+        "should report real, non-trivial reward credit for beating the baseline"
+    # The reward must NEVER leak into the real £ figures — those track
+    # actual grid_in/grid_out at the real tariff rates only.
+    real_delta = 0.30 * result_with.cost_trace[0]["grid_in"] - 0.05 * 0.0
+    assert abs(result_with.cost_trace[0]["delta"] - real_delta) < 1e-3, \
+        "delta must reflect only the real import/export cost, not the session reward"
+
+
+def test_power_down_reward_stays_feasible_when_forced_above_baseline():
+    """A predicted baseline is just a historical average — a genuinely
+    higher-than-usual load can legitimately force grid_in above it with
+    no way around it (no battery/PV available at all here). This must
+    stay solvable (not infeasible) and report zero reward, never a
+    negative one, for that slot."""
+    rows = [{"imp": 0.30, "exp": 0.05, "load": 5.0,
+             "power_down_baseline_kwh": 1.0, "power_down_points_per_kwh": 500}]
+    cfg = base_cfg(battery_kwh=10.0, floor_soc=0.0, discharge_kw=0.0,
+                    mode=Mode.BALANCED, degradation=0.05)
+    result = optimizer.solve(make_slots(rows, CHEAP), soc0_pct=0.0, cfg=cfg)
+    assert not result.infeasible
+    assert abs(result.cost_trace[0]["grid_in"] - 5.0) < 1e-3, \
+        "with no battery/PV available, all 5kWh of load must come from grid regardless of baseline"
+    assert result.cost_trace[0]["session_reward_gbp"] == 0.0, \
+        "genuinely forced above baseline should report zero reward, not a negative one"
+
+
+def test_power_up_reward_credits_import_above_baseline():
+    """Power Up (formerly Free Electricity Sessions) credits back the
+    unit rate for consumption above a predicted baseline — literally
+    "equal to the value of your current unit rate... multiplied by the
+    increase in kWh consumed" per Octopus's own T&Cs. That makes it a
+    break-even credit for the excess portion, not a flat profit margin
+    the LP would necessarily choose to chase — so this verifies the
+    *calculation* directly (grid_in forced to an exact known value via
+    zero battery/PV availability) rather than an incentive the solver
+    might be indifferent about, and checks the reward is isolated from
+    the real £ figures exactly like the Power Down case."""
+    rows = [{"imp": 0.20, "exp": 0.05, "load": 2.0, "power_up_baseline_kwh": 0.5}]
+    cfg = base_cfg(battery_kwh=10.0, floor_soc=0.0, discharge_kw=0.0,
+                    mode=Mode.BALANCED, degradation=0.05)
+    result = optimizer.solve(make_slots(rows, CHEAP), soc0_pct=0.0, cfg=cfg)
+    assert not result.infeasible
+    assert abs(result.cost_trace[0]["grid_in"] - 2.0) < 1e-3, \
+        "no battery/PV available -- all 2kWh of load must come from grid regardless of baseline"
+    expected_reward = (2.0 - 0.5) * 0.20  # excess above baseline, credited at this slot's own rate
+    assert abs(result.cost_trace[0]["session_reward_gbp"] - expected_reward) < 1e-3
+    real_delta = 0.20 * 2.0 - 0.05 * 0.0
+    assert abs(result.cost_trace[0]["delta"] - real_delta) < 1e-3, \
+        "delta must reflect only the real import cost, not the Power Up credit"
+
+
+def test_power_up_reward_stays_feasible_when_naturally_below_baseline():
+    """Sitting below a Power Up baseline is the routine case (most
+    slots, most days) — this must solve cleanly and report zero reward,
+    never a negative one and never able to be gamed into claiming
+    credit that wasn't earned."""
+    rows = [{"imp": 0.20, "exp": 0.05, "load": 0.2, "power_up_baseline_kwh": 5.0}]
+    cfg = base_cfg(battery_kwh=10.0, floor_soc=0.0, discharge_kw=0.0,
+                    mode=Mode.BALANCED, degradation=0.05)
+    result = optimizer.solve(make_slots(rows, CHEAP), soc0_pct=0.0, cfg=cfg)
+    assert not result.infeasible
+    assert result.cost_trace[0]["session_reward_gbp"] == 0.0
+
+
+def test_power_up_reward_big_m_covers_baseline_exceeding_slot_capacity():
+    """The Big-M gating pu_excess must cover the gap in BOTH directions:
+    a plain "how far above baseline could grid_in go" bound (max_c+load)
+    is NOT enough on its own if the baseline forecast itself is larger
+    than that — a real possibility, since the baseline is an independent
+    historical prediction, not derived from this slot's own charge/load
+    capacity. Deliberately construct exactly that (baseline far exceeds
+    what this slot could possibly import) to prove the fix covers this
+    direction too, not just the one the first failing test caught."""
+    rows = [{"imp": 0.20, "exp": 0.05, "load": 0.2, "power_up_baseline_kwh": 50.0}]
+    cfg = base_cfg(battery_kwh=10.0, floor_soc=0.0, charge_kw=4.0, discharge_kw=0.0,
+                    mode=Mode.BALANCED, degradation=0.05)
+    result = optimizer.solve(make_slots(rows, CHEAP), soc0_pct=0.0, cfg=cfg)
+    assert not result.infeasible
+    assert result.cost_trace[0]["session_reward_gbp"] == 0.0
+
+
 def test_ev_dispatch_slot_caps_charge_rate_and_blocks_export():
     """The 48h plan used to have zero EV-awareness at all — only the
     live, right-now slot (gridlock.py's "EV Protection" override)

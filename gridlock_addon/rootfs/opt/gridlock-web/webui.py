@@ -502,7 +502,8 @@ const PLAN_CSV_HEADERS = {
   load_kwh: 'Load (kWh)', grid_kwh: 'Grid (kWh)', charge_kwh: 'Charge (kWh)',
   battery_kwh: 'Battery (kWh)',
   action: 'Action', ev_kwh: 'EV (kWh)', dispatch: 'EV dispatch slot',
-  saving_session: 'Saving session', soc_pct: 'SoC (%)',
+  saving_session: 'Saving session', power_up_session: 'Power Up session',
+  session_reward_p: 'Session reward (p)', soc_pct: 'SoC (%)',
   cost_delta_p: 'Grid cost delta (p)', total_gbp: 'Grid total (£)',
   import_rank: 'Import rank', export_rank: 'Export rank',
 };
@@ -755,7 +756,8 @@ function renderPlanTable(table, opts) {
       <td class="num" title="Battery-side kWh discharged this slot (self-consumption + export combined) — read directly off this row, not a SoC difference against the row above">${Number(r.battery_kwh).toFixed(2)}</td>
       <td>${actionPill(r.action)}</td>
       <td>${Number(r.dispatch) > 0.5 ? `<span style="color:var(--cyan)">⚡ ${Number(r.ev_kwh).toFixed(2)}</span>` : '—'}</td>
-      <td>${Number(r.saving_session) > 0.5 ? `<span title="Joined Octopus Saving Session" style="color:#facc15">💰</span>` : '—'}</td>
+      <td>${Number(r.saving_session) > 0.5 ? `<span title="Joined Octopus Saving Session${Number(r.session_reward_p) > 0 ? ` — expects ~${Number(r.session_reward_p).toFixed(1)}p reward this slot` : ''}" style="color:#facc15">💰</span>` : '—'}</td>
+      <td>${Number(r.power_up_session) > 0.5 ? `<span title="Octopus Power Up (Free Electricity) window${Number(r.session_reward_p) > 0 ? ` — expects ~${Number(r.session_reward_p).toFixed(1)}p credit this slot` : ''}" style="color:#4ade80">⚡🆓</span>` : '—'}</td>
       <td>${socMiniBar(r.soc_pct)}</td>
       <td style="color:${Number(r.cost_delta_p) <= 0 ? 'var(--green)' : 'var(--amber)'}">${Number(r.cost_delta_p) > 0 ? '+' : ''}${Number(r.cost_delta_p).toFixed(1)}p</td>
       <td>£${Number(r.total_gbp).toFixed(2)}</td>
@@ -763,7 +765,7 @@ function renderPlanTable(table, opts) {
   }).join('');
   return `<div class="gl-table-scroll"><table class="gl-plan">
     <tr><th>Slot</th><th>Import</th><th>Export</th><th>PV kWh</th><th>Load kWh</th>
-        <th>Grid kWh</th><th>Charge kWh</th><th title="Battery kWh discharged this slot, self-consumption + export combined">Battery kWh</th><th>Action</th><th>EV kWh</th><th>Saving</th><th>SoC</th>
+        <th>Grid kWh</th><th>Charge kWh</th><th title="Battery kWh discharged this slot, self-consumption + export combined">Battery kWh</th><th>Action</th><th>EV kWh</th><th>Saving</th><th>Power Up</th><th>SoC</th>
         <th>Grid £</th><th>Total £</th></tr>
     ${trs}
   </table></div>`;

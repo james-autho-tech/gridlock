@@ -39,6 +39,26 @@ gridlock:
   # tooltip on that tile for the calculated figure.
   # daily_export_value_entity: sensor.octopus_energy_electricity_XXXXXXXX_2222222222222_current_accumulative_cost
 
+  # --- Octoplus Power Down / Power Up (Saving Sessions / Free
+  # Electricity Sessions, renamed) ---
+  # Power Down (reduce consumption below a predicted baseline for
+  # octopoints) is auto-discovered and auto-joined as before. Power Up
+  # (consume MORE than baseline, credited in £ at your own unit rate —
+  # a genuinely separate programme, not the same thing renamed) is new:
+  # auto-discovered, but there's no join step — you're automatically
+  # included in every announced session once enrolled with Octopus.
+  # Both programmes' *baseline* sensors (a real predicted per-half-hour
+  # curve, not a guess — computed by the integration from your own
+  # historic consumption) are **disabled by default in Home Assistant**
+  # — enable them yourself (Settings > Devices & services > Entities)
+  # for GridLock to actually weigh the reward/credit into the plan.
+  # Without them, sessions still show up in the plan table as
+  # informational markers, just without the economic incentive applied.
+  # power_up_events: event.octopus_energy_a_XXXXXXXX_octoplus_power_up_events
+  # power_down_baseline_entity: sensor.octopus_energy_electricity_XXXXXXXX_1111111111111_octoplus_power_down_baseline
+  # power_up_baseline_entity: sensor.octopus_energy_electricity_XXXXXXXX_1111111111111_octoplus_power_up_baseline
+  # octopoint_value_gbp: 0.00125    # £ per octopoint (1/800) — community-consensus rate, override if Octopus changes it
+
   # Solcast half-hourly curves
   solcast_detail_today: sensor.solcast_pv_forecast_forecast_today
   solcast_detail_tomorrow: sensor.solcast_pv_forecast_forecast_tomorrow

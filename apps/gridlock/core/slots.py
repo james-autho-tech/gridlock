@@ -31,14 +31,29 @@ def _pv_for_slot(pv_curve, s):
     return pv_curve.get(s - timedelta(hours=24), 0.0)
 
 
+def _octoplus_baseline_for_slot(windows, s):
+    """windows: list of (start, end, baseline_kwh, points_per_kwh) —
+    from gridlock.py's _octoplus_session_windows(), a real per-half-hour
+    predicted curve from Octopus's own baseline sensor, not a guess.
+    Returns (baseline_kwh, points_per_kwh) for whichever window contains
+    this slot's start, or (None, None) if it falls outside every known
+    session window (the common case, most slots aren't in a session)."""
+    for ws, we, baseline_kwh, points_per_kwh in windows:
+        if ws <= s < we:
+            return baseline_kwh, points_per_kwh
+    return None, None
+
+
 def build_slots(now, *, import_windows, export_windows, dispatch_windows,
                  pv_curve, load_kwh_fn, cheap_rate,
                  live_import_rate, live_export_rate,
                  default_import_rate, default_export_rate,
-                 horizon_slots, slot_min):
+                 horizon_slots, slot_min,
+                 power_down_windows=(), power_up_windows=()):
     """Returns a list of slot dicts:
     {start, end, imp, exp, pv, load, dispatch, ev_kwh, charge, export,
-     next_cheap_idx, remaining_deficit}
+     power_down_baseline_kwh, power_down_points_per_kwh,
+     power_up_baseline_kwh, next_cheap_idx, remaining_deficit}
 
     charge/export start at 0.0 — optimizer.solve() fills them in.
     """
@@ -71,6 +86,11 @@ def build_slots(now, *, import_windows, export_windows, dispatch_windows,
             "charge": 0.0,
             "export": 0.0,
         })
+        pd_baseline, pd_points = _octoplus_baseline_for_slot(power_down_windows, s)
+        pu_baseline, _ = _octoplus_baseline_for_slot(power_up_windows, s)
+        slots[-1]["power_down_baseline_kwh"] = pd_baseline
+        slots[-1]["power_down_points_per_kwh"] = pd_points
+        slots[-1]["power_up_baseline_kwh"] = pu_baseline
 
     annotate_reserve(slots, cheap_rate)
     return slots

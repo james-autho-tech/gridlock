@@ -90,6 +90,16 @@ HORIZON_SLOTS = 96  # 48h — spec's explicit ask; a strict superset of the
 # previous 28h horizon (see gridlock.py's own history for why 24h wasn't
 # enough), so nothing about the old reasoning is lost by extending it.
 
+# Octopus's Octoplus "Power Down" (formerly Saving Sessions) reward is
+# paid in octopoints, not £ directly. ~800 octopoints = £1 is
+# community-consensus (corroborated by the HA integration's own
+# redeem_octoplus_points_into_account_credit service using a minimum/
+# step of 8, i.e. exactly 1p at that rate) but isn't verified against a
+# primary Octopus source and could change — kept as an explicit,
+# overridable constant rather than baked into the optimiser's maths, so
+# a real rate change is a one-line config edit, not a code change.
+OCTOPOINT_VALUE_GBP = 1.0 / 800
+
 
 @dataclass
 class SiteConfig:
@@ -118,6 +128,7 @@ class SiteConfig:
     degradation: float = None  # None -> RISK_PROFILES[mode]
     export_degradation: float = None  # None -> EXPORT_DEGRADATION_OVERRIDES[mode], or degradation if mode isn't in it
     target_daily_net_cost: float = None  # None disables the balanced-mode cutoff
+    octopoint_value_gbp: float = None  # None -> OCTOPOINT_VALUE_GBP
 
     storm_target_soc: float = 100.0
 
@@ -143,3 +154,5 @@ class SiteConfig:
             self.degradation = RISK_PROFILES[self.mode]
         if self.export_degradation is None:
             self.export_degradation = EXPORT_DEGRADATION_OVERRIDES.get(self.mode, self.degradation)
+        if self.octopoint_value_gbp is None:
+            self.octopoint_value_gbp = OCTOPOINT_VALUE_GBP

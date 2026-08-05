@@ -33,7 +33,8 @@ STATE_FILES = ("load_profile.json", "savings_state.json", "savings_history.json"
 # two can never drift out of sync with each other.
 PLAN_TABLE_COLS = ["slot", "import_p", "export_p", "pv_kwh", "load_kwh",
                    "grid_kwh", "charge_kwh", "battery_kwh", "action", "ev_kwh",
-                   "dispatch", "saving_session", "soc_pct", "cost_delta_p", "total_gbp",
+                   "dispatch", "saving_session", "power_up_session", "session_reward_p",
+                   "soc_pct", "cost_delta_p", "total_gbp",
                    "import_rank", "export_rank"]
 
 # Confirmed in production (2026-07-30): a value equal to exactly 0/0.0
@@ -137,13 +138,50 @@ class GridLock(hass.Hass):
                                 or self.overrides.get("export_rate_override")
                                 or self.registry.find(
             prefix="sensor.octopus_energy_electricity_", suffix="_export_current_rate"))
+        # Octopus renamed "Saving Sessions" to "Power Down" sessions
+        # (HomeAssistant-OctopusEnergy ADR 0004) — old _saving_session_
+        # events entities are kept until Jan 2027, then removed, so this
+        # tries the new naming first (what a current install actually
+        # exposes) and falls back to the old one for as long as it's
+        # still there, rather than only recognising the name that's
+        # already scheduled for removal.
         self.ent_saving_events = (a.get("octopus_saving_events")
                                   or self.overrides.get("octopus_saving_events_override")
                                   or self.registry.find(
+            prefix="event.octopus_energy_", suffix="_octoplus_power_down_events")
+                                  or self.registry.find(
             prefix="event.octopus_energy_", suffix="_octoplus_saving_session_events"))
+
+        # Free Electricity Sessions, renamed "Power Up" (same ADR as
+        # above) — a genuinely separate Octopus programme from Power
+        # Down, not another name for the same thing: it rewards
+        # importing MORE than a predicted baseline (credited at your
+        # own unit rate for the excess), not less, and — confirmed
+        # against the integration's services.yaml — has no join
+        # service at all. You're automatically included in every
+        # announced session once enrolled, so there's nothing to
+        # auto-join here, only sessions to read and plan around.
+        self.ent_power_up_events = (a.get("power_up_events")
+                                    or self.overrides.get("power_up_events_override")
+                                    or self.registry.find(
+            prefix="event.octopus_energy_", suffix="_octoplus_power_up_events"))
 
         import_stem = self.registry.mpan_stem(self.ent_import_rate, "_current_rate")
         export_stem = self.registry.mpan_stem(self.ent_export_rate, "_export_current_rate")
+
+        # Both baseline sensors are disabled by default in HA (per the
+        # integration's own docs) — the user needs to enable them for
+        # session-reward modelling to have anything to read; discovery
+        # degrades gracefully to "no reward modelling" if neither is
+        # found or enabled, same as any other optional sensor.
+        self.ent_power_down_baseline = (a.get("power_down_baseline_entity")
+                                        or self.overrides.get("power_down_baseline_entity_override")
+                                        or self.registry.find_sibling(
+            import_stem, "sensor", ["_octoplus_power_down_baseline"]))
+        self.ent_power_up_baseline = (a.get("power_up_baseline_entity")
+                                      or self.overrides.get("power_up_baseline_entity_override")
+                                      or self.registry.find_sibling(
+            import_stem, "sensor", ["_octoplus_power_up_baseline"]))
         self.ent_rates = [e for e in [
             a.get("import_rates_previous") or self.registry.find_sibling(
                 import_stem, "event", ["_previous_day_rates"]),
@@ -850,12 +888,24 @@ class GridLock(hass.Hass):
     def check_and_join_sessions(self):
         if self.get_state("input_boolean.gridlock_enable") == "off":
             return
+        # Which join service exists depends on which entity naming was
+        # actually discovered (gridlock.py's ent_saving_events discovery
+        # tries the new "power_down" suffix first, falling back to the
+        # old "saving_session" one) — picking the service by what was
+        # actually found is more reliable than guessing/trying one and
+        # catching a failure, since a missing-service call doesn't
+        # necessarily raise a catchable Python exception through
+        # AppDaemon's call_service.
+        join_service = ("octopus_energy/join_octoplus_saving_session_event"
+                        if self.ent_saving_events
+                        and "_octoplus_saving_session_events" in self.ent_saving_events
+                        else "octopus_energy/join_octoplus_power_down_session_event")
         for ev in self._attr_list(self.ent_saving_events, "available_events"):
             code = ev.get("code")
             if code:
                 self.log(f"Saving Session {code} found - auto-enrolling")
                 self.call_service(
-                    "octopus_energy/join_octoplus_saving_session_event",
+                    join_service,
                     target={"entity_id": self.ent_saving_events},
                     event_code=code)
                 start = ev.get("start", "")
@@ -1016,6 +1066,61 @@ class GridLock(hass.Hass):
     # ------------------------------------------------------------------
     # SLOT MODEL / OPTIMISER
     # ------------------------------------------------------------------
+    def _power_down_points_for_session(self, start, end):
+        """octopoints_per_kwh for whichever joined Power Down session
+        the baseline sensor's own start/end matches — Power Down is
+        opt-in, so this has to be cross-referenced against the joined
+        list rather than read off the baseline sensor itself (which
+        doesn't carry a points figure)."""
+        for ev in self._attr_list(self.ent_saving_events, "joined_events"):
+            try:
+                if self._iso(ev["start"]) == start and self._iso(ev["end"]) == end:
+                    return ev.get("octopoints_per_kwh")
+            except (KeyError, ValueError, TypeError):
+                continue
+        return None
+
+    def _octoplus_session_windows(self, baseline_entity, points_lookup=None):
+        """Turn a Power Down/Power Up baseline sensor's own per-half-hour
+        `baselines` array into (start, end, baseline_kwh, points_per_kwh)
+        windows the optimiser can read directly — a genuine predicted
+        curve for whichever session the sensor currently reflects (the
+        "current or next" one), computed by the integration itself from
+        real historic consumption, available ahead of the session
+        actually starting. Both baseline sensors are disabled by default
+        in HA — if the user hasn't enabled it, this just returns an
+        empty list and reward modelling for that programme is silently
+        skipped, same as if it was never discovered at all. points_lookup
+        is only relevant for Power Down (Power Up has no points field —
+        it's credited directly in £, see its discovery comment above)."""
+        if not baseline_entity or not self.entity_exists(baseline_entity):
+            return []
+        state_obj = self.get_state(baseline_entity, attribute="all") or {}
+        attrs = state_obj.get("attributes", {}) or {}
+        if attrs.get("is_incomplete_calculation"):
+            # Not enough matching historic half-hourly data yet (e.g. a
+            # new meter) — the integration's own docs flag this as
+            # unreliable, so don't feed it into planning.
+            return []
+        baselines = attrs.get("baselines")
+        if not isinstance(baselines, list):
+            return []
+        points_per_kwh = None
+        session_start, session_end = attrs.get("start"), attrs.get("end")
+        if points_lookup and session_start and session_end:
+            try:
+                points_per_kwh = points_lookup(self._iso(session_start), self._iso(session_end))
+            except (TypeError, ValueError):
+                points_per_kwh = None
+        windows = []
+        for period in baselines:
+            try:
+                windows.append((self._iso(period["start"]), self._iso(period["end"]),
+                                float(period["baseline"]), points_per_kwh))
+            except (KeyError, ValueError, TypeError):
+                continue
+        return windows
+
     def build_slots(self, now):
         live_imp = self.get_float_state(self.ent_import_rate, self.default_import)
         live_exp = self.get_float_state(self.ent_export_rate, self.default_export)
@@ -1029,6 +1134,9 @@ class GridLock(hass.Hass):
             cheap_rate=self.cheap_rate,
             live_import_rate=live_imp, live_export_rate=live_exp,
             default_import_rate=self.default_import, default_export_rate=self.default_export,
+            power_down_windows=self._octoplus_session_windows(
+                self.ent_power_down_baseline, self._power_down_points_for_session),
+            power_up_windows=self._octoplus_session_windows(self.ent_power_up_baseline),
             horizon_slots=self.cfg.horizon_slots, slot_min=self.cfg.slot_min)
 
     def _solve_plan(self, slots, soc0, now):
@@ -1150,6 +1258,14 @@ class GridLock(hass.Hass):
                        if s["dispatch"] else "—")
             in_saving_session = any(ws <= s["start"] < we for ws, we in saving_windows)
             saving_cell = "<span style='color:#facc15'>💰</span>" if in_saving_session else "—"
+            # Power Up (Free Electricity) doesn't need its own window
+            # list the way Saving Sessions does — no opt-in, so every
+            # slot the baseline sensor covers already came straight off
+            # build_slots() as power_up_baseline_kwh, no separate
+            # joined/available distinction to check against.
+            in_power_up_session = s.get("power_up_baseline_kwh") is not None
+            power_up_cell = "<span style='color:#4ade80'>⚡🆓</span>" if in_power_up_session else "—"
+            session_reward_p = cost_trace[i].get("session_reward_gbp", 0.0) * 100
             delta_p = cost_trace[i]["delta"] * 100
             delta_colour = "#22c55e" if delta_p <= 0 else "#fbbf24"
             delta_sign = "+" if delta_p > 0 else ""
@@ -1173,6 +1289,7 @@ class GridLock(hass.Hass):
                 f"<td style='color:{colour};font-weight:600'>{act}</td>"
                 f"<td>{ev_cell}</td>"
                 f"<td>{saving_cell}</td>"
+                f"<td>{power_up_cell}</td>"
                 f"<td>{trace[i]:.0f}%</td>"
                 f"<td style='color:{delta_colour}'>{delta_sign}{delta_p:.1f}p</td>"
                 f"<td>£{cost_trace[i]['total']:.2f}</td></tr>")
@@ -1189,6 +1306,8 @@ class GridLock(hass.Hass):
                 round(s["ev_kwh"], 3) if s["dispatch"] else 0.0,
                 1 if s["dispatch"] else 0,
                 1 if in_saving_session else 0,
+                1 if in_power_up_session else 0,
+                round(session_reward_p, 2),
                 trace[i], round(delta_p, 2), cost_trace[i]["total"],
                 imp_rank[i], exp_rank[i]]
             plan_row = [self._json_safe(v) for v in plan_row]
@@ -1201,7 +1320,7 @@ class GridLock(hass.Hass):
         html = ("<table class='gridlock-plan'><tr><th>Slot</th><th>Import</th>"
                 "<th>Export</th><th>PV kWh</th><th>Load kWh</th>"
                 "<th>Grid kWh</th><th>Charge kWh</th><th>Battery kWh</th><th>Action</th>"
-                "<th>EV kWh</th><th>Saving session</th><th>SoC</th><th>Grid £</th><th>Total £</th></tr>"
+                "<th>EV kWh</th><th>Saving session</th><th>Power Up</th><th>SoC</th><th>Grid £</th><th>Total £</th></tr>"
                 + "".join(rows) + "</table>")
         self.set_state("sensor.gridlock_soc_forecast", state=str(trace[0]),
                        attributes={"friendly_name": "GridLock SoC Forecast",

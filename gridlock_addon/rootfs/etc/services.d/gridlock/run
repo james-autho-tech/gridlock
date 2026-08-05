@@ -116,6 +116,8 @@ fi
 # issues with whatever a user types into the config form.
 for f in ev_charging_override octopus_dispatch_override import_rate_override \
          export_rate_override octopus_saving_events_override \
+         power_up_events_override power_down_baseline_entity_override \
+         power_up_baseline_entity_override \
          load_power_entity_override ev_power_entity_override \
          grid_power_entity_override battery_power_entity_override \
          ssen_postcode_override storm_watch_entity_override \
