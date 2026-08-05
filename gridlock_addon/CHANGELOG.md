@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.5.3 - 2026-08-05
+
+### Improvement
+- Plan table's Saving/Power Up tooltips now show the actual predicted baseline (kWh) alongside your real import, so a small reward is self-explanatory (proportional to a small baseline gap, not money left on the table) instead of looking unexplained
+- New `session_baseline_kwh` field in the plan table and CSV export
+
 ## 3.5.2 - 2026-08-05
 
 ### Improvement

@@ -34,6 +34,7 @@ STATE_FILES = ("load_profile.json", "savings_state.json", "savings_history.json"
 PLAN_TABLE_COLS = ["slot", "import_p", "export_p", "pv_kwh", "load_kwh",
                    "grid_kwh", "charge_kwh", "battery_kwh", "action", "ev_kwh",
                    "dispatch", "saving_session", "power_up_session", "session_reward_p",
+                   "session_baseline_kwh",
                    "soc_pct", "cost_delta_p", "total_gbp",
                    "import_rank", "export_rank"]
 
@@ -1266,6 +1267,18 @@ class GridLock(hass.Hass):
             in_power_up_session = s.get("power_up_baseline_kwh") is not None
             power_up_cell = "<span style='color:#4ade80'>⚡🆓</span>" if in_power_up_session else "—"
             session_reward_p = cost_trace[i].get("session_reward_gbp", 0.0) * 100
+            # Whichever programme applies to this slot (mutually
+            # exclusive per slot) — shown alongside grid_kwh so a small
+            # reward is self-explanatory: if the baseline itself is
+            # small for this half-hour (this user's own historic
+            # consumption pattern, not a guess), there's only ever a
+            # small amount of "reduction" to credit, no matter how
+            # little is actually imported.
+            session_baseline_kwh = s.get("power_down_baseline_kwh")
+            if session_baseline_kwh is None:
+                session_baseline_kwh = s.get("power_up_baseline_kwh")
+            if session_baseline_kwh is None:
+                session_baseline_kwh = 0.0
             delta_p = cost_trace[i]["delta"] * 100
             delta_colour = "#22c55e" if delta_p <= 0 else "#fbbf24"
             delta_sign = "+" if delta_p > 0 else ""
@@ -1308,6 +1321,7 @@ class GridLock(hass.Hass):
                 1 if in_saving_session else 0,
                 1 if in_power_up_session else 0,
                 round(session_reward_p, 2),
+                round(session_baseline_kwh, 3),
                 trace[i], round(delta_p, 2), cost_trace[i]["total"],
                 imp_rank[i], exp_rank[i]]
             plan_row = [self._json_safe(v) for v in plan_row]

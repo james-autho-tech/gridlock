@@ -511,7 +511,8 @@ const PLAN_CSV_HEADERS = {
   battery_kwh: 'Battery (kWh)',
   action: 'Action', ev_kwh: 'EV (kWh)', dispatch: 'EV dispatch slot',
   saving_session: 'Saving session', power_up_session: 'Power Up session',
-  session_reward_p: 'Session reward (p)', soc_pct: 'SoC (%)',
+  session_reward_p: 'Session reward (p)', session_baseline_kwh: 'Session baseline (kWh)',
+  soc_pct: 'SoC (%)',
   cost_delta_p: 'Grid cost delta (p)', total_gbp: 'Grid total (£)',
   import_rank: 'Import rank', export_rank: 'Export rank',
 };
@@ -764,8 +765,8 @@ function renderPlanTable(table, opts) {
       <td class="num" title="Battery-side kWh discharged this slot (self-consumption + export combined) — read directly off this row, not a SoC difference against the row above">${Number(r.battery_kwh).toFixed(2)}</td>
       <td>${actionPill(r.action)}</td>
       <td>${Number(r.dispatch) > 0.5 ? `<span style="color:var(--cyan)">⚡ ${Number(r.ev_kwh).toFixed(2)}</span>` : '—'}</td>
-      <td>${Number(r.saving_session) > 0.5 ? `<span title="Joined Octopus Saving Session (Power Down) — rewards importing LESS than a predicted baseline this window, not exporting more. A slot showing ECO with 0 grid import is already earning the full available credit; whether to also export is a separate decision." style="color:#facc15">💰${Number(r.session_reward_p) > 0 ? `<br><span class="num" style="font-size:11px">+${Number(r.session_reward_p).toFixed(1)}p</span>` : ''}</span>` : '—'}</td>
-      <td>${Number(r.power_up_session) > 0.5 ? `<span title="Octopus Power Up (Free Electricity) — credits consuming MORE than a predicted baseline this window, at your own unit rate. Separate from export: this rewards using extra power (e.g. charging harder), not selling it." style="color:#4ade80">⚡🆓${Number(r.session_reward_p) > 0 ? `<br><span class="num" style="font-size:11px">+${Number(r.session_reward_p).toFixed(1)}p</span>` : ''}</span>` : '—'}</td>
+      <td>${Number(r.saving_session) > 0.5 ? `<span title="Joined Octopus Saving Session (Power Down) — rewards importing LESS than a predicted baseline this window (based on YOUR OWN historic usage for this half-hour, not a guess), not exporting more. Baseline ~${Number(r.session_baseline_kwh).toFixed(2)}kWh vs ${Number(r.grid_kwh).toFixed(2)}kWh actually imported — credit is proportional to that gap, so a small baseline means a small reward even at 0 import; it isn't being left on the table. Exporting is a separate decision, governed by the export price threshold." style="color:#facc15">💰${Number(r.session_reward_p) > 0 ? `<br><span class="num" style="font-size:11px">+${Number(r.session_reward_p).toFixed(1)}p</span>` : ''}</span>` : '—'}</td>
+      <td>${Number(r.power_up_session) > 0.5 ? `<span title="Octopus Power Up (Free Electricity) — credits consuming MORE than a predicted baseline this window (based on YOUR OWN historic usage for this half-hour), at your own unit rate. Baseline ~${Number(r.session_baseline_kwh).toFixed(2)}kWh vs ${Number(r.grid_kwh).toFixed(2)}kWh actually imported — credit is proportional to the excess above that. Separate from export: this rewards using extra power (e.g. charging harder), not selling it." style="color:#4ade80">⚡🆓${Number(r.session_reward_p) > 0 ? `<br><span class="num" style="font-size:11px">+${Number(r.session_reward_p).toFixed(1)}p</span>` : ''}</span>` : '—'}</td>
       <td>${socMiniBar(r.soc_pct)}</td>
       <td style="color:${Number(r.cost_delta_p) <= 0 ? 'var(--green)' : 'var(--amber)'}">${Number(r.cost_delta_p) > 0 ? '+' : ''}${Number(r.cost_delta_p).toFixed(1)}p</td>
       <td>£${Number(r.total_gbp).toFixed(2)}</td>
