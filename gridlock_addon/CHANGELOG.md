@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.5.7 - 2026-08-05
+
+### Improvement
+- Replaced the Action column's hover tooltips with a plain, always-visible key table above the full plan
+
 ## 3.5.6 - 2026-08-05
 
 ### Improvement

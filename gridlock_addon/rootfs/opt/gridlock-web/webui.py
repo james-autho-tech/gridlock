@@ -430,6 +430,11 @@ PAGE = r"""<!doctype html>
                         border:1px solid var(--line); overflow:hidden; flex:0 0 auto; }
   .gl-soc-mini-fill { height:100%; border-radius:4px; background:linear-gradient(90deg,#0e7490,var(--green)); }
 
+  /* ---- static Action legend (plain reference table, not a hover) ---- */
+  table.gl-legend-table { width:100%; border-collapse:collapse; font-size:12px; margin:10px 0 16px; }
+  table.gl-legend-table td { padding:6px 10px; border-bottom:1px solid #14203a; color:var(--dim); vertical-align:top; }
+  table.gl-legend-table td:first-child { white-space:nowrap; width:1%; }
+
   /* ---- overview bypass banner + flow glow ---- */
   .gl-bypass-banner { display:flex; align-items:center; gap:8px; padding:10px 14px;
                        border-radius:10px; background:rgba(251,146,60,.14);
@@ -574,16 +579,28 @@ function isStormHold(state) {
   return String(state || '').includes('Storm');
 }
 // Action string (from plan_table, or the live row-0 label) -> pill badge.
-const PLANNED_BYPASS_TITLE = "Grid imports straight through to load this slot — the battery is deliberately left alone because importing fresh at this cheap/off-peak rate is cheaper than cycling stored charge to avoid it. No extra wear, no loss: this is the plan working as intended, not a fallback.";
-const FORCED_BYPASS_TITLE = "Grid had to cover load directly because the battery was already at its floor SoC with no solar to help — a genuine shortfall, not a planning choice. Frequent occurrences may mean the reserve target or an earlier charge slot needs adjusting.";
 function actionPill(action) {
   const a = String(action || '');
-  if (isBypass(a)) return `<span class="gl-pill gl-pill-bypass" title="${FORCED_BYPASS_TITLE}">⚠️ BYPASS</span>`;
-  if (isPlannedBypass(a)) return `<span class="gl-pill gl-pill-bypass-planned" title="${PLANNED_BYPASS_TITLE}">BYPASS</span>`;
+  if (isBypass(a)) return `<span class="gl-pill gl-pill-bypass">⚠️ BYPASS</span>`;
+  if (isPlannedBypass(a)) return `<span class="gl-pill gl-pill-bypass-planned">BYPASS</span>`;
   if (isStormHold(a)) return `<span class="gl-pill gl-pill-storm">🔴 STORM_HOLD</span>`;
   if (a.includes('CHARGE') || a.includes('Charg')) return `<span class="gl-pill gl-pill-charge">🟢 CHARGE</span>`;
   if (a.includes('EXPORT') || a.includes('Export') || a.includes('Session')) return `<span class="gl-pill gl-pill-export">🔵 EXPORT</span>`;
   return `<span class="gl-pill gl-pill-eco">🟡 ${esc(a || 'ECO')}</span>`;
+}
+// Static reference table for the Action column — a plain always-visible
+// key instead of relying on hover, so the meaning of each pill (especially
+// the two Bypass variants, easy to conflate) doesn't depend on finding it.
+function actionLegendHtml() {
+  const rows = [
+    ['CHARGE', 'Grid charges the battery — a genuinely cheap/off-peak or dispatch slot.'],
+    ['EXPORT', 'Battery discharges to sell — the export price clears the degradation cost.'],
+    ['ECO', 'Self-consumption — load is covered by solar and/or the battery.'],
+    ['Bypass', "Grid covers load directly and the battery is left alone on purpose — importing fresh at this cheap/off-peak rate is cheaper than cycling stored charge to avoid it. No extra wear, no loss."],
+    ['Forced Bypass', 'Grid had to cover load directly because the battery was already at its floor SoC with no solar to help — a genuine shortfall, not a planning choice.'],
+  ];
+  return `<table class="gl-legend-table">${rows.map(([action, desc]) =>
+    `<tr><td>${actionPill(action)}</td><td>${esc(desc)}</td></tr>`).join('')}</table>`;
 }
 let modeSwitchBusy = false;
 async function setMode(mode) {
@@ -807,7 +824,7 @@ function renderPlanTable(table, opts) {
   return `<div class="gl-table-scroll"><table class="gl-plan">
     <tr><th>Slot</th><th>Import</th><th>Export</th><th>PV kWh</th><th>Load kWh</th>
         <th>Grid kWh</th><th>Charge kWh</th><th title="Battery kWh discharged this slot, self-consumption + export combined">Battery kWh</th>
-        <th title="CHARGE: grid charges the battery. EXPORT: battery discharges to sell. ECO: self-consumption from PV/battery. BYPASS: grid covers load directly, battery deliberately left idle because it's cheaper than cycling it. ⚠️ BYPASS: same, but forced — battery was at floor with no solar to help.">Action</th>
+        <th>Action</th>
         <th>EV kWh</th>
         <th title="Rewards importing LESS than a predicted baseline — not exporting more. These are separate decisions; ECO with 0 grid import is already earning the full credit available.">Saving</th>
         <th title="Credits consuming MORE than a predicted baseline, at your own unit rate — not exporting more. Separate from the export decision.">Power Up</th>
@@ -1221,6 +1238,7 @@ async function refresh() {
           <button class="gl-more-btn" style="width:auto;padding:8px 16px;margin:0" onclick="downloadPlanCsv()" ${(d.plan_table && d.plan_table.rows || []).length ? '' : 'disabled'}>⬇ Download CSV</button>
         </div>
         ${d.plan_summary ? `<div class="gl-sub">${esc(d.plan_summary)}</div>` : ''}
+        ${actionLegendHtml()}
         <div class="gl-scroll">${renderPlanTable(d.plan_table, { cheapP: d.cheap_rate_p })}</div>
       </div>
     </div>
