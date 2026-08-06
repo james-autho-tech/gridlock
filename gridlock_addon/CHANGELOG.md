@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.5.5 - 2026-08-05
+
+### Improvement
+- Plan table now labels deliberate cheap-import passthrough slots "Bypass" instead of "ECO" — battery held back on purpose, not self-consumption
+- Renamed the genuine floor-forced case to "Forced Bypass" so it stays visually distinct (warning styling) from the new, cost-optimal "Bypass" label
+
 ## 3.5.4 - 2026-08-05
 
 ### Improvement

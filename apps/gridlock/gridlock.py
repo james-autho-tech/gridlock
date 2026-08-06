@@ -1263,18 +1263,34 @@ class GridLock(hass.Hass):
                 act = core_optimizer.action(s)
                 colour = {"CHARGE": "#22c55e", "EXPORT": "#38bdf8",
                           "ECO": "#9ca3af"}[act]
-                # "Bypass" should mean the battery genuinely couldn't cover
-                # load and grid had to step in — not just "this slot's plan
-                # projects SoC ending up near the floor". A slot that fully
-                # covers load from the battery with zero grid import is the
-                # reserve mechanism working as intended (drain it down
-                # before the next cheap slot recharges it), not a failure;
-                # the old condition flagged that success as a warning
-                # purely on SoC proximity to floor, with no check on
-                # whether grid was actually needed that slot.
-                if (act == "ECO" and trace[i] <= self.floor_soc + 2.0
-                        and s["pv"] <= 0.01 and cost_trace[i]["grid_in"] > core_optimizer.EPS):
-                    act = "ECO (Bypass)"
+                # An "ECO" slot where grid served the load directly and the
+                # battery didn't move at all (no charge, no self-consumption,
+                # no export) is worth its own label rather than blending
+                # into "self-consumption" — but which label depends on WHY
+                # the battery sat idle:
+                if (act == "ECO" and cost_trace[i]["grid_in"] > core_optimizer.EPS
+                        and cost_trace[i]["battery_kwh"] <= core_optimizer.EPS):
+                    if s["imp"] <= self.cheap_rate:
+                        # Deliberate, and cost-optimal: optimizer.py forces
+                        # batt_to_load==0 in every cheap/off-peak slot on
+                        # purpose — importing fresh at this same cheap rate
+                        # is strictly cheaper than cycling stored charge to
+                        # avoid paying it, so the battery is held back by
+                        # design, not because it ran out. Neutral label, not
+                        # a warning — this is the plan working as intended.
+                        act = "Bypass"
+                        colour = "#60a5fa"
+                    elif trace[i] <= self.floor_soc + 2.0 and s["pv"] <= 0.01:
+                        # Genuine problem: normal/peak pricing, but the
+                        # battery had nothing left to give and grid had to
+                        # step in. A slot that fully covers load from the
+                        # battery with zero grid import is the reserve
+                        # mechanism working as intended (drain it down
+                        # before the next cheap slot recharges it), not a
+                        # failure — this only fires when grid was actually
+                        # needed.
+                        act = "Forced Bypass"
+                        colour = "#fb923c"
             ev_cell = (f"<span style='color:#38bdf8'>⚡ {s['ev_kwh']:.2f}</span>"
                        if s["dispatch"] else "—")
             in_saving_session = any(ws <= s["start"] < we for ws, we in saving_windows)
@@ -1689,7 +1705,7 @@ class GridLock(hass.Hass):
                 # battery with free solar arriving should charge from it
                 # via normal self-consumption, not sit bypassed.
                 mode = self.inverter_adapter.MODE_BYPASS
-                state = f"{state} — Bypass"
+                state = f"{state} — Forced Bypass"
                 reason = f"{reason} (battery at floor — bypass mode)"
         self._log_decision(state, reason)
 

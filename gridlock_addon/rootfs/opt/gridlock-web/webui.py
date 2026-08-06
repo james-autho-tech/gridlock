@@ -401,6 +401,13 @@ PAGE = r"""<!doctype html>
   .gl-pill-storm  { background:rgba(220,38,38,.20); color:var(--crimson); }
   .gl-pill-bypass { background:rgba(251,146,60,.22); color:#fb923c;
                      animation:pillglow 1.8s ease-in-out infinite; }
+  /* Deliberate, cost-optimal off-peak passthrough (battery held back on
+     purpose because importing is cheaper than cycling it) — kept visually
+     distinct from .gl-pill-bypass above, which means the battery genuinely
+     had nothing left to give. Same word, deliberately different colour and
+     no glow animation, so a routine cheap-import night never reads as a
+     problem. */
+  .gl-pill-bypass-planned { background:rgba(96,165,250,.18); color:#60a5fa; }
   @keyframes pillglow {
     0%, 100% { box-shadow:0 0 2px rgba(251,146,60,.4); }
     50% { box-shadow:0 0 10px rgba(251,146,60,.85); }
@@ -551,8 +558,17 @@ function dotColor(state) {
 function esc(s) {
   return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 }
+// "Forced Bypass" only — the battery genuinely had nothing left to give
+// and grid had to step in. Deliberately narrower than a bare "Bypass"
+// substring match: gridlock.py also uses the plain label "Bypass" for the
+// opposite, cost-optimal case (battery held back on purpose because
+// importing is cheaper than cycling it), which must NOT trigger this
+// warning treatment.
 function isBypass(state) {
-  return String(state || '').includes('Bypass');
+  return String(state || '').includes('Forced Bypass');
+}
+function isPlannedBypass(state) {
+  return String(state || '').trim() === 'Bypass';
 }
 function isStormHold(state) {
   return String(state || '').includes('Storm');
@@ -561,6 +577,7 @@ function isStormHold(state) {
 function actionPill(action) {
   const a = String(action || '');
   if (isBypass(a)) return `<span class="gl-pill gl-pill-bypass">⚠️ BYPASS</span>`;
+  if (isPlannedBypass(a)) return `<span class="gl-pill gl-pill-bypass-planned">BYPASS</span>`;
   if (isStormHold(a)) return `<span class="gl-pill gl-pill-storm">🔴 STORM_HOLD</span>`;
   if (a.includes('CHARGE') || a.includes('Charg')) return `<span class="gl-pill gl-pill-charge">🟢 CHARGE</span>`;
   if (a.includes('EXPORT') || a.includes('Export') || a.includes('Session')) return `<span class="gl-pill gl-pill-export">🔵 EXPORT</span>`;
