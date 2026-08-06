@@ -598,6 +598,7 @@ function actionLegendHtml() {
     ['ECO', 'Self-consumption — load is covered by solar and/or the battery.'],
     ['Bypass', "Grid covers load directly and the battery is left alone on purpose — importing fresh at this cheap/off-peak rate is cheaper than cycling stored charge to avoid it. No extra wear, no loss."],
     ['Forced Bypass', 'Grid had to cover load directly because the battery was already at its floor SoC with no solar to help — a genuine shortfall, not a planning choice.'],
+    ['Storm Watch — Holding', 'A weather alert is active — Storm Watch overrides the normal plan entirely, charging to its target SoC and holding regardless of price.'],
   ];
   return `<table class="gl-legend-table">${rows.map(([action, desc]) =>
     `<tr><td>${actionPill(action)}</td><td>${esc(desc)}</td></tr>`).join('')}</table>`;

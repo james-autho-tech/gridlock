@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.5.8 - 2026-08-05
+
+### Fix
+- Added the missing STORM_HOLD row to the new Action key table
+
 ## 3.5.7 - 2026-08-05
 
 ### Improvement
