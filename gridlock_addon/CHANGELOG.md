@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.5.6 - 2026-08-05
+
+### Improvement
+- Added hover explanations for the Action column's Bypass and Forced Bypass pills, plus a summary tooltip on the column header
+
 ## 3.5.5 - 2026-08-05
 
 ### Improvement

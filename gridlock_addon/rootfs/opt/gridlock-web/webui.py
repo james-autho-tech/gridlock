@@ -574,10 +574,12 @@ function isStormHold(state) {
   return String(state || '').includes('Storm');
 }
 // Action string (from plan_table, or the live row-0 label) -> pill badge.
+const PLANNED_BYPASS_TITLE = "Grid imports straight through to load this slot — the battery is deliberately left alone because importing fresh at this cheap/off-peak rate is cheaper than cycling stored charge to avoid it. No extra wear, no loss: this is the plan working as intended, not a fallback.";
+const FORCED_BYPASS_TITLE = "Grid had to cover load directly because the battery was already at its floor SoC with no solar to help — a genuine shortfall, not a planning choice. Frequent occurrences may mean the reserve target or an earlier charge slot needs adjusting.";
 function actionPill(action) {
   const a = String(action || '');
-  if (isBypass(a)) return `<span class="gl-pill gl-pill-bypass">⚠️ BYPASS</span>`;
-  if (isPlannedBypass(a)) return `<span class="gl-pill gl-pill-bypass-planned">BYPASS</span>`;
+  if (isBypass(a)) return `<span class="gl-pill gl-pill-bypass" title="${FORCED_BYPASS_TITLE}">⚠️ BYPASS</span>`;
+  if (isPlannedBypass(a)) return `<span class="gl-pill gl-pill-bypass-planned" title="${PLANNED_BYPASS_TITLE}">BYPASS</span>`;
   if (isStormHold(a)) return `<span class="gl-pill gl-pill-storm">🔴 STORM_HOLD</span>`;
   if (a.includes('CHARGE') || a.includes('Charg')) return `<span class="gl-pill gl-pill-charge">🟢 CHARGE</span>`;
   if (a.includes('EXPORT') || a.includes('Export') || a.includes('Session')) return `<span class="gl-pill gl-pill-export">🔵 EXPORT</span>`;
@@ -804,7 +806,9 @@ function renderPlanTable(table, opts) {
   }).join('');
   return `<div class="gl-table-scroll"><table class="gl-plan">
     <tr><th>Slot</th><th>Import</th><th>Export</th><th>PV kWh</th><th>Load kWh</th>
-        <th>Grid kWh</th><th>Charge kWh</th><th title="Battery kWh discharged this slot, self-consumption + export combined">Battery kWh</th><th>Action</th><th>EV kWh</th>
+        <th>Grid kWh</th><th>Charge kWh</th><th title="Battery kWh discharged this slot, self-consumption + export combined">Battery kWh</th>
+        <th title="CHARGE: grid charges the battery. EXPORT: battery discharges to sell. ECO: self-consumption from PV/battery. BYPASS: grid covers load directly, battery deliberately left idle because it's cheaper than cycling it. ⚠️ BYPASS: same, but forced — battery was at floor with no solar to help.">Action</th>
+        <th>EV kWh</th>
         <th title="Rewards importing LESS than a predicted baseline — not exporting more. These are separate decisions; ECO with 0 grid import is already earning the full credit available.">Saving</th>
         <th title="Credits consuming MORE than a predicted baseline, at your own unit rate — not exporting more. Separate from the export decision.">Power Up</th>
         <th>SoC</th>
