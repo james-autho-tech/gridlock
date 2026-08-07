@@ -137,6 +137,7 @@ def build_status():
     storm = get("sensor.gridlock_storm_status") or {}
     carbon = get("sensor.gridlock_carbon_intensity") or {}
     ssen = get("sensor.gridlock_ssen_local_outages") or {}
+    circuits = get("sensor.gridlock_circuits") or {}
     saving_raw = get(status_attrs.get("saving_events_entity")) or {}
     saving_attrs = saving_raw.get("attributes", {})
 
@@ -209,6 +210,7 @@ def build_status():
         "solar_forecast_data": solar.get("attributes", {}).get("forecast_data") or [],
         "soc_forecast_data": forecast.get("attributes", {}).get("forecast_data") or [],
         "learned_load_profile": forecast.get("attributes", {}).get("learned_load_profile") or [],
+        "circuits": circuits.get("attributes", {}).get("circuits") or [],
         "storm_state": storm.get("state", "Clear"),
         "storm_reason": storm.get("attributes", {}).get("reason") or "No active alerts",
         "ssen_count": ssen.get("state", "0"),
@@ -434,6 +436,24 @@ PAGE = r"""<!doctype html>
   table.gl-legend-table { width:100%; border-collapse:collapse; font-size:12px; margin:10px 0 16px; }
   table.gl-legend-table td { padding:6px 10px; border-bottom:1px solid #14203a; color:var(--dim); vertical-align:top; }
   table.gl-legend-table td:first-child { white-space:nowrap; width:1%; }
+
+  /* ---- power circuits (Forecast tab) — horizontal bars, not vertical:
+     circuit names are arbitrary-length (whatever the user renamed the
+     entity to, or the raw entity_id if they haven't), which cramped and
+     truncated badly as x-axis labels under vertical bars the way the
+     other .gl-bars charts do it. A label-beside-its-own-bar layout has
+     nowhere to run out of room the same way. ---- */
+  .gl-circuits { display:flex; flex-direction:column; gap:8px; margin-top:10px; }
+  .gl-circuit-row { display:grid; grid-template-columns:minmax(90px,180px) 1fr 60px 72px;
+          align-items:center; gap:10px; font-size:13px; }
+  .gl-circuit-row.gl-circuit-head { color:var(--dim); font-size:11px; letter-spacing:.6px;
+          text-transform:uppercase; padding-bottom:2px; border-bottom:1px solid #334155; }
+  .gl-circuit-name { color:#cbd5e1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .gl-circuit-bar-track { height:10px; background:#0b1220; border:1px solid var(--line);
+          border-radius:5px; overflow:hidden; }
+  .gl-circuit-bar-fill { height:100%; background:linear-gradient(90deg,#0e7490,var(--cyan));
+          border-radius:5px; }
+  .gl-circuit-val { text-align:right; font-variant-numeric:tabular-nums; color:#cbd5e1; }
 
   /* ---- overview bypass banner + flow glow ---- */
   .gl-bypass-banner { display:flex; align-items:center; gap:8px; padding:10px 14px;
@@ -1124,6 +1144,27 @@ function renderCarbonChart(data) {
   const axis = barAxisLabels(data.length, 4, i => fmtTime(data[i].x));
   return `<div class="gl-bars">${bars}</div>${axis}`;
 }
+function renderCircuits(circuits) {
+  if (!circuits || !circuits.length) {
+    return '<div style="color:var(--dim)">No circuits tagged yet — apply the "GridLock Power" label (Settings → Areas, labels &amp; zones → Labels) to any power sensor you want tracked here. Renaming one is just that entity’s own name (Settings → Devices &amp; services → Entities).</div>';
+  }
+  const maxW = Math.max(...circuits.map(c => Number(c.power_w) || 0), 1);
+  const rows = circuits.map(c => {
+    const w = c.power_w === null || c.power_w === undefined ? null : Number(c.power_w);
+    const kwh = c.energy_kwh === null || c.energy_kwh === undefined ? null : Number(c.energy_kwh);
+    const pct = w === null ? 0 : Math.max(w > 0 ? 2 : 0, Math.min(100, (w / maxW) * 100));
+    return `<div class="gl-circuit-row" title="${esc(c.entity_id)}">
+      <div class="gl-circuit-name">${esc(c.name || c.entity_id)}</div>
+      <div class="gl-circuit-bar-track"><div class="gl-circuit-bar-fill" style="width:${pct}%"></div></div>
+      <div class="gl-circuit-val">${w === null ? '—' : `${w.toFixed(0)} W`}</div>
+      <div class="gl-circuit-val" style="color:var(--dim)">${kwh === null ? '—' : `${kwh.toFixed(2)} kWh`}</div>
+    </div>`;
+  }).join('');
+  return `<div class="gl-circuits">
+    <div class="gl-circuit-row gl-circuit-head"><div>Circuit</div><div></div><div style="text-align:right">Power</div><div style="text-align:right">Today</div></div>
+    ${rows}
+  </div>`;
+}
 function renderProfileComparison(totals) {
   totals = totals || {};
   const names = ['eco', 'balanced', 'max_profit'];
@@ -1290,6 +1331,11 @@ async function refresh() {
         <div class="gl-h">Learned house usage</div>
         <div class="gl-sub">Your typical household draw by time of day, learned from live readings — used to plan ahead instead of assuming a flat average.</div>
         ${renderLoadProfileChart(d.learned_load_profile)}
+      </div>
+      <div class="gl-wrap">
+        <div class="gl-h">Power circuits</div>
+        <div class="gl-sub">Live draw for the EV charger plus anything tagged with the "GridLock Power" label in Home Assistant — each one is also subtracted from the whole-house learning above and forecast in its own right, so a labelled circuit's own pattern doesn't get smeared into the general baseline.</div>
+        ${renderCircuits(d.circuits)}
       </div>
       <div class="gl-wrap">
         <div class="gl-h">Storm Watch</div>

@@ -18,6 +18,41 @@ input_boolean:
     name: GridLock Storm Watch (manual)
     icon: mdi:weather-lightning-rainy
 
+template:
+  # Bridges Home Assistant's Label registry into a normal entity state —
+  # AppDaemon (what GridLock actually runs under) has no registry access
+  # at all (labels/areas/devices; see AppDaemon issue #505, still open),
+  # but HA's own Jinja engine can read labels via label_entities(), so
+  # this lets HA do the lookup and GridLock just read the result like any
+  # other sensor. Tag any device_class:power entity you want GridLock to
+  # pick up (e.g. a Shelly's own "*_switch_0_power" sensor) with a label
+  # named "GridLock Power" (id: gridlock_power) — Settings > Areas,
+  # labels & zones > Labels. Renaming what a circuit represents needs no
+  # GridLock-side feature at all: it's just that entity's own friendly
+  # name, already editable from Settings > Devices & services > Entities.
+  #
+  # Deliberately trigger-based on a time_pattern rather than a plain
+  # reactive template: confirmed via Home Assistant's own open issues
+  # (#115439, #118765) that a template using label_entities() does NOT
+  # reliably re-evaluate when a label is added to or removed from an
+  # entity — that's a registry change, not a state_changed event, and
+  # nothing currently notifies template sensors of it. Polling every 5
+  # minutes (matching GridLock's own tick cadence — no benefit to
+  # fresher than that here) works around it instead of assuming the
+  # documented "automatically updates" behaviour actually holds.
+  - trigger:
+      - trigger: time_pattern
+        minutes: "/5"
+      - trigger: homeassistant
+        event: start
+    sensor:
+      - name: "GridLock Power Circuits"
+        unique_id: gridlock_power_circuits
+        icon: mdi:flash
+        state: "{{ label_entities('gridlock_power') | length }}"
+        attributes:
+          entity_ids: "{{ label_entities('gridlock_power') }}"
+
 input_select:
   gridlock_mode_override:
     name: GridLock Mode Override

@@ -84,6 +84,22 @@ gridlock:
   # picks the wrong sensor or your inverter integration isn't Sigen:
   # load_power_entity: sensor.sigen_plant_load_power
 
+  # Power circuits (e.g. Shelly relays monitoring individual appliances):
+  # no config key here at all — tag any device_class:power entity with a
+  # label named "GridLock Power" (id: gridlock_power) in Home Assistant
+  # (Settings > Areas, labels & zones > Labels) and GridLock picks it up
+  # automatically within 5 minutes, no apps.yaml editing or restart
+  # needed. Renaming what a circuit represents is just that entity's own
+  # name (Settings > Devices & services > Entities) — nothing to rename
+  # on GridLock's side. Each tagged circuit is shown live on the
+  # dashboard's Forecast tab AND subtracted from the whole-house load
+  # sample before it's learned, then forecast separately in its own
+  # right — so a labelled circuit's own pattern (e.g. a dryer that only
+  # runs some days) doesn't get smeared into the general baseline. Why a
+  # label and not a list here: AppDaemon (what GridLock runs under) has
+  # no way to query HA's own registries at all — the label lookup
+  # actually happens HA-side, via ha_support.yaml's template sensor.
+
   # --- Model parameters ---
   battery_capacity_kwh: 36.0
   typical_daily_house_kwh: 12.0

@@ -92,7 +92,7 @@ import urllib.request
 
 token = os.environ["SUPERVISOR_TOKEN"]
 for domain, service in (("automation", "reload"), ("input_boolean", "reload"),
-                         ("input_select", "reload")):
+                         ("input_select", "reload"), ("template", "reload")):
     req = urllib.request.Request(
         f"http://supervisor/core/api/services/{domain}/{service}",
         method="POST", data=b"{}",

@@ -1456,6 +1456,47 @@ class GridLock(hass.Hass):
                                    "today_kwh": round(today_kwh, 2),
                                    "tomorrow_kwh": round(tomorrow_kwh, 2)})
 
+    def publish_circuits(self, labeled_entities, now):
+        """Live power breakdown for the dashboard — the EV charger (already
+        discovered) plus anything the user tagged with the "gridlock_power"
+        label in HA (see ha_support.yaml's template sensor for why a label
+        rather than an apps.yaml list: registry access isn't something
+        AppDaemon itself can do, so HA's own Jinja engine does the lookup
+        and exposes it as a normal entity attribute instead). Renaming what
+        a circuit represents needs nothing here — it's just that entity's
+        own friendly_name, already editable from Settings > Devices &
+        services > Entities."""
+        ids = list(dict.fromkeys(
+            ([self.ent_ev_power] if self.ent_ev_power else []) + labeled_entities))
+        circuits = []
+        for eid in ids:
+            if not self.entity_exists(eid):
+                continue
+            state = self.get_state(eid, attribute="all") or {}
+            attrs = state.get("attributes", {}) or {}
+            try:
+                power_w = float(state.get("state"))
+            except (TypeError, ValueError):
+                power_w = None
+            # Shelly's own naming convention (and several others) pairs a
+            # "*_power" sensor with a "*_energy" one on the same device —
+            # best-effort only, same "graceful sibling suffix" style as
+            # core/registry.py's find_sibling(), not a hard requirement.
+            energy_entity = eid.replace("_power", "_energy", 1) if "_power" in eid else None
+            energy_kwh = self.get_float_state(energy_entity, None) if (
+                energy_entity and self.entity_exists(energy_entity)) else None
+            circuits.append({
+                "entity_id": eid,
+                "name": attrs.get("friendly_name", eid),
+                "power_w": power_w,
+                "energy_kwh": energy_kwh,
+            })
+        self.set_state("sensor.gridlock_circuits",
+                       state=str(len(circuits)),
+                       attributes={"friendly_name": "GridLock Power Circuits",
+                                   "icon": "mdi:flash",
+                                   "circuits": circuits})
+
     def publish_storm_status(self):
         reason = self.storm_active()
         self.set_state("sensor.gridlock_storm_status",
@@ -1561,7 +1602,15 @@ class GridLock(hass.Hass):
             return
 
         soc0 = self.get_float_state(self.ent_soc, 50.0)
+        # Read fresh every tick, not just once at startup — a newly
+        # labelled entity should show up within 5 minutes, not require an
+        # AppDaemon restart. sensor.gridlock_power_circuits is the
+        # trigger-based HA-side template (ha_support.yaml) bridging the
+        # Label registry, which AppDaemon itself can't query at all.
+        labeled_circuits = self._attr_list("sensor.gridlock_power_circuits", "entity_ids")
+        self.load_provider.circuit_power_entities = labeled_circuits
         self.load_provider.sample(now)
+        self.publish_circuits(labeled_circuits, now)
         self._update_savings(now)
         self.publish_solar_forecast(now)
         self.publish_storm_status()

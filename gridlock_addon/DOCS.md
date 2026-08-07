@@ -81,6 +81,41 @@ shortcut once enabled. Six tabs:
   the bottom, newest at the top (capped to the most recent ~200
   entries).
 
+## Power circuits (Shellys, or any power-monitoring entity)
+
+If you have Shelly relays (or anything else exposing a `device_class:
+power` sensor) monitoring individual appliances/circuits, GridLock can
+show their live draw on the Forecast tab and factor them into the load
+forecast — without listing entity IDs in `apps.yaml` and without
+building any renaming UI of its own:
+
+1. In Home Assistant: Settings → Areas, labels & zones → Labels →
+   create a label named **"GridLock Power"** (id `gridlock_power`).
+2. Apply that label to any power sensor you want tracked — e.g. a
+   Shelly's own `sensor.*_switch_0_power` entity (not the
+   `binary_sensor.*` diagnostic ones like Overcurrent/Overheating,
+   which carry no wattage).
+3. To rename what a circuit represents, rename the entity itself
+   (Settings → Devices & services → Entities) — GridLock just displays
+   whatever name is already there.
+
+New/removed tags are picked up within 5 minutes, no restart needed.
+Each tagged circuit is subtracted from the whole-house load sample
+before it's learned, then forecast separately in its own right, so a
+circuit with its own distinct pattern (a dryer that only runs some
+days, say) doesn't get smeared into the general house-load baseline
+the way just ignoring it would.
+
+Why a label rather than an `apps.yaml` list: AppDaemon (what GridLock
+actually runs under) has no way to query Home Assistant's own
+registries at all, labels included — the lookup happens HA-side
+instead, via a small template sensor in the auto-installed
+`packages/gridlock.yaml` (see "The fail-safe watchdog" above for how
+that file gets there).
+
+The EV charger GridLock already tracks shows up alongside these
+automatically too — it doesn't need (or use) this label at all.
+
 ## Modes (`battery_risk_profile` in `apps.yaml`)
 
 The planning engine is a linear program, not a greedy heuristic — it

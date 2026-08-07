@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.6.0 - 2026-08-07
+
+### Improvement
+- New: labelled power circuits — tag any power sensor (e.g. a Shelly relay) with a "GridLock Power" label in HA and it shows up as a live bar chart on the Forecast tab, no apps.yaml editing needed
+- Labelled circuits are now subtracted from the whole-house load sample and forecast separately, so their own pattern doesn't distort the learned baseline
+- EV charger now also shown on the same Power Circuits card, for consistency
+
 ## 3.5.8 - 2026-08-05
 
 ### Fix
