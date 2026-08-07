@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.6.1 - 2026-08-07
+
+### Fix
+- `hassio_role` raised from `default` to `manager` — `homeassistant_config:rw` was never actually mounting under `default`, so the fail-safe watchdog automation and the Power Circuits label bridge silently never installed, on every install to date
+
 ## 3.6.0 - 2026-08-07
 
 ### Improvement
