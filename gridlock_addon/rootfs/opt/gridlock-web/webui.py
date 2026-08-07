@@ -531,6 +531,7 @@ PAGE = r"""<!doctype html>
     <button class="gl-nav-btn" data-tab="overview">Overview</button>
     <button class="gl-nav-btn" data-tab="plan">Plan</button>
     <button class="gl-nav-btn" data-tab="forecast">Forecast</button>
+    <button class="gl-nav-btn" data-tab="billing">Billing</button>
     <button class="gl-nav-btn" data-tab="circuits" id="gl-nav-circuits" style="display:none">Circuits</button>
     <button class="gl-nav-btn" data-tab="tariffs">Tariffs</button>
     <button class="gl-nav-btn" data-tab="entities">Entities</button>
@@ -1431,22 +1432,6 @@ async function refresh() {
         <div class="gl-sub" style="margin-top:12px">Cycling protection: <b style="color:var(--ink)">${esc(d.battery_risk_profile)}</b>${d.battery_degradation_cost === null || d.battery_degradation_cost === undefined ? '' : ` — needs at least ${(Number(d.battery_degradation_cost) * 100).toFixed(1)}p/kWh spread to self-consume from the battery`}${d.export_degradation_cost === null || d.export_degradation_cost === undefined ? '' : `, ${(Number(d.export_degradation_cost) * 100).toFixed(1)}p/kWh to export it`}. Set <code>battery_risk_profile</code> (eco / balanced / max_profit) in apps.yaml.</div>
       </div>
       <div class="gl-wrap">
-        <div class="gl-h">Daily cost history</div>
-        <div class="gl-sub">Real grid spend per day (last 28) — green bars are days you netted a credit, amber are days you paid, companion to the Saved (7d) tile on Overview.</div>
-        ${renderDailyCostChart(d.daily_cost_history)}
-        ${d.plan_accuracy ? `<div class="gl-sub" style="margin-top:10px">Plan accuracy (${esc(d.plan_accuracy.date)}): predicted <b style="color:var(--ink)">£${Number(d.plan_accuracy.forecast).toFixed(2)}</b>, actual <b style="color:var(--ink)">£${Number(d.plan_accuracy.actual).toFixed(2)}</b> — the plan's own morning forecast against what actually happened, no invented score.</div>` : ''}
-      </div>
-      <div class="gl-wrap">
-        <div class="gl-h">Bill reconciliation</div>
-        <div class="gl-sub">GridLock's own live-tracked estimate (sampled grid power × the rate active at that moment) against the real bill entity from your Octopus integration — near-zero bars mean the two agree.</div>
-        ${d.bill_month_to_date ? `<div class="gl-grid" style="margin-bottom:12px">
-          <div class="gl-tile"><div class="lbl">This month — bill</div><div class="val num">£${Number(d.bill_month_to_date.bill_total).toFixed(2)}</div></div>
-          <div class="gl-tile"><div class="lbl">This month — estimate</div><div class="val num">£${Number(d.bill_month_to_date.estimate_total).toFixed(2)}</div></div>
-        </div>` : ''}
-        ${renderBillReconciliationChart(d.bill_reconciliation_history)}
-        <div style="margin-top:14px">${renderBillBreakdown(d.bill_breakdown)}</div>
-      </div>
-      <div class="gl-wrap">
         <div class="gl-h">Risk profile comparison</div>
         <div class="gl-sub">What each risk profile's own morning plan predicted, summed across every day recorded — not a real-outcome backtest (that would need running all three profiles continuously), but a genuine forecast-vs-forecast comparison building up over time.</div>
         ${renderProfileComparison(d.profile_comparison_totals)}
@@ -1486,6 +1471,24 @@ async function refresh() {
       <div class="gl-wrap">
         <div class="gl-h">Saving sessions</div>
         ${renderSavingSessions(d.saving_joined, d.saving_available)}
+      </div>
+    </div>
+    <div class="tab-page" data-tab="billing">
+      <div class="gl-wrap">
+        <div class="gl-h">Daily cost history</div>
+        <div class="gl-sub">Real grid spend per day (last 28) — green bars are days you netted a credit, amber are days you paid, companion to the Saved (7d) tile on Overview.</div>
+        ${renderDailyCostChart(d.daily_cost_history)}
+        ${d.plan_accuracy ? `<div class="gl-sub" style="margin-top:10px">Plan accuracy (${esc(d.plan_accuracy.date)}): predicted <b style="color:var(--ink)">£${Number(d.plan_accuracy.forecast).toFixed(2)}</b>, actual <b style="color:var(--ink)">£${Number(d.plan_accuracy.actual).toFixed(2)}</b> — the plan's own morning forecast against what actually happened, no invented score.</div>` : ''}
+      </div>
+      <div class="gl-wrap">
+        <div class="gl-h">Bill reconciliation</div>
+        <div class="gl-sub">GridLock's own live-tracked estimate (sampled grid power × the rate active at that moment) against the real bill entity from your Octopus integration — near-zero bars mean the two agree.</div>
+        ${d.bill_month_to_date ? `<div class="gl-grid" style="margin-bottom:12px">
+          <div class="gl-tile"><div class="lbl">This month — bill</div><div class="val num">£${Number(d.bill_month_to_date.bill_total).toFixed(2)}</div></div>
+          <div class="gl-tile"><div class="lbl">This month — estimate</div><div class="val num">£${Number(d.bill_month_to_date.estimate_total).toFixed(2)}</div></div>
+        </div>` : ''}
+        ${renderBillReconciliationChart(d.bill_reconciliation_history)}
+        <div style="margin-top:14px">${renderBillBreakdown(d.bill_breakdown)}</div>
       </div>
     </div>
     <div class="tab-page" data-tab="circuits">

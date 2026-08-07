@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.7.1 - 2026-08-07
+
+### Improvement
+- New dedicated "Billing" tab — Daily cost history and Bill reconciliation moved out of Forecast into their own page
+
 ## 3.7.0 - 2026-08-07
 
 ### Improvement
