@@ -66,9 +66,26 @@ cp -r /opt/appdaemon/apps/gridlock/core "${CONFIG_DIR}/apps/gridlock/core"
 # "shipped file, reset from the image every start" treatment already
 # used for gridlock.py/core above (not something to hand-edit — it
 # takes no user-specific values). Needs the homeassistant_config:rw
-# map entry in config.yaml, mounted here at /homeassistant_config.
-HA_CONFIG_DIR=/homeassistant_config
-if [ -d "$HA_CONFIG_DIR" ]; then
+# map entry in config.yaml.
+#
+# The in-container mount POINT for that map entry turned out to be
+# genuinely ambiguous — documented as "/<type-name>" (i.e.
+# /homeassistant_config), but confirmed via a real user's install that
+# it wasn't there even with the map entry correctly declared and the
+# add-on freshly reinstalled, and a separate real report of the same
+# symptom elsewhere resolved to the path actually being
+# /homeassistant/config (nested), not /homeassistant_config
+# (flattened). Rather than guess a third time, check every candidate
+# and use whichever one actually exists.
+HA_CONFIG_DIR=""
+for candidate in /homeassistant_config /homeassistant/config; do
+    if [ -d "$candidate" ]; then
+        HA_CONFIG_DIR="$candidate"
+        bashio::log.info "HA config directory found at ${candidate}"
+        break
+    fi
+done
+if [ -n "$HA_CONFIG_DIR" ]; then
     mkdir -p "${HA_CONFIG_DIR}/packages"
     HA_PKG="${HA_CONFIG_DIR}/packages/gridlock.yaml"
     OLD_SUM="$(sha256sum "$HA_PKG" 2>/dev/null | cut -d' ' -f1)" || OLD_SUM=""

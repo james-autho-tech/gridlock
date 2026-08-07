@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.6.3 - 2026-08-07
+
+### Fix
+- HA config directory detection now checks both `/homeassistant_config` and `/homeassistant/config` and uses whichever actually exists, instead of assuming a single fixed path
+
 ## 3.6.2 - 2026-08-07
 
 ### Fix
