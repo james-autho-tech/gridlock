@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.6.2 - 2026-08-07
+
+### Fix
+- Reverted the 3.6.1 `hassio_role` change (didn't fix it, disproved against Home Assistant's own Samba add-on)
+- `map:` entries switched to the structured `type`/`read_only` syntax instead of the old shorthand, to fix `homeassistant_config` not mounting
+
 ## 3.6.1 - 2026-08-07
 
 ### Fix

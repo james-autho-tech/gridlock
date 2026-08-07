@@ -1,5 +1,5 @@
 name: GridLock
-version: "3.6.1"
+version: "3.6.2"
 slug: gridlock
 description: Battery optimisation engine for Sigenergy + Octopus IOG (bundled AppDaemon)
 url: https://github.com/james-autho-tech/gridlock
@@ -14,21 +14,29 @@ boot: auto
 init: false
 hassio_api: true
 homeassistant_api: true
-hassio_role: manager
+hassio_role: default
 ingress: true
 ingress_port: 8099
 panel_icon: mdi:battery-charging-high
 panel_title: GridLock
 map:
-  - addon_config:rw
-  - ssl
-  # Read/write access to HA core's own /config directory (mounted at
-  # /homeassistant_config inside this container) — needed so the
-  # add-on can write its own packages/gridlock.yaml (the fail-safe
-  # watchdog automation + helpers) automatically on every start,
-  # rather than requiring the user to copy it in by hand and restart
-  # HA core themselves. See the "run" script's sync_ha_support step.
-  - homeassistant_config:rw
+  # Structured form (type/read_only), not the old "type:rw" shorthand —
+  # confirmed via a real install that homeassistant_config specifically
+  # wasn't mounting under the shorthand form (addon_config and ssl were
+  # fine), even after a full re-pull + reinstall and an hassio_role
+  # change ruled out as the cause (Home Assistant's own Samba add-on
+  # mounts homeassistant_config:rw successfully under the default role,
+  # so that wasn't it). HA's Add-ons were renamed/restructured into
+  # "Apps" at some point in 2026 with this as the now-documented map
+  # syntax; a Docker image built before that (no hass.io labels) runs
+  # under a "legacy mode" that may not honour every old-style map entry
+  # the same way — this is the closest match to what was actually
+  # observed.
+  - type: addon_config
+    read_only: false
+  - type: ssl
+  - type: homeassistant_config
+    read_only: false
 # Optional entity overrides for when auto-discovery picks the wrong
 # thing (check the web UI's "Discovered entities" panel first — these
 # only need setting if something there is wrong or missing). Leave
