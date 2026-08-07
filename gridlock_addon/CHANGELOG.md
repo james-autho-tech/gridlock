@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.6.4 - 2026-08-07
+
+### Improvement
+- Power Circuits tab moved out of Forecast into its own dedicated tab, hidden until at least one circuit is detected
+- New "Daily energy — last 28 days" chart per circuit
+- "Today" energy figure is now self-tracked per circuit instead of read off the Shelly's own lifetime/since-reset energy sensor, which wasn't actually scoped to "today"
+
 ## 3.6.3 - 2026-08-07
 
 ### Fix

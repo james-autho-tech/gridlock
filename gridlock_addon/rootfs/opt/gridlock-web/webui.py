@@ -211,6 +211,7 @@ def build_status():
         "soc_forecast_data": forecast.get("attributes", {}).get("forecast_data") or [],
         "learned_load_profile": forecast.get("attributes", {}).get("learned_load_profile") or [],
         "circuits": circuits.get("attributes", {}).get("circuits") or [],
+        "circuit_history": circuits.get("attributes", {}).get("history") or [],
         "storm_state": storm.get("state", "Clear"),
         "storm_reason": storm.get("attributes", {}).get("reason") or "No active alerts",
         "ssen_count": ssen.get("state", "0"),
@@ -519,6 +520,7 @@ PAGE = r"""<!doctype html>
     <button class="gl-nav-btn" data-tab="overview">Overview</button>
     <button class="gl-nav-btn" data-tab="plan">Plan</button>
     <button class="gl-nav-btn" data-tab="forecast">Forecast</button>
+    <button class="gl-nav-btn" data-tab="circuits" id="gl-nav-circuits" style="display:none">Circuits</button>
     <button class="gl-nav-btn" data-tab="tariffs">Tariffs</button>
     <button class="gl-nav-btn" data-tab="entities">Entities</button>
     <button class="gl-nav-btn" data-tab="log">Log</button>
@@ -1165,6 +1167,44 @@ function renderCircuits(circuits) {
     ${rows}
   </div>`;
 }
+// One small chart per circuit rather than a single combined/stacked
+// chart — the existing .gl-bars charts (renderLoadProfileChart etc.)
+// are all single-series, and circuit names are arbitrary/unbounded in
+// number, so a shared multi-series chart would need a legend and a
+// colour-per-series scheme that don't exist yet. Small multiples reuse
+// exactly what's already there instead.
+function renderCircuitDailyChart(history, entityId, everyN) {
+  const series = (history || []).map(h => ({ date: h.date, kwh: Number((h.values || {})[entityId]) || 0 }));
+  if (!series.length) {
+    return '<div style="color:var(--dim);font-size:12px">No history yet — builds up a day at a time.</div>';
+  }
+  const max = Math.max(...series.map(p => p.kwh), 0.01);
+  const bars = series.map(p => {
+    const h = Math.max(2, Math.round((p.kwh / max) * 100));
+    return `<div class="gl-bar-col" title="${esc(fmtShortDate(p.date))}: ${p.kwh.toFixed(2)} kWh">
+      <div class="gl-bar-fill gl-bar-fill-load" style="height:${h}%"></div>
+    </div>`;
+  }).join('');
+  const axis = barAxisLabels(series.length, everyN, i => fmtShortDate(series[i].date));
+  return `<div class="gl-bars" style="height:70px">${bars}</div>${axis}`;
+}
+function renderCircuitHistoryCharts(circuits, history) {
+  if (!circuits || !circuits.length) {
+    return '<div style="color:var(--dim)">No circuits tagged yet.</div>';
+  }
+  if (!history || !history.length) {
+    return '<div style="color:var(--dim)">No history yet — builds up a day at a time.</div>';
+  }
+  // ~7 date labels regardless of how many days of history exist yet,
+  // same reasoning as renderDailyCostChart's own axis (28+ daily labels
+  // packed under a narrow chart is unreadable).
+  const everyN = Math.max(1, Math.ceil(history.length / 7));
+  return circuits.map(c => `
+    <div style="margin-bottom:16px">
+      <div style="font-size:12px;color:var(--dim);margin-bottom:4px">${esc(c.name || c.entity_id)}</div>
+      ${renderCircuitDailyChart(history, c.entity_id, everyN)}
+    </div>`).join('');
+}
 function renderProfileComparison(totals) {
   totals = totals || {};
   const names = ['eco', 'balanced', 'max_profit'];
@@ -1333,11 +1373,6 @@ async function refresh() {
         ${renderLoadProfileChart(d.learned_load_profile)}
       </div>
       <div class="gl-wrap">
-        <div class="gl-h">Power circuits</div>
-        <div class="gl-sub">Live draw for the EV charger plus anything tagged with the "GridLock Power" label in Home Assistant — each one is also subtracted from the whole-house learning above and forecast in its own right, so a labelled circuit's own pattern doesn't get smeared into the general baseline.</div>
-        ${renderCircuits(d.circuits)}
-      </div>
-      <div class="gl-wrap">
         <div class="gl-h">Storm Watch</div>
         <div class="gl-grid">
           <div class="gl-tile" style="grid-column:1/-1">
@@ -1360,6 +1395,18 @@ async function refresh() {
         ${renderSavingSessions(d.saving_joined, d.saving_available)}
       </div>
     </div>
+    <div class="tab-page" data-tab="circuits">
+      <div class="gl-wrap">
+        <div class="gl-h">Power circuits</div>
+        <div class="gl-sub">Live draw for the EV charger plus anything tagged with the "GridLock Power" label in Home Assistant — each one is also subtracted from the whole-house learning above and forecast in its own right, so a labelled circuit's own pattern doesn't get smeared into the general baseline. This tab only shows up once at least one circuit is detected.</div>
+        ${renderCircuits(d.circuits)}
+      </div>
+      <div class="gl-wrap">
+        <div class="gl-h">Daily energy — last 28 days</div>
+        <div class="gl-sub">One chart per circuit, so a spike or a day off is easy to spot.</div>
+        ${renderCircuitHistoryCharts(d.circuits, d.circuit_history)}
+      </div>
+    </div>
     <div class="tab-page" data-tab="tariffs">
       <div class="gl-wrap">
         <div class="gl-h">Tariff comparison</div>
@@ -1380,6 +1427,18 @@ async function refresh() {
       </div>
     </div>
   `;
+  // The Circuits tab only makes sense once something's actually
+  // detected — the nav button lives outside this template (it's part
+  // of the static page shell, not re-rendered every refresh), so its
+  // visibility has to be toggled here instead of just conditionally
+  // included above. If it disappears (last label removed) while it was
+  // the active tab, fall back to Overview rather than leaving the user
+  // stuck on a tab with no way back to it.
+  const hasCircuits = !!(d.circuits && d.circuits.length);
+  document.getElementById('gl-nav-circuits').style.display = hasCircuits ? '' : 'none';
+  if (!hasCircuits && currentTab === 'circuits') {
+    currentTab = 'overview';
+  }
   selectTab(currentTab);
 }
 refresh();

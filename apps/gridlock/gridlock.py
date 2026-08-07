@@ -25,7 +25,8 @@ from core.tariff import OctopusTariffProvider
 from core.forecast import SolcastForecastProvider, LearnedLoadForecastProvider
 
 STATE_FILES = ("load_profile.json", "savings_state.json", "savings_history.json",
-               "cost_tracking_state.json", "decision_log.json")
+               "cost_tracking_state.json", "decision_log.json",
+               "circuit_state.json", "circuit_history.json")
 
 # publish_plan()'s per-slot row shape — a single source of truth for both
 # the row length it builds and the "columns" name list it publishes
@@ -236,6 +237,11 @@ class GridLock(hass.Hass):
         self.day_start_forecast = 0.0
         self.solar_deficit_day = None
         self._load_savings_state()
+
+        self.circuit_day = None
+        self.circuit_today_kwh = {}
+        self.circuit_history = self._load_json("circuit_history.json", {})
+        self._load_circuit_state()
 
         self.ent_pv_power_entities = a.get("pv_power_entities") or self.registry.find_pv_power()
         self.ent_grid_power = (a.get("grid_power_entity")
@@ -1456,6 +1462,15 @@ class GridLock(hass.Hass):
                                    "today_kwh": round(today_kwh, 2),
                                    "tomorrow_kwh": round(tomorrow_kwh, 2)})
 
+    def _load_circuit_state(self):
+        state = self._load_json("circuit_state.json", {})
+        self.circuit_day = state.get("day")
+        self.circuit_today_kwh = state.get("today_kwh", {})
+
+    def _save_circuit_state(self):
+        self._save_json("circuit_state.json",
+                         {"day": self.circuit_day, "today_kwh": self.circuit_today_kwh})
+
     def publish_circuits(self, labeled_entities, now):
         """Live power breakdown for the dashboard — the EV charger (already
         discovered) plus anything the user tagged with the "gridlock_power"
@@ -1468,6 +1483,23 @@ class GridLock(hass.Hass):
         services > Entities."""
         ids = list(dict.fromkeys(
             ([self.ent_ev_power] if self.ent_ev_power else []) + labeled_entities))
+
+        today_iso = now.date().isoformat()
+        if self.circuit_day is None:
+            self.circuit_day = today_iso
+        elif today_iso != self.circuit_day:
+            # Roll yesterday's accumulated totals into history and start
+            # today fresh — same day-rollover shape as _roll_savings_day,
+            # kept in its own file/dict rather than folded into that one
+            # since circuits are a dynamic, variable-length set keyed by
+            # entity_id, not a handful of fixed named figures.
+            self.circuit_history[self.circuit_day] = {
+                eid: round(kwh, 3) for eid, kwh in self.circuit_today_kwh.items()}
+            self.circuit_history = dict(list(self.circuit_history.items())[-60:])
+            self._save_json("circuit_history.json", self.circuit_history)
+            self.circuit_day = today_iso
+            self.circuit_today_kwh = {}
+
         circuits = []
         for eid in ids:
             if not self.entity_exists(eid):
@@ -1478,24 +1510,33 @@ class GridLock(hass.Hass):
                 power_w = float(state.get("state"))
             except (TypeError, ValueError):
                 power_w = None
-            # Shelly's own naming convention (and several others) pairs a
-            # "*_power" sensor with a "*_energy" one on the same device —
-            # best-effort only, same "graceful sibling suffix" style as
-            # core/registry.py's find_sibling(), not a hard requirement.
-            energy_entity = eid.replace("_power", "_energy", 1) if "_power" in eid else None
-            energy_kwh = self.get_float_state(energy_entity, None) if (
-                energy_entity and self.entity_exists(energy_entity)) else None
+            if power_w is not None:
+                # Self-tracked rather than read off the Shelly's own
+                # paired "*_energy" sensor: that sensor is typically a
+                # total_increasing lifetime/since-reset counter (meant
+                # for HA's own Energy dashboard + a utility_meter helper
+                # to slice it into days), not already scoped to "today"
+                # the way this figure is labelled — reading it directly
+                # would have quietly shown the wrong number. Accumulating
+                # this tick's own ~5-minute slice is the same technique
+                # _update_savings already uses for its shadow simulation.
+                self.circuit_today_kwh[eid] = (
+                    self.circuit_today_kwh.get(eid, 0.0) + power_w / 1000.0 * (5 / 60))
             circuits.append({
                 "entity_id": eid,
                 "name": attrs.get("friendly_name", eid),
                 "power_w": power_w,
-                "energy_kwh": energy_kwh,
+                "energy_kwh": round(self.circuit_today_kwh.get(eid, 0.0), 3),
             })
+        self._save_circuit_state()
+
+        history = [{"date": d, "values": v} for d, v in sorted(self.circuit_history.items())]
         self.set_state("sensor.gridlock_circuits",
                        state=str(len(circuits)),
                        attributes={"friendly_name": "GridLock Power Circuits",
                                    "icon": "mdi:flash",
-                                   "circuits": circuits})
+                                   "circuits": circuits,
+                                   "history": history})
 
     def publish_storm_status(self):
         reason = self.storm_active()
