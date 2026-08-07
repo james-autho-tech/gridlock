@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.7.0 - 2026-08-07
+
+### Improvement
+- New "Bill reconciliation" card (Forecast tab): GridLock's own live cost estimate charted against the real Octopus bill entity, 28-day history
+- Month-to-date bill vs estimate totals
+- Daily breakdown by tagged circuit (blended-rate cost estimate) when any are detected, else an exact off-peak/on-peak cost split
+
 ## 3.6.4 - 2026-08-07
 
 ### Improvement

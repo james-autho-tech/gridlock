@@ -412,6 +412,11 @@ class GridLock(hass.Hass):
         self.cost_tracking_day = None
         self.tracked_import_cost_today = 0.0
         self.tracked_export_value_today = 0.0
+        self.tracked_import_kwh_today = 0.0
+        self.tracked_offpeak_kwh_today = 0.0
+        self.tracked_onpeak_kwh_today = 0.0
+        self.tracked_offpeak_cost_today = 0.0
+        self.tracked_onpeak_cost_today = 0.0
         self._load_cost_tracking_state()
 
         self.plan = []
@@ -855,6 +860,87 @@ class GridLock(hass.Hass):
         profile_totals = {k: round(v, 2) for k, v in profile_totals.items()}
         profile_history = [{"date": d, **pc} for d, pc in profile_days[-28:]]
 
+        # Bill reconciliation: does GridLock's own live-tracked estimate
+        # agree with the real bill entity? Only days where both are
+        # present — bill_import is explicitly None (not skipped via a
+        # missing key) whenever the entity itself was unavailable at
+        # rollover, so this correctly excludes those rather than treating
+        # a missing bill as "agrees perfectly".
+        bill_recon_history = sorted(
+            ({"date": d, "bill_total": round(v["bill_import"] - (v.get("bill_export") or 0.0), 2),
+              "estimate_total": round(v["estimate_import"] - v.get("estimate_export", 0.0), 2)}
+             for d, v in self.savings_history.items()
+             if v.get("bill_import") is not None and "estimate_import" in v),
+            key=lambda p: p["date"])[-28:]
+
+        # Month-to-date total — every fully-rolled day this calendar month
+        # plus today's still-in-progress figures (both sides read live,
+        # not waiting for tonight's rollover), so "this month" doesn't lag
+        # a day behind on the 1st tick of a new day.
+        month_bill_total = month_estimate_total = 0.0
+        have_month_data = False
+        for d, v in self.savings_history.items():
+            try:
+                dt = datetime.fromisoformat(d).date()
+            except ValueError:
+                continue
+            if (dt.year == now.year and dt.month == now.month
+                    and v.get("bill_import") is not None and "estimate_import" in v):
+                month_bill_total += v["bill_import"] - (v.get("bill_export") or 0.0)
+                month_estimate_total += v["estimate_import"] - v.get("estimate_export", 0.0)
+                have_month_data = True
+        today_bill = self.get_float_state(self.ent_daily_import_cost, None)
+        if today_bill is not None:
+            today_bill_export = self.get_float_state(self.ent_daily_export_value, 0.0)
+            month_bill_total += today_bill - today_bill_export
+            month_estimate_total += self.tracked_import_cost_today - self.tracked_export_value_today
+            have_month_data = True
+        bill_month_to_date = ({"bill_total": round(month_bill_total, 2),
+                                "estimate_total": round(month_estimate_total, 2)}
+                               if have_month_data else None)
+
+        # Breakdown of the most recent day that has one — by tagged
+        # circuit (core.forecast/circuit_history.json, cross-referenced by
+        # date) when any existed that day, else the plain off-peak/on-peak
+        # split every day already has. Circuit names are resolved against
+        # CURRENT entity state (best-effort — a circuit renamed or removed
+        # since that day just falls back to its entity_id).
+        bill_breakdown = None
+        for d in sorted(self.savings_history.keys(), reverse=True):
+            v = self.savings_history[d]
+            if "offpeak_import_kwh" not in v:
+                continue
+            total_kwh = v["offpeak_import_kwh"] + v["onpeak_import_kwh"]
+            circuits_that_day = self.circuit_history.get(d, {})
+            if circuits_that_day and total_kwh > 0:
+                # No per-circuit time-of-use data exists (circuit_history
+                # only has each circuit's daily kWh total, not when it was
+                # drawn) — a single blended £/kWh rate for the whole day
+                # (that day's real total cost / real total kWh, both
+                # already tracked exactly) is the closest available
+                # estimate, not an exact figure. Labelled "~" in the UI
+                # rather than presented as precise.
+                day_cost = v["estimate_import"]
+                blended_rate = day_cost / total_kwh
+                by_circuit = []
+                for eid, kwh in circuits_that_day.items():
+                    attrs = (self.get_state(eid, attribute="all") or {}).get("attributes", {}) \
+                        if self.entity_exists(eid) else {}
+                    by_circuit.append({"entity_id": eid, "name": attrs.get("friendly_name", eid),
+                                        "kwh": round(kwh, 3), "pct": round(kwh / total_kwh * 100, 1),
+                                        "cost": round(kwh * blended_rate, 3)})
+                other_kwh = max(0.0, total_kwh - sum(c["kwh"] for c in by_circuit))
+                by_circuit.append({"entity_id": None, "name": "Other", "kwh": round(other_kwh, 3),
+                                    "pct": round(other_kwh / total_kwh * 100, 1),
+                                    "cost": round(other_kwh * blended_rate, 3)})
+                bill_breakdown = {"date": d, "by_circuit": by_circuit, "cost_is_estimated": True}
+            else:
+                bill_breakdown = {"date": d, "offpeak_kwh": round(v["offpeak_import_kwh"], 3),
+                                   "onpeak_kwh": round(v["onpeak_import_kwh"], 3),
+                                   "offpeak_cost": round(v.get("offpeak_import_cost", 0.0), 3),
+                                   "onpeak_cost": round(v.get("onpeak_import_cost", 0.0), 3)}
+            break
+
         self.set_state("sensor.gridlock_savings", state=f"{today:.2f}",
                        attributes={"friendly_name": "GridLock Savings",
                                    "unit_of_measurement": "£",
@@ -865,7 +951,10 @@ class GridLock(hass.Hass):
                                    "daily_savings_history": saved_history,
                                    "plan_accuracy": accuracy,
                                    "profile_comparison_history": profile_history,
-                                   "profile_comparison_totals": profile_totals})
+                                   "profile_comparison_totals": profile_totals,
+                                   "bill_reconciliation_history": bill_recon_history,
+                                   "bill_breakdown": bill_breakdown,
+                                   "bill_month_to_date": bill_month_to_date})
 
     # ------------------------------------------------------------------
     # COST TRACKING
@@ -875,19 +964,60 @@ class GridLock(hass.Hass):
         self.cost_tracking_day = state.get("day")
         self.tracked_import_cost_today = state.get("import_cost", 0.0)
         self.tracked_export_value_today = state.get("export_value", 0.0)
+        self.tracked_import_kwh_today = state.get("import_kwh", 0.0)
+        self.tracked_offpeak_kwh_today = state.get("offpeak_kwh", 0.0)
+        self.tracked_onpeak_kwh_today = state.get("onpeak_kwh", 0.0)
+        self.tracked_offpeak_cost_today = state.get("offpeak_cost", 0.0)
+        self.tracked_onpeak_cost_today = state.get("onpeak_cost", 0.0)
 
     def _save_cost_tracking_state(self):
         self._save_json("cost_tracking_state.json", {
             "day": self.cost_tracking_day,
             "import_cost": self.tracked_import_cost_today,
-            "export_value": self.tracked_export_value_today})
+            "export_value": self.tracked_export_value_today,
+            "import_kwh": self.tracked_import_kwh_today,
+            "offpeak_kwh": self.tracked_offpeak_kwh_today,
+            "onpeak_kwh": self.tracked_onpeak_kwh_today,
+            "offpeak_cost": self.tracked_offpeak_cost_today,
+            "onpeak_cost": self.tracked_onpeak_cost_today})
 
     def _roll_cost_day(self, now):
         today_iso = now.date().isoformat()
-        if self.cost_tracking_day != today_iso:
+        if self.cost_tracking_day is None:
             self.cost_tracking_day = today_iso
-            self.tracked_import_cost_today = 0.0
-            self.tracked_export_value_today = 0.0
+            return
+        if today_iso == self.cost_tracking_day:
+            return
+        # Bill reconciliation: freeze GridLock's own estimate alongside the
+        # real bill entity (BottlecapDave's Octopus integration — actual
+        # billed cost, not a guess) for the day that just ended, onto the
+        # same shared per-date dict savings_history.json already uses for
+        # several other independently-tracked daily facts (baseline/
+        # actual, forecast, profile_comparison) — same "many writers, one
+        # per-day record" precedent, not a new parallel history file.
+        # None (not 0.0) whenever the bill entity itself is unavailable,
+        # so a later reconciliation view can tell "no data" apart from
+        # "genuinely zero cost that day".
+        bill_import = self.get_float_state(self.ent_daily_import_cost, None)
+        bill_export = self.get_float_state(self.ent_daily_export_value, None)
+        self.savings_history.setdefault(self.cost_tracking_day, {}).update({
+            "bill_import": bill_import, "bill_export": bill_export,
+            "estimate_import": round(self.tracked_import_cost_today, 4),
+            "estimate_export": round(self.tracked_export_value_today, 4),
+            "offpeak_import_kwh": round(self.tracked_offpeak_kwh_today, 3),
+            "onpeak_import_kwh": round(self.tracked_onpeak_kwh_today, 3),
+            "offpeak_import_cost": round(self.tracked_offpeak_cost_today, 4),
+            "onpeak_import_cost": round(self.tracked_onpeak_cost_today, 4)})
+        self.savings_history = dict(list(self.savings_history.items())[-400:])
+        self._save_json("savings_history.json", self.savings_history)
+        self.cost_tracking_day = today_iso
+        self.tracked_import_cost_today = 0.0
+        self.tracked_export_value_today = 0.0
+        self.tracked_import_kwh_today = 0.0
+        self.tracked_offpeak_kwh_today = 0.0
+        self.tracked_onpeak_kwh_today = 0.0
+        self.tracked_offpeak_cost_today = 0.0
+        self.tracked_onpeak_cost_today = 0.0
 
     def _update_energy_cost_tracking(self, now):
         self._roll_cost_day(now)
@@ -901,6 +1031,15 @@ class GridLock(hass.Hass):
         elif self.ent_importing and self.get_state(self.ent_importing) == "on":
             imp_rate = self.get_float_state(self.ent_import_rate, self.default_import)
             self.tracked_import_cost_today += kwh * imp_rate
+            self.tracked_import_kwh_today += kwh
+            # Same cheap_rate threshold already used for the off-peak
+            # Bypass classification in publish_plan — not a new concept.
+            if imp_rate <= self.cheap_rate:
+                self.tracked_offpeak_kwh_today += kwh
+                self.tracked_offpeak_cost_today += kwh * imp_rate
+            else:
+                self.tracked_onpeak_kwh_today += kwh
+                self.tracked_onpeak_cost_today += kwh * imp_rate
         self._save_cost_tracking_state()
 
     # ------------------------------------------------------------------

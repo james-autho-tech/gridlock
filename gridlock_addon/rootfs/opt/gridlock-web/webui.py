@@ -212,6 +212,9 @@ def build_status():
         "learned_load_profile": forecast.get("attributes", {}).get("learned_load_profile") or [],
         "circuits": circuits.get("attributes", {}).get("circuits") or [],
         "circuit_history": circuits.get("attributes", {}).get("history") or [],
+        "bill_reconciliation_history": savings.get("attributes", {}).get("bill_reconciliation_history") or [],
+        "bill_breakdown": savings.get("attributes", {}).get("bill_breakdown"),
+        "bill_month_to_date": savings.get("attributes", {}).get("bill_month_to_date"),
         "storm_state": storm.get("state", "Clear"),
         "storm_reason": storm.get("attributes", {}).get("reason") or "No active alerts",
         "ssen_count": ssen.get("state", "0"),
@@ -455,6 +458,14 @@ PAGE = r"""<!doctype html>
   .gl-circuit-bar-fill { height:100%; background:linear-gradient(90deg,#0e7490,var(--cyan));
           border-radius:5px; }
   .gl-circuit-val { text-align:right; font-variant-numeric:tabular-nums; color:#cbd5e1; }
+  /* Bill breakdown row — same name/bar/value sub-styles as .gl-circuit-row
+     above, but its own 5-column grid (adds a Cost column) rather than
+     widening the shared class, which would also affect the live Power
+     Circuits table that reuses it. */
+  .gl-breakdown-row { display:grid; grid-template-columns:minmax(90px,180px) 1fr 64px 60px 52px;
+          align-items:center; gap:10px; font-size:13px; }
+  .gl-breakdown-row.gl-circuit-head { color:var(--dim); font-size:11px; letter-spacing:.6px;
+          text-transform:uppercase; padding-bottom:2px; border-bottom:1px solid #334155; }
 
   /* ---- overview bypass banner + flow glow ---- */
   .gl-bypass-banner { display:flex; align-items:center; gap:8px; padding:10px 14px;
@@ -1125,6 +1136,78 @@ function renderDailyCostChart(data) {
       <span><span class="gl-legend-dot" style="background:var(--amber)"></span>Cost day</span>
     </div>`;
 }
+// Same signed-bar-from-midline shape as renderDailyCostChart just above,
+// but plotting the GAP between GridLock's own live-tracked estimate and
+// the real bill entity (BottlecapDave's Octopus integration) rather than
+// a cost/credit day — near-zero bars mean the estimate agrees with the
+// bill, consistently large bars in one direction mean it doesn't.
+function renderBillReconciliationChart(data) {
+  if (!data || !data.length) {
+    return '<div style="color:var(--dim)">No history yet — builds up a day at a time.</div>';
+  }
+  const W = 900, H = 160, mid = H / 2;
+  const diffs = data.map(p => Number(p.estimate_total) - Number(p.bill_total));
+  const maxAbs = Math.max(...diffs.map(Math.abs), 0.1);
+  const scale = (mid - 10) / maxAbs;
+  const bw = W / data.length;
+  const bars = data.map((p, i) => {
+    const v = diffs[i];
+    const h = Math.max(1, Math.abs(v) * scale);
+    const x = i * bw;
+    const y = v >= 0 ? mid : mid - h;
+    const color = v >= 0 ? 'var(--amber)' : 'var(--cyan)';
+    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${Math.max(0.5, bw - 2).toFixed(1)}" height="${h.toFixed(1)}" fill="${color}" opacity="0.75"><title>${esc(fmtShortDate(p.date))}: estimate £${Number(p.estimate_total).toFixed(2)} vs bill £${Number(p.bill_total).toFixed(2)} (${v >= 0 ? '+' : ''}${v.toFixed(2)})</title></rect>`;
+  }).join('');
+  const everyN = Math.max(1, Math.ceil(data.length / 7));
+  const axis = barAxisLabels(data.length, everyN, i => fmtShortDate(data[i].date));
+  return `<svg viewBox="0 0 ${W} ${H}" class="gl-combo-svg" preserveAspectRatio="none" style="height:170px">
+      <line x1="0" y1="${mid}" x2="${W}" y2="${mid}" stroke="var(--line)" stroke-width="1" />
+      ${bars}
+    </svg>
+    ${axis}
+    <div class="gl-combo-legend">
+      <span><span class="gl-legend-dot" style="background:var(--amber)"></span>Estimate over the bill</span>
+      <span><span class="gl-legend-dot" style="background:var(--cyan)"></span>Estimate under the bill</span>
+    </div>`;
+}
+// Reuses the .gl-circuits/.gl-circuit-row bar-list styling (renderCircuits)
+// for the most recent day's cost breakdown — by tagged circuit when any
+// existed that day, else the plain off-peak/on-peak split every day has.
+function renderBillBreakdown(breakdown) {
+  if (!breakdown) {
+    return '<div style="color:var(--dim)">No history yet — builds up a day at a time.</div>';
+  }
+  const costPrefix = breakdown.cost_is_estimated ? '~£' : '£';
+  let rows;
+  if (breakdown.by_circuit) {
+    const maxPct = Math.max(...breakdown.by_circuit.map(c => Number(c.pct) || 0), 1);
+    rows = breakdown.by_circuit.map(c => `<div class="gl-breakdown-row">
+      <div class="gl-circuit-name">${esc(c.name || c.entity_id || 'Other')}</div>
+      <div class="gl-circuit-bar-track"><div class="gl-circuit-bar-fill" style="width:${Math.max(2, Number(c.pct) / maxPct * 100)}%"></div></div>
+      <div class="gl-circuit-val">${costPrefix}${Number(c.cost).toFixed(2)}</div>
+      <div class="gl-circuit-val">${Number(c.kwh).toFixed(2)} kWh</div>
+      <div class="gl-circuit-val" style="color:var(--dim)">${Number(c.pct).toFixed(0)}%</div>
+    </div>`).join('');
+  } else {
+    const off = Number(breakdown.offpeak_kwh) || 0;
+    const on = Number(breakdown.onpeak_kwh) || 0;
+    const offCost = Number(breakdown.offpeak_cost) || 0;
+    const onCost = Number(breakdown.onpeak_cost) || 0;
+    const total = Math.max(off + on, 0.001);
+    rows = [['Off-peak', off, offCost], ['On-peak', on, onCost]].map(([name, kwh, cost]) => `<div class="gl-breakdown-row">
+      <div class="gl-circuit-name">${name}</div>
+      <div class="gl-circuit-bar-track"><div class="gl-circuit-bar-fill" style="width:${Math.max(2, kwh / total * 100)}%"></div></div>
+      <div class="gl-circuit-val">£${cost.toFixed(2)}</div>
+      <div class="gl-circuit-val">${kwh.toFixed(2)} kWh</div>
+      <div class="gl-circuit-val" style="color:var(--dim)">${(kwh / total * 100).toFixed(0)}%</div>
+    </div>`).join('');
+  }
+  return `<div class="gl-sub" style="margin-bottom:6px">${esc(fmtShortDate(breakdown.date))}${breakdown.by_circuit ? ` — by tagged circuit (cost is ${costPrefix.startsWith('~') ? 'a blended-rate estimate, no per-circuit time-of-use data exists' : 'exact'})` : ' — no circuits tagged yet, off-peak/on-peak split shown instead'}</div>
+    <div class="gl-circuits">
+      <div class="gl-breakdown-row gl-circuit-head"><div>${breakdown.by_circuit ? 'Circuit' : 'Period'}</div><div></div><div style="text-align:right">Cost</div><div style="text-align:right">kWh</div><div style="text-align:right">Share</div></div>
+      ${rows}
+    </div>`;
+}
 function carbonColor(index) {
   if (index === 'very low' || index === 'low') return 'var(--green)';
   if (index === 'moderate') return 'var(--amber)';
@@ -1352,6 +1435,16 @@ async function refresh() {
         <div class="gl-sub">Real grid spend per day (last 28) — green bars are days you netted a credit, amber are days you paid, companion to the Saved (7d) tile on Overview.</div>
         ${renderDailyCostChart(d.daily_cost_history)}
         ${d.plan_accuracy ? `<div class="gl-sub" style="margin-top:10px">Plan accuracy (${esc(d.plan_accuracy.date)}): predicted <b style="color:var(--ink)">£${Number(d.plan_accuracy.forecast).toFixed(2)}</b>, actual <b style="color:var(--ink)">£${Number(d.plan_accuracy.actual).toFixed(2)}</b> — the plan's own morning forecast against what actually happened, no invented score.</div>` : ''}
+      </div>
+      <div class="gl-wrap">
+        <div class="gl-h">Bill reconciliation</div>
+        <div class="gl-sub">GridLock's own live-tracked estimate (sampled grid power × the rate active at that moment) against the real bill entity from your Octopus integration — near-zero bars mean the two agree.</div>
+        ${d.bill_month_to_date ? `<div class="gl-grid" style="margin-bottom:12px">
+          <div class="gl-tile"><div class="lbl">This month — bill</div><div class="val num">£${Number(d.bill_month_to_date.bill_total).toFixed(2)}</div></div>
+          <div class="gl-tile"><div class="lbl">This month — estimate</div><div class="val num">£${Number(d.bill_month_to_date.estimate_total).toFixed(2)}</div></div>
+        </div>` : ''}
+        ${renderBillReconciliationChart(d.bill_reconciliation_history)}
+        <div style="margin-top:14px">${renderBillBreakdown(d.bill_breakdown)}</div>
       </div>
       <div class="gl-wrap">
         <div class="gl-h">Risk profile comparison</div>
