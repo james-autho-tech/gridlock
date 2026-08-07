@@ -25,11 +25,13 @@ template:
   # but HA's own Jinja engine can read labels via label_entities(), so
   # this lets HA do the lookup and GridLock just read the result like any
   # other sensor. Tag any device_class:power entity you want GridLock to
-  # pick up (e.g. a Shelly's own "*_switch_0_power" sensor) with a label
-  # named "GridLock Power" (id: gridlock_power) — Settings > Areas,
-  # labels & zones > Labels. Renaming what a circuit represents needs no
-  # GridLock-side feature at all: it's just that entity's own friendly
-  # name, already editable from Settings > Devices & services > Entities.
+  # pick up with a label named "GridLock Power" (id: gridlock_power) —
+  # Settings > Areas, labels & zones > Labels. Must go on the entity
+  # itself, not its device: HA doesn't roll device/area labels up to
+  # entities, so label_entities() below won't see a device-level one.
+  # Renaming what a circuit represents needs no GridLock-side feature
+  # at all: it's just that entity's own friendly name, already editable
+  # from Settings > Devices & services > Entities.
   #
   # Deliberately trigger-based on a time_pattern rather than a plain
   # reactive template: confirmed via Home Assistant's own open issues

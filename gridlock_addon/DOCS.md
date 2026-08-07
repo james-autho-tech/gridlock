@@ -91,10 +91,15 @@ building any renaming UI of its own:
 
 1. In Home Assistant: Settings → Areas, labels & zones → Labels →
    create a label named **"GridLock Power"** (id `gridlock_power`).
-2. Apply that label to any power sensor you want tracked — e.g. a
-   Shelly's own `sensor.*_switch_0_power` entity (not the
-   `binary_sensor.*` diagnostic ones like Overcurrent/Overheating,
-   which carry no wattage).
+2. Apply that label to any power sensor you want tracked — the label
+   must go on the **entity itself**, not its device (Home Assistant
+   doesn't roll device/area labels up to entities, so a label on the
+   device is invisible to GridLock). Look for the entity named "Power"
+   with a flash icon and `unit_of_measurement: W` — the exact entity
+   ID suffix varies by Shelly model/firmware (`_power`,
+   `_switch_0_power`, etc.), so go by the icon/unit rather than the
+   name. Skip the `binary_sensor.*` diagnostic ones
+   (Overcurrent/Overheating/etc.), which carry no wattage.
 3. To rename what a circuit represents, rename the entity itself
    (Settings → Devices & services → Entities) — GridLock just displays
    whatever name is already there.
