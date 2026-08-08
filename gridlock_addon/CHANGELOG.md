@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.8.2 - 2026-08-08
+
+### Fix
+- Load Management's sensor was never actually being created — its `state` was passed as a raw float instead of a string, which HA's API rejects outright (confirmed against a real install's log, spamming a 400 Bad Request every 5 minutes)
+- Load Management decision-log entries no longer embed live-changing figures in the reason text, which defeated the log's own dedup and would have spammed a new entry every 5 minutes while active
+
 ## 3.8.1 - 2026-08-07
 
 ### Improvement

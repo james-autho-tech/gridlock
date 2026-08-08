@@ -222,7 +222,7 @@ def build_status():
             "warn_amps": load_mgmt_raw.get("attributes", {}).get("warn_amps"),
             "critical_amps": load_mgmt_raw.get("attributes", {}).get("critical_amps"),
             "safe_charge_kw": load_mgmt_raw.get("attributes", {}).get("safe_charge_kw"),
-            "state": load_mgmt_raw.get("attributes", {}).get("state", "normal"),
+            "state": load_mgmt_raw.get("attributes", {}).get("load_state", "normal"),
         } if load_mgmt_raw else None),
         "storm_state": storm.get("state", "Clear"),
         "storm_reason": storm.get("attributes", {}).get("reason") or "No active alerts",

@@ -1707,9 +1707,17 @@ class GridLock(hass.Hass):
                                    "history": history})
 
     def _publish_load_management(self, site_import_kw, load_mgmt_state, safe_charge_kw):
+        # state must be a string — HA's API rejects a raw float/int with a
+        # 400 Bad Request (confirmed against a real install: every other
+        # set_state() call in this file already wraps its numeric value in
+        # an f-string, e.g. publish_solar_forecast's state=f"{today_kwh:.2f}",
+        # this one just missed it). Also renamed the "state" attribute key
+        # to "load_state" — a HA entity's real top-level state and an
+        # attribute confusingly also called "state" is exactly the kind of
+        # thing that's easy to misread in Developer Tools > States.
         site_import_a = site_import_kw * 1000.0 / self.mains_voltage
         self.set_state("sensor.gridlock_load_management",
-                       state=round(site_import_a, 1),
+                       state=f"{site_import_a:.1f}",
                        attributes={"friendly_name": "GridLock Load Management",
                                    "unit_of_measurement": "A",
                                    "icon": "mdi:fuse",
@@ -1717,7 +1725,7 @@ class GridLock(hass.Hass):
                                    "warn_amps": round(self.load_mgmt_warn_kw * 1000.0 / self.mains_voltage, 1),
                                    "critical_amps": round(self.load_mgmt_critical_kw * 1000.0 / self.mains_voltage, 1),
                                    "safe_charge_kw": round(safe_charge_kw, 2),
-                                   "state": load_mgmt_state or "normal"})
+                                   "load_state": load_mgmt_state or "normal"})
 
     def publish_storm_status(self):
         reason = self.storm_active()
@@ -1877,16 +1885,26 @@ class GridLock(hass.Hass):
             self._prev_load_mgmt_state = load_mgmt_state
             if load_mgmt_state == "throttle":
                 if safe_charge_kw > 0.05:
+                    # Deliberately no live numbers in this reason string —
+                    # _log_decision() only dedupes on an EXACT state+reason
+                    # match, and other_loads_kw/safe_charge_kw fluctuate
+                    # most ticks even while nothing meaningful has
+                    # changed, which would otherwise log a near-duplicate
+                    # decision-log entry every 5 minutes throttling is
+                    # active instead of one "engaged" entry plus the
+                    # existing hourly "Still: ..." check-in. The exact
+                    # live figures are still in the notification (sent
+                    # once, on genuine transition) and the dashboard
+                    # gauge (updated every tick regardless).
                     self.apply(self.mode_charge, 0.0, round(safe_charge_kw, 2),
                                "Load Management — Charging Throttled",
-                               f"Other loads {other_loads_kw:.1f}kW — charge rate reduced to "
-                               f"{safe_charge_kw:.1f}kW to stay under the "
+                               "Battery charge rate reduced to fit available headroom under the "
                                f"{self.main_fuse_amps:.0f}A main fuse", "")
                 else:
                     self.apply(self.mode_eco, self.discharge_kw, 0.0,
                                "Load Management — Charging Paused",
-                               f"Other loads alone ({other_loads_kw:.1f}kW) leave no headroom "
-                               "to charge — paused, not discharging", "")
+                               "Other loads alone leave no headroom to charge — paused, "
+                               "not discharging", "")
                 return
 
         soc0 = self.get_float_state(self.ent_soc, 50.0)
