@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.8.1 - 2026-08-07
+
+### Improvement
+- Plan table's Grid kWh column now also colour-coded (green at 0, same as Load/Charge/Battery)
+
 ## 3.8.0 - 2026-08-07
 
 ### Improvement

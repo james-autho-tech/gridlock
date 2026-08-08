@@ -893,6 +893,7 @@ function renderPlanTable(table, opts) {
   const cheapP = Number(opts.cheapP || 10);
   const maxPv = Math.max(...shown.map(r => Number(r.pv_kwh) || 0), 0.01);
   const maxLoad = Math.max(...shown.map(r => Number(r.load_kwh) || 0), 0.01);
+  const maxGrid = Math.max(...shown.map(r => Number(r.grid_kwh) || 0), 0.01);
   const maxCharge = Math.max(...shown.map(r => Number(r.charge_kwh) || 0), 0.01);
   const maxBattery = Math.max(...shown.map(r => Number(r.battery_kwh) || 0), 0.01);
   const trs = shown.map((r, i) => {
@@ -904,7 +905,7 @@ function renderPlanTable(table, opts) {
       <td style="background:${heatColor(r.export_p, cheapP)}">${Number(r.export_p).toFixed(1)}p</td>
       <td style="background:${magnitudeColor(r.pv_kwh, maxPv, true)}">${Number(r.pv_kwh).toFixed(2)}</td>
       <td style="background:${magnitudeColor(r.load_kwh, maxLoad, false)}">${Number(r.load_kwh).toFixed(2)}</td>
-      <td>${Number(r.grid_kwh).toFixed(2)}</td>
+      <td style="background:${magnitudeColor(r.grid_kwh, maxGrid, false)}">${Number(r.grid_kwh).toFixed(2)}</td>
       <td style="background:${magnitudeColor(r.charge_kwh, maxCharge, false)}">${Number(r.charge_kwh).toFixed(2)}</td>
       <td class="num" style="background:${magnitudeColor(r.battery_kwh, maxBattery, false)}" title="Battery-side kWh discharged this slot (self-consumption + export combined) — read directly off this row, not a SoC difference against the row above">${Number(r.battery_kwh).toFixed(2)}</td>
       <td>${actionPill(r.action)}</td>
