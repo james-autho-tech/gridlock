@@ -385,12 +385,14 @@ class GridLock(hass.Hass):
         # fuse rating, so this reacts to the live combined site-import
         # reading instead (self.ent_grid_power — the CT clamp at the grid
         # connection point on a standard hybrid-inverter install, already
-        # net of everything: house, EV, battery, etc). Disabled unless
-        # main_fuse_amps is explicitly set — this changes real control
-        # behaviour, so it shouldn't silently activate for installs that
-        # didn't ask for it.
-        main_fuse_amps = a.get("main_fuse_amps")
-        self.load_mgmt_enabled = main_fuse_amps is not None
+        # net of everything: house, EV, battery, etc). Defaults ON at
+        # 100A — this add-on is specifically built for UK Octopus/
+        # Sigenergy households, and single-phase UK domestic supplies are
+        # standardised at 100A (the exception being 3-phase properties,
+        # which should set their own real per-phase rating, or
+        # main_fuse_amps: false to disable entirely).
+        main_fuse_amps = a.get("main_fuse_amps", 100.0)
+        self.load_mgmt_enabled = bool(main_fuse_amps)
         if self.load_mgmt_enabled:
             self.mains_voltage = float(a.get("mains_voltage", 240.0))
             self.main_fuse_amps = float(main_fuse_amps)
@@ -1704,6 +1706,19 @@ class GridLock(hass.Hass):
                                    "circuits": circuits,
                                    "history": history})
 
+    def _publish_load_management(self, site_import_kw, load_mgmt_state, safe_charge_kw):
+        site_import_a = site_import_kw * 1000.0 / self.mains_voltage
+        self.set_state("sensor.gridlock_load_management",
+                       state=round(site_import_a, 1),
+                       attributes={"friendly_name": "GridLock Load Management",
+                                   "unit_of_measurement": "A",
+                                   "icon": "mdi:fuse",
+                                   "main_fuse_amps": self.main_fuse_amps,
+                                   "warn_amps": round(self.load_mgmt_warn_kw * 1000.0 / self.mains_voltage, 1),
+                                   "critical_amps": round(self.load_mgmt_critical_kw * 1000.0 / self.mains_voltage, 1),
+                                   "safe_charge_kw": round(safe_charge_kw, 2),
+                                   "state": load_mgmt_state or "normal"})
+
     def publish_storm_status(self):
         reason = self.storm_active()
         self.set_state("sensor.gridlock_storm_status",
@@ -1807,6 +1822,72 @@ class GridLock(hass.Hass):
             self.apply(self.mode_eco, self.discharge_kw, self.charge_kw,
                        "Failsafe (safe mode)", fs.reason, "")
             return
+
+        # Main fuse load management: the single highest-priority override,
+        # above even Storm Watch. Reacts to the live combined site-import
+        # reading (self.ent_grid_power, net of everything — house, EV,
+        # hot tub, heat pump, battery) rather than anything planned,
+        # since GridLock has no visibility into what the EV/hot tub/heat
+        # pump are about to do. Deliberately never discharges the battery
+        # to "help" — the whole point of the overnight cheap-rate window
+        # this is actually meant for is to charge it, so draining it
+        # right back out would defeat the purpose. The only thing this
+        # does is smoothly throttle the battery's own charge rate down
+        # to whatever headroom is actually left once every other load
+        # (Home Assistant knows nothing about) is accounted for — full
+        # rate whenever there's room, reduced (never negative/discharge)
+        # when there isn't, down to 0 only if genuinely no headroom
+        # remains at all.
+        if self.load_mgmt_enabled:
+            site_import_kw = (self._read_live_kw(self.ent_grid_power) or 0.0) \
+                if self.ent_importing and self.get_state(self.ent_importing) == "on" else 0.0
+            # Isolate what everything ELSE (not the battery's own
+            # charging) is drawing right now, so throttling the charge
+            # rate down doesn't chase its own tail — site_import_kw
+            # already includes whatever the battery itself is currently
+            # pulling for charging.
+            battery_charging_now = bool(self.ent_battery_charging) \
+                and self.get_state(self.ent_battery_charging) == "on"
+            battery_kw_now = (self._read_live_kw(self.ent_battery_power) or 0.0) \
+                if battery_charging_now else 0.0
+            other_loads_kw = max(0.0, site_import_kw - battery_kw_now)
+
+            throttling = (other_loads_kw + self.charge_kw) > self.load_mgmt_warn_kw
+            # Throttle toward the critical ceiling, not the (lower) warn
+            # line — warn is only "start paying attention", the real
+            # limit charging should never push past is critical, so
+            # aiming there uses all the genuinely safe headroom rather
+            # than cutting off early.
+            safe_charge_kw = max(0.0, min(self.charge_kw, self.load_mgmt_critical_kw - other_loads_kw)) \
+                if throttling else self.charge_kw
+            load_mgmt_state = "throttle" if throttling else None
+
+            self._publish_load_management(site_import_kw, load_mgmt_state, safe_charge_kw)
+            if load_mgmt_state != self._prev_load_mgmt_state:
+                if load_mgmt_state:
+                    self._notify(
+                        "GridLock: Load Management engaged",
+                        f"Other loads are drawing {other_loads_kw:.1f}kW — battery charging "
+                        f"reduced to {safe_charge_kw:.1f}kW to stay clear of your "
+                        f"{self.main_fuse_amps:.0f}A main fuse (never discharges to help — "
+                        "just charges slower).")
+                elif self._prev_load_mgmt_state:
+                    self._notify("GridLock: Load Management cleared",
+                                "Full charge rate available again — normal planning resumed.")
+            self._prev_load_mgmt_state = load_mgmt_state
+            if load_mgmt_state == "throttle":
+                if safe_charge_kw > 0.05:
+                    self.apply(self.mode_charge, 0.0, round(safe_charge_kw, 2),
+                               "Load Management — Charging Throttled",
+                               f"Other loads {other_loads_kw:.1f}kW — charge rate reduced to "
+                               f"{safe_charge_kw:.1f}kW to stay under the "
+                               f"{self.main_fuse_amps:.0f}A main fuse", "")
+                else:
+                    self.apply(self.mode_eco, self.discharge_kw, 0.0,
+                               "Load Management — Charging Paused",
+                               f"Other loads alone ({other_loads_kw:.1f}kW) leave no headroom "
+                               "to charge — paused, not discharging", "")
+                return
 
         soc0 = self.get_float_state(self.ent_soc, 50.0)
         # Read fresh every tick, not just once at startup — a newly

@@ -253,6 +253,26 @@ gridlock:
     - entity: binary_sensor.meteoalarm      # Met Office red warnings only
       severity: ["Extreme"]
   storm_watch_target_soc: 100
+
+  # --- Main fuse load management ---
+  # Defaults ON at 100A (standard UK single-phase domestic supply) —
+  # override the figure if yours is different, or set to false to
+  # disable entirely (e.g. a 3-phase property). GridLock has no control
+  # over the EV charger, hot tub, or heat pump at all — the battery is
+  # the only lever it has, so this reacts to the live combined
+  # site-import reading (house + EV + battery + everything, net of PV)
+  # rather than trying to model/predict what those other loads are
+  # about to do. Deliberately never discharges the battery to "help" —
+  # the whole point of the cheap overnight window this matters most for
+  # is to charge it, so draining it back out would defeat the purpose.
+  # Only ever smoothly throttles the battery's own charge rate down to
+  # whatever headroom is actually left (full rate whenever there's
+  # room, reduced — never negative — when there isn't).
+  # main_fuse_amps: 100          # set false to disable; override the figure if not 100A
+  # mains_voltage: 240           # UK standard; override if not on 240V
+  # load_mgmt_warn_pct: 0.80     # start throttling the charge rate above this % of the fuse rating
+  # load_mgmt_critical_pct: 0.90  # the real ceiling charging throttles toward — never charge past this
+
   # SSEN Power Track — polled directly by the engine, no HA sensors needed.
   # Postcode prefix (outward code + first digit of inward code, e.g.
   # "SW1A 1") — literal value (see note above re: !secret not working

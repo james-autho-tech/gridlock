@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.8.0 - 2026-08-07
+
+### Improvement
+- New: main fuse load management, on by default at 100A — smoothly throttles the battery's own charge rate down to whatever headroom is left when the EV charger, hot tub, heat pump etc. combine with it, instead of letting site import risk tripping the main fuse
+- Never discharges to "help" — only ever reduces the charge rate (down to 0 if genuinely needed), since draining the battery back out during a cheap-rate charging window would defeat the point
+- Highest-priority check every tick, overriding even Storm Watch
+- New Overview gauge showing live site import against the fuse rating, plus a banner while throttling is active
+- Also colour-coded PV/Load/Charge/Battery kWh columns in the plan table (green the more favourable the value)
+- Entities tab cards now cap their width so they wrap onto multiple rows instead of stretching thin across one
+
 ## 3.7.2 - 2026-08-07
 
 ### Fix

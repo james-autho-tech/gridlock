@@ -141,6 +141,36 @@ that file gets there).
 The EV charger GridLock already tracks shows up alongside these
 automatically too — it doesn't need (or use) this label at all.
 
+## Main fuse load management
+
+On by default at 100A — standard for a UK single-phase domestic supply, which
+this add-on is built for. If several high-power things run at once (an EV
+charger, a hot tub, a heat pump, and the battery all charging together
+overnight on cheap-rate electricity, say), combined site import can genuinely
+exceed what the main fuse is rated for and trip it, cutting power to the
+whole house.
+
+GridLock can't control the EV charger, hot tub, or heat pump at all — the
+only thing it actually commands is the battery. So rather than trying to
+predict what those other loads are about to do, it reacts to the live
+combined site-import reading (the same grid CT clamp already used
+everywhere else) and **smoothly throttles the battery's own charge rate**
+down to whatever headroom is genuinely left — full rate whenever there's
+room, a reduced rate when there isn't, right down to 0 only if other loads
+alone leave no headroom at all. It deliberately never discharges the battery
+to help: the whole point of an overnight cheap-rate window is to charge it,
+so draining it back out to make room for itself would defeat the purpose.
+
+This is the single highest-priority check every tick, overriding even Storm
+Watch — a tripped fuse cuts power to everything, including whatever Storm
+Watch was trying to protect against.
+
+If you're not on a 100A single-phase supply (e.g. 3-phase), set
+`main_fuse_amps` to your actual per-phase rating, or `false` to disable this
+entirely. See `apps.yaml` for the two threshold percentages
+(`load_mgmt_warn_pct`/`load_mgmt_critical_pct`) if you want to tune how much
+margin is kept below the real trip point.
+
 ## Modes (`battery_risk_profile` in `apps.yaml`)
 
 The planning engine is a linear program, not a greedy heuristic — it

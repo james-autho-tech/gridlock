@@ -135,6 +135,7 @@ def build_status():
     decision_log = get("sensor.gridlock_decision_log") or {}
     solar = get("sensor.gridlock_solar_forecast") or {}
     storm = get("sensor.gridlock_storm_status") or {}
+    load_mgmt_raw = get("sensor.gridlock_load_management")
     carbon = get("sensor.gridlock_carbon_intensity") or {}
     ssen = get("sensor.gridlock_ssen_local_outages") or {}
     circuits = get("sensor.gridlock_circuits") or {}
@@ -215,6 +216,14 @@ def build_status():
         "bill_reconciliation_history": savings.get("attributes", {}).get("bill_reconciliation_history") or [],
         "bill_breakdown": savings.get("attributes", {}).get("bill_breakdown"),
         "bill_month_to_date": savings.get("attributes", {}).get("bill_month_to_date"),
+        "load_mgmt": ({
+            "site_import_a": as_float(load_mgmt_raw, 0),
+            "fuse_amps": load_mgmt_raw.get("attributes", {}).get("main_fuse_amps"),
+            "warn_amps": load_mgmt_raw.get("attributes", {}).get("warn_amps"),
+            "critical_amps": load_mgmt_raw.get("attributes", {}).get("critical_amps"),
+            "safe_charge_kw": load_mgmt_raw.get("attributes", {}).get("safe_charge_kw"),
+            "state": load_mgmt_raw.get("attributes", {}).get("state", "normal"),
+        } if load_mgmt_raw else None),
         "storm_state": storm.get("state", "Clear"),
         "storm_reason": storm.get("attributes", {}).get("reason") or "No active alerts",
         "ssen_count": ssen.get("state", "0"),
@@ -506,7 +515,12 @@ PAGE = r"""<!doctype html>
   .gl-tariff-row.is-active .gl-name { color:var(--cyan); font-weight:700; }
 
   /* ---- entity discovery cards ---- */
-  .gl-ent-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; }
+  /* Capped max width (not the usual 1fr) — with only a handful of
+     categories, "auto-fit" on a wide window stretches each card to fill
+     one very wide, sparse-looking row instead of wrapping. Capping how
+     wide a card can grow forces it onto multiple, more tightly-packed
+     rows once there isn't room for another card at a sensible width. */
+  .gl-ent-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,340px)); gap:14px; }
   .gl-ent-card { background:#0b1220; border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
   .gl-ent-card-h { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:700;
                    letter-spacing:1px; text-transform:uppercase; color:var(--ink); margin-bottom:10px; }
@@ -798,6 +812,48 @@ function planRowObjects(table) {
     .filter(row => row.length === cols.length)
     .map(row => Object.fromEntries(cols.map((c, i) => [c, row[i]])));
 }
+// Value-relative heat for the plan table's PV/Load/Charge/Battery kWh
+// columns — unlike price (heatColor above), there's no absolute
+// reference point for a kWh figure that means anything across different
+// sites/battery sizes, so this scales against the max value actually
+// present in the currently-displayed rows instead. higherIsBetter=true
+// for PV (more solar is always better); false for Load/Charge/Battery
+// (less drawn from those is better — a quiet, cheap slot).
+function magnitudeColor(value, maxValue, higherIsBetter) {
+  if (!(maxValue > 0)) return 'transparent';
+  const frac = Math.min(1, Math.max(0, Number(value) / maxValue));
+  const goodness = higherIsBetter ? frac : 1 - frac;
+  const r = Math.round(239 - goodness * (239 - 52));
+  const g = Math.round(68 + goodness * (211 - 68));
+  const b = Math.round(68 + goodness * (153 - 68));
+  return `rgba(${r},${g},${b},.16)`;
+}
+function renderLoadManagement(lm) {
+  if (!lm || !lm.fuse_amps) return '';
+  const a = Number(lm.site_import_a) || 0;
+  const fuse = Number(lm.fuse_amps);
+  const warn = Number(lm.warn_amps);
+  const critical = Number(lm.critical_amps);
+  const safeChargeKw = Number(lm.safe_charge_kw);
+  const pct = Math.min(100, (a / fuse) * 100);
+  const throttled = lm.state === 'throttle';
+  const color = throttled ? 'var(--amber)' : 'var(--green)';
+  const banner = throttled
+    ? `<div class="gl-bypass-banner">⚡ LOAD MANAGEMENT ACTIVE — battery charge rate reduced to ${safeChargeKw.toFixed(1)}kW to stay clear of your ${fuse.toFixed(0)}A main fuse (never discharges to help, just charges slower)</div>`
+    : '';
+  return `${banner}<div class="gl-wrap">
+    <div class="gl-h">Main fuse load management</div>
+    <div class="gl-sub">Site import against your ${fuse.toFixed(0)}A main fuse — starts throttling the battery's own charge rate above ${warn.toFixed(0)}A, down to 0 only if other loads alone leave no headroom at all above ${critical.toFixed(0)}A. Never discharges to help — GridLock can't control the EV charger, hot tub, or heat pump directly, so charging slower is the only lever it has.</div>
+    <div class="gl-bar">
+      <div class="lbl"><span>${a.toFixed(1)}A</span><span>${fuse.toFixed(0)}A fuse</span></div>
+      <div class="gl-track">
+        <div class="gl-fill" style="width:${pct}%;background:${color}"></div>
+        <div class="gl-target" style="left:${Math.min(100, (warn / fuse) * 100)}%"></div>
+        <div class="gl-target" style="left:${Math.min(100, (critical / fuse) * 100)}%"></div>
+      </div>
+    </div>
+  </div>`;
+}
 function heatColor(pence, cheapP) {
   // Relative to the site's own configured cheap-rate threshold (blue),
   // scaling up to a deep red by ~2.5x that — adaptive to whatever
@@ -835,6 +891,10 @@ function renderPlanTable(table, opts) {
   }
   const shown = opts.limit ? rows.slice(0, opts.limit) : rows;
   const cheapP = Number(opts.cheapP || 10);
+  const maxPv = Math.max(...shown.map(r => Number(r.pv_kwh) || 0), 0.01);
+  const maxLoad = Math.max(...shown.map(r => Number(r.load_kwh) || 0), 0.01);
+  const maxCharge = Math.max(...shown.map(r => Number(r.charge_kwh) || 0), 0.01);
+  const maxBattery = Math.max(...shown.map(r => Number(r.battery_kwh) || 0), 0.01);
   const trs = shown.map((r, i) => {
     const bypass = isBypass(r.action);
     const cls = [i === 0 ? 'is-now' : '', bypass ? 'is-bypass' : ''].filter(Boolean).join(' ');
@@ -842,11 +902,11 @@ function renderPlanTable(table, opts) {
       <td>${esc(r.slot)}</td>
       <td style="background:${heatColor(r.import_p, cheapP)}">${Number(r.import_p).toFixed(1)}p</td>
       <td style="background:${heatColor(r.export_p, cheapP)}">${Number(r.export_p).toFixed(1)}p</td>
-      <td>${Number(r.pv_kwh).toFixed(2)}</td>
-      <td>${Number(r.load_kwh).toFixed(2)}</td>
+      <td style="background:${magnitudeColor(r.pv_kwh, maxPv, true)}">${Number(r.pv_kwh).toFixed(2)}</td>
+      <td style="background:${magnitudeColor(r.load_kwh, maxLoad, false)}">${Number(r.load_kwh).toFixed(2)}</td>
       <td>${Number(r.grid_kwh).toFixed(2)}</td>
-      <td>${Number(r.charge_kwh).toFixed(2)}</td>
-      <td class="num" title="Battery-side kWh discharged this slot (self-consumption + export combined) — read directly off this row, not a SoC difference against the row above">${Number(r.battery_kwh).toFixed(2)}</td>
+      <td style="background:${magnitudeColor(r.charge_kwh, maxCharge, false)}">${Number(r.charge_kwh).toFixed(2)}</td>
+      <td class="num" style="background:${magnitudeColor(r.battery_kwh, maxBattery, false)}" title="Battery-side kWh discharged this slot (self-consumption + export combined) — read directly off this row, not a SoC difference against the row above">${Number(r.battery_kwh).toFixed(2)}</td>
       <td>${actionPill(r.action)}</td>
       <td>${Number(r.dispatch) > 0.5 ? `<span style="color:var(--cyan)">⚡ ${Number(r.ev_kwh).toFixed(2)}</span>` : '—'}</td>
       <td>${Number(r.saving_session) > 0.5 ? `<span title="${savingSessionTitle(r)}" style="color:#facc15">💰${Number(r.session_reward_p) > 0 ? `<br><span class="num" style="font-size:11px">+${Number(r.session_reward_p).toFixed(1)}p</span>` : ''}</span>` : '—'}</td>
@@ -1383,6 +1443,7 @@ async function refresh() {
         </div>
       </div>
       ${isBypass(d.state) ? `<div class="gl-bypass-banner">⚠️ BYPASS ACTIVE — ${esc(d.reason)}</div>` : ''}
+      ${renderLoadManagement(d.load_mgmt)}
       <div class="gl-wrap">
         <div class="gl-h">Live power flow</div>
         ${renderFlow(d.flow, isBypass(d.state))}
