@@ -58,7 +58,7 @@ the fallback.
 ## The dashboard
 
 Open via "Open Web UI" on the add-on's Info page, or the sidebar
-shortcut once enabled. Six tabs:
+shortcut once enabled. Tabs:
 
 - **Overview** — live KPIs (current SoC, today's net cost, solar so
   far), the power-flow diagram, and a banner if the inverter is
@@ -66,11 +66,21 @@ shortcut once enabled. Six tabs:
   fallback, not a normal state).
 - **Plan** — the full 48h slot-by-slot table shown in this add-on's
   screenshots: import/export rate, PV/load/grid/charge/battery kWh,
-  the action taken (Charge / Export / ECO), SoC, and running cost —
-  plus the natural-language summary above it explaining the plan in
-  one or two sentences.
-- **Forecast** — three synced charts: SoC trace, solar forecast vs.
-  actual, and learned load profile.
+  the action taken (Charge / Export / ECO / Bypass), SoC, and running
+  cost — plus the natural-language summary above it explaining the
+  plan in one or two sentences, and a static key explaining each
+  Action value.
+- **Forecast** — three synced charts (SoC trace, solar forecast vs.
+  actual), plus battery health, risk profile comparison, carbon
+  intensity, learned load profile, Storm Watch, SSEN Power Track, and
+  Saving Sessions.
+- **Billing** — daily real grid spend history, and Bill reconciliation
+  (GridLock's own live-tracked cost estimate against the real bill
+  entity from your Octopus integration, month-to-date totals, and a
+  breakdown by tagged circuit or off-peak/on-peak split).
+- **Circuits** — only shown once at least one power circuit is
+  detected (see below); live draw and daily energy history per
+  circuit.
 - **Tariffs** — how today's plan compares against other Octopus
   products (see `compare_tariffs` in `apps.yaml`) at the rates you
   actually saw today.
@@ -85,12 +95,22 @@ shortcut once enabled. Six tabs:
 
 If you have Shelly relays (or anything else exposing a `device_class:
 power` sensor) monitoring individual appliances/circuits, GridLock can
-show their live draw on the Forecast tab and factor them into the load
+show their live draw on the Circuits tab and factor them into the load
 forecast — without listing entity IDs in `apps.yaml` and without
-building any renaming UI of its own:
+building any renaming UI of its own.
+
+**Shelly relays are picked up automatically, no setup needed** — any
+`sensor.*` entity with "shelly" in its entity ID ending in `_power`
+(covers every naming variant across Shelly generations/firmwares:
+`_power`, `_switch_0_power`, etc.) is included on its own, by naming
+convention alone (`core/registry.py`'s `find_shelly_power_entities()`).
+For anything else (a different brand's power sensor), or to make
+totally sure a specific Shelly is picked up regardless of naming:
 
 1. In Home Assistant: Settings → Areas, labels & zones → Labels →
-   create a label named **"GridLock Power"** (id `gridlock_power`).
+   create a label named exactly **"GridLock Power"** (GridLock looks the
+   label up by this display name, not a fixed ID, so the label's own
+   internal ID doesn't matter — just the name).
 2. Apply that label to any power sensor you want tracked — the label
    must go on the **entity itself**, not its device (Home Assistant
    doesn't roll device/area labels up to entities, so a label on the

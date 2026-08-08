@@ -378,6 +378,27 @@ class GridLock(hass.Hass):
                 self.storm_sources.append((item, default_sev))
         self.storm_target_soc = self.cfg.storm_target_soc
 
+        # Main fuse (Amps) load management — a pure live safety override,
+        # not part of the LP optimiser at all: the optimizer has no
+        # visibility into the EV/hot tub/heat pump loads that could
+        # combine with battery charging to exceed the site's own main
+        # fuse rating, so this reacts to the live combined site-import
+        # reading instead (self.ent_grid_power — the CT clamp at the grid
+        # connection point on a standard hybrid-inverter install, already
+        # net of everything: house, EV, battery, etc). Disabled unless
+        # main_fuse_amps is explicitly set — this changes real control
+        # behaviour, so it shouldn't silently activate for installs that
+        # didn't ask for it.
+        main_fuse_amps = a.get("main_fuse_amps")
+        self.load_mgmt_enabled = main_fuse_amps is not None
+        if self.load_mgmt_enabled:
+            self.mains_voltage = float(a.get("mains_voltage", 240.0))
+            self.main_fuse_amps = float(main_fuse_amps)
+            max_import_kw = self.main_fuse_amps * self.mains_voltage / 1000.0
+            self.load_mgmt_warn_kw = max_import_kw * float(a.get("load_mgmt_warn_pct", 0.80))
+            self.load_mgmt_critical_kw = max_import_kw * float(a.get("load_mgmt_critical_pct", 0.90))
+        self._prev_load_mgmt_state = None  # None / "warn" / "critical"
+
         self.notify_service = a.get("notify_service")
         self._prev_storm_active = False
         self._prev_ev_protection = False
@@ -1612,16 +1633,22 @@ class GridLock(hass.Hass):
 
     def publish_circuits(self, labeled_entities, now):
         """Live power breakdown for the dashboard — the EV charger (already
-        discovered) plus anything the user tagged with the "gridlock_power"
-        label in HA (see ha_support.yaml's template sensor for why a label
-        rather than an apps.yaml list: registry access isn't something
+        discovered), any Shelly relay's own power sensor (naming
+        convention alone, core/registry.py's find_shelly_power_entities —
+        works with zero setup, but only for Shelly specifically), and
+        anything the user tagged with the "GridLock Power" label in HA
+        (see ha_support.yaml's template sensor for why a label rather
+        than an apps.yaml list: registry access isn't something
         AppDaemon itself can do, so HA's own Jinja engine does the lookup
-        and exposes it as a normal entity attribute instead). Renaming what
-        a circuit represents needs nothing here — it's just that entity's
-        own friendly_name, already editable from Settings > Devices &
+        and exposes it as a normal entity attribute instead — this one
+        works for any brand, not just Shelly). Renaming what a circuit
+        represents needs nothing here — it's just that entity's own
+        friendly_name, already editable from Settings > Devices &
         services > Entities."""
         ids = list(dict.fromkeys(
-            ([self.ent_ev_power] if self.ent_ev_power else []) + labeled_entities))
+            ([self.ent_ev_power] if self.ent_ev_power else [])
+            + self.registry.find_shelly_power_entities()
+            + labeled_entities))
 
         today_iso = now.date().isoformat()
         if self.circuit_day is None:
@@ -1788,7 +1815,13 @@ class GridLock(hass.Hass):
         # trigger-based HA-side template (ha_support.yaml) bridging the
         # Label registry, which AppDaemon itself can't query at all.
         labeled_circuits = self._attr_list("sensor.gridlock_power_circuits", "entity_ids")
-        self.load_provider.circuit_power_entities = labeled_circuits
+        # Same combined set publish_circuits() itself builds (label +
+        # Shelly naming convention) — kept in step so a Shelly picked up
+        # by naming alone gets subtracted from the whole-house learning
+        # and forecast in its own right too, not just shown live.
+        all_circuits = list(dict.fromkeys(
+            self.registry.find_shelly_power_entities() + labeled_circuits))
+        self.load_provider.circuit_power_entities = all_circuits
         self.load_provider.sample(now)
         self.publish_circuits(labeled_circuits, now)
         self._update_savings(now)

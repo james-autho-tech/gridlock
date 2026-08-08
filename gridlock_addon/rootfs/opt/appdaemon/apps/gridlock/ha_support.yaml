@@ -25,13 +25,21 @@ template:
   # but HA's own Jinja engine can read labels via label_entities(), so
   # this lets HA do the lookup and GridLock just read the result like any
   # other sensor. Tag any device_class:power entity you want GridLock to
-  # pick up with a label named "GridLock Power" (id: gridlock_power) —
-  # Settings > Areas, labels & zones > Labels. Must go on the entity
-  # itself, not its device: HA doesn't roll device/area labels up to
-  # entities, so label_entities() below won't see a device-level one.
-  # Renaming what a circuit represents needs no GridLock-side feature
-  # at all: it's just that entity's own friendly name, already editable
-  # from Settings > Devices & services > Entities.
+  # pick up with a label named "GridLock Power" — Settings > Areas,
+  # labels & zones > Labels. Must go on the entity itself, not its
+  # device: HA doesn't roll device/area labels up to entities, so
+  # label_entities() below won't see a device-level one. Renaming what a
+  # circuit represents needs no GridLock-side feature at all: it's just
+  # that entity's own friendly name, already editable from Settings >
+  # Devices & services > Entities.
+  #
+  # Looked up via label_id("GridLock Power") rather than a hardcoded
+  # "gridlock_power" string — confirmed against a real install that a
+  # label's actual internal ID doesn't necessarily match the obvious
+  # slug of its display name, so a guessed ID silently matches nothing.
+  # label_id() resolves whatever ID Home Assistant actually assigned to
+  # a label with this exact display name, which is also HA's own
+  # documented way to compose these two functions together.
   #
   # Deliberately trigger-based on a time_pattern rather than a plain
   # reactive template: confirmed via Home Assistant's own open issues
@@ -51,9 +59,10 @@ template:
       - name: "GridLock Power Circuits"
         unique_id: gridlock_power_circuits
         icon: mdi:flash
-        state: "{{ label_entities('gridlock_power') | length }}"
+        state: "{{ label_entities(label_id('GridLock Power') or 'gridlock_power') | length }}"
         attributes:
-          entity_ids: "{{ label_entities('gridlock_power') }}"
+          entity_ids: "{{ label_entities(label_id('GridLock Power') or 'gridlock_power') }}"
+          resolved_label_id: "{{ label_id('GridLock Power') }}"
 
 input_select:
   gridlock_mode_override:

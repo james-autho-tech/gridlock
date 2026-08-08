@@ -132,6 +132,24 @@ class HASensorRegistry:
                        "ev_power_entity explicitly in apps.yaml.")
         return pool[0] if pool else None
 
+    # -- power circuits (Shelly relays etc.) -----------------------------
+    def find_shelly_power_entities(self):
+        """Every Shelly relay's own live power sensor, by naming
+        convention alone — Shelly's various generations/firmwares name
+        theirs differently ("*_power", "*_switch_0_power", etc.), but
+        all end in "_power" (as opposed to the paired cumulative
+        "*_energy" sensor, or the binary_sensor.* diagnostic entities
+        like Overcurrent/Overheating). A fallback ALONGSIDE (not
+        instead of) the label-based discovery in ha_support.yaml — that
+        one works for any brand of power sensor, this one works for
+        Shelly specifically with zero setup, same "brand-specific
+        naming shortcut alongside a generic mechanism" shape as
+        find_hypervolt_ev_power() next to the generic find_power()."""
+        flat = self._flat()
+        return [eid for eid in flat
+                if eid.startswith("sensor.") and "shelly" in eid.lower()
+                and eid.endswith("_power")]
+
     # -- house load -------------------------------------------------------
     def find_load_entity(self):
         """A house-load power sensor, brand-agnostic across inverter_prefixes

@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.7.2 - 2026-08-07
+
+### Fix
+- Power Circuits label lookup now resolves the label's actual ID via `label_id("GridLock Power")` instead of a guessed `gridlock_power` slug, which didn't always match
+- Shelly relays are now auto-detected by naming convention alone (any `sensor.*shelly*_power`), no label needed — the label still works for any other brand
+
 ## 3.7.1 - 2026-08-07
 
 ### Improvement
