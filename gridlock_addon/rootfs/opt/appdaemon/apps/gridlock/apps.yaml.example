@@ -273,11 +273,11 @@ gridlock:
   # load_mgmt_warn_pct: 0.80     # start throttling the charge rate above this % of the fuse rating
   # load_mgmt_critical_pct: 0.90  # the real ceiling charging throttles toward — never charge past this
 
-  # --- Heat pump thermal model (Phase 1, advisory only) ---
+  # --- GridWarm: heat pump thermal model (Phase 1, advisory only) ---
   # Predicts each zone's temperature and heating cost from its own heat
   # loss/gain — never writes to any climate/heating entity, only
-  # predicts and displays (see the Forecast tab's "Heat pump forecast"
-  # card). No auto-discovery here — a heat-pump-controller's exact
+  # predicts and displays (see the Forecast tab's "GridWarm" card). No
+  # auto-discovery here — a heat-pump-controller's exact
   # entity names are specific to the installed hardware, so list your
   # own zones explicitly. Leave the whole block out to disable.
   #

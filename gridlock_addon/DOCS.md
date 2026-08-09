@@ -71,9 +71,9 @@ shortcut once enabled. Tabs:
   plan in one or two sentences, and a static key explaining each
   Action value.
 - **Forecast** — three synced charts (SoC trace, solar forecast vs.
-  actual), plus battery health, risk profile comparison, carbon
-  intensity, learned load profile, Storm Watch, SSEN Power Track, and
-  Saving Sessions.
+  actual), plus battery health, GridWarm (heat pump temperature/COP
+  forecast), risk profile comparison, carbon intensity, learned load
+  profile, Storm Watch, SSEN Power Track, and Saving Sessions.
 - **Billing** — daily real grid spend history, and Bill reconciliation
   (GridLock's own live-tracked cost estimate against the real bill
   entity from your Octopus integration, month-to-date totals, and a
@@ -171,12 +171,12 @@ entirely. See `apps.yaml` for the two threshold percentages
 (`load_mgmt_warn_pct`/`load_mgmt_critical_pct`) if you want to tune how much
 margin is kept below the real trip point.
 
-## Heat pump thermal model (Phase 1, advisory only)
+## GridWarm: heat pump thermal model (Phase 1, advisory only)
 
 If you have a heat pump, GridLock can predict each zone's temperature and
 heating cost from a simple physics model of its own heat loss and heat
-input — shown on the Forecast tab's "Heat pump forecast" card alongside the
-heat pump's COP. **This never writes to any climate or heating entity** — it
+input — shown on the Forecast tab's "GridWarm" card alongside the heat
+pump's COP. **This never writes to any climate or heating entity** — it
 only predicts and displays, so it's safe to try even on a heat pump GridLock
 knows nothing else about.
 

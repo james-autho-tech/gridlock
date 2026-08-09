@@ -412,9 +412,9 @@ class GridLock(hass.Hass):
             self.load_mgmt_critical_kw = max_import_kw * float(a.get("load_mgmt_critical_pct", 0.90))
         self._prev_load_mgmt_state = None  # None / "warn" / "critical"
 
-        # Heat pump thermal model (Phase 1, advisory only — see
-        # core/thermal.py's docstring for the model itself; this never
-        # writes to any climate/heating entity, only predicts and
+        # GridWarm — the heat pump thermal model (Phase 1, advisory only;
+        # see core/thermal.py's docstring for the model itself. This
+        # never writes to any climate/heating entity, only predicts and
         # displays). Each entry is a fully independent zone (a room, or
         # a hot water tank) — no brand-naming heuristic makes sense for
         # a specific named thermostat/heat-pump-controller, so these are
@@ -1807,9 +1807,9 @@ class GridLock(hass.Hass):
                 zones_out.append(result)
         if not zones_out:
             return
-        self.set_state("sensor.gridlock_heatpump_forecast",
+        self.set_state("sensor.gridlock_gridwarm",
                        state=f"{zones_out[0]['current_temp']:.1f}",
-                       attributes={"friendly_name": "GridLock Heat Pump Forecast",
+                       attributes={"friendly_name": "GridLock GridWarm",
                                    "unit_of_measurement": "°C",
                                    "icon": "mdi:heat-pump",
                                    "zones": zones_out})

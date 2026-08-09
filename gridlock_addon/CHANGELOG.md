@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.9.1 - 2026-08-09
+
+### Improvement
+- Renamed the heat pump thermal model feature to GridWarm (dashboard card, sensor, docs, config comments)
+
 ## 3.9.0 - 2026-08-09
 
 ### Improvement

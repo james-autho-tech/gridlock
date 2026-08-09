@@ -139,7 +139,7 @@ def build_status():
     carbon = get("sensor.gridlock_carbon_intensity") or {}
     ssen = get("sensor.gridlock_ssen_local_outages") or {}
     circuits = get("sensor.gridlock_circuits") or {}
-    thermal = get("sensor.gridlock_heatpump_forecast") or {}
+    thermal = get("sensor.gridlock_gridwarm") or {}
     saving_raw = get(status_attrs.get("saving_events_entity")) or {}
     saving_attrs = saving_raw.get("attributes", {})
 
@@ -1162,7 +1162,7 @@ function renderThermalZoneChart(zone) {
 }
 function renderThermalZones(zones) {
   if (!zones || !zones.length) {
-    return '<div style="color:var(--dim)">No heat pump zones configured — add a <code>thermal_zones</code> block to apps.yaml to enable this (see DOCS.md). Advisory only: this never controls your heating, it only predicts and displays.</div>';
+    return '<div style="color:var(--dim)">GridWarm isn\'t configured yet — add a <code>thermal_zones</code> block to apps.yaml to enable it (see DOCS.md). Advisory only: this never controls your heating, it only predicts and displays.</div>';
   }
   const cards = zones.map(z => `
     <div class="gl-wrap" style="margin-bottom:12px">
@@ -1534,7 +1534,7 @@ async function refresh() {
         <div class="gl-sub" style="margin-top:12px">Cycling protection: <b style="color:var(--ink)">${esc(d.battery_risk_profile)}</b>${d.battery_degradation_cost === null || d.battery_degradation_cost === undefined ? '' : ` — needs at least ${(Number(d.battery_degradation_cost) * 100).toFixed(1)}p/kWh spread to self-consume from the battery`}${d.export_degradation_cost === null || d.export_degradation_cost === undefined ? '' : `, ${(Number(d.export_degradation_cost) * 100).toFixed(1)}p/kWh to export it`}. Set <code>battery_risk_profile</code> (eco / balanced / max_profit) in apps.yaml.</div>
       </div>
       <div class="gl-wrap">
-        <div class="gl-h">Heat pump forecast</div>
+        <div class="gl-h">GridWarm</div>
         <div class="gl-sub">Predicted temperature and heating cost from a physics-based model of each zone's heat loss/gain — advisory only, never controls your heating.</div>
         ${renderThermalZones(d.thermal_zones)}
       </div>
