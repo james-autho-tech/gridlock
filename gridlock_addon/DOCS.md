@@ -71,9 +71,9 @@ shortcut once enabled. Tabs:
   plan in one or two sentences, and a static key explaining each
   Action value.
 - **Forecast** — three synced charts (SoC trace, solar forecast vs.
-  actual), plus battery health, GridWarm (heat pump temperature/COP
-  forecast), risk profile comparison, carbon intensity, learned load
-  profile, Storm Watch, SSEN Power Track, and Saving Sessions.
+  actual), plus battery health, risk profile comparison, carbon
+  intensity, learned load profile, Storm Watch, SSEN Power Track, and
+  Saving Sessions.
 - **Billing** — daily real grid spend history, and Bill reconciliation
   (GridLock's own live-tracked cost estimate against the real bill
   entity from your Octopus integration, month-to-date totals, and a
@@ -81,6 +81,8 @@ shortcut once enabled. Tabs:
 - **Circuits** — only shown once at least one power circuit is
   detected (see below); live draw and daily energy history per
   circuit.
+- **GridWarm** — only shown once a heat pump zone is configured (see
+  below); predicted temperature and heating cost per zone, plus COP.
 - **Tariffs** — how today's plan compares against other Octopus
   products (see `compare_tariffs` in `apps.yaml`) at the rates you
   actually saw today.
@@ -175,10 +177,11 @@ margin is kept below the real trip point.
 
 If you have a heat pump, GridLock can predict each zone's temperature and
 heating cost from a simple physics model of its own heat loss and heat
-input — shown on the Forecast tab's "GridWarm" card alongside the heat
-pump's COP. **This never writes to any climate or heating entity** — it
-only predicts and displays, so it's safe to try even on a heat pump GridLock
-knows nothing else about.
+input — shown on its own **GridWarm** tab alongside the heat pump's COP.
+That tab only appears once at least one zone is configured (see below), the
+same on-demand pattern the Circuits tab already uses. **This never writes
+to any climate or heating entity** — it only predicts and displays, so it's
+safe to try even on a heat pump GridLock knows nothing else about.
 
 A "zone" is either a room (heated by a shared heat pump whose output varies
 with outdoor temperature) or a hot water tank (heated by the same heat

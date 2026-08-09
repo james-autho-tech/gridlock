@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.9.2 - 2026-08-09
+
+### Improvement
+- GridWarm now has its own dashboard tab (moved out of Forecast) — only shown once a heat pump zone is configured, same on-demand pattern as the Circuits tab
+
 ## 3.9.1 - 2026-08-09
 
 ### Improvement

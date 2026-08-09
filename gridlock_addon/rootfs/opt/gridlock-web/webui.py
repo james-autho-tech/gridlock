@@ -549,6 +549,7 @@ PAGE = r"""<!doctype html>
     <button class="gl-nav-btn" data-tab="forecast">Forecast</button>
     <button class="gl-nav-btn" data-tab="billing">Billing</button>
     <button class="gl-nav-btn" data-tab="circuits" id="gl-nav-circuits" style="display:none">Circuits</button>
+    <button class="gl-nav-btn" data-tab="gridwarm" id="gl-nav-gridwarm" style="display:none">GridWarm</button>
     <button class="gl-nav-btn" data-tab="tariffs">Tariffs</button>
     <button class="gl-nav-btn" data-tab="entities">Entities</button>
     <button class="gl-nav-btn" data-tab="log">Log</button>
@@ -1534,11 +1535,6 @@ async function refresh() {
         <div class="gl-sub" style="margin-top:12px">Cycling protection: <b style="color:var(--ink)">${esc(d.battery_risk_profile)}</b>${d.battery_degradation_cost === null || d.battery_degradation_cost === undefined ? '' : ` — needs at least ${(Number(d.battery_degradation_cost) * 100).toFixed(1)}p/kWh spread to self-consume from the battery`}${d.export_degradation_cost === null || d.export_degradation_cost === undefined ? '' : `, ${(Number(d.export_degradation_cost) * 100).toFixed(1)}p/kWh to export it`}. Set <code>battery_risk_profile</code> (eco / balanced / max_profit) in apps.yaml.</div>
       </div>
       <div class="gl-wrap">
-        <div class="gl-h">GridWarm</div>
-        <div class="gl-sub">Predicted temperature and heating cost from a physics-based model of each zone's heat loss/gain — advisory only, never controls your heating.</div>
-        ${renderThermalZones(d.thermal_zones)}
-      </div>
-      <div class="gl-wrap">
         <div class="gl-h">Risk profile comparison</div>
         <div class="gl-sub">What each risk profile's own morning plan predicted, summed across every day recorded — not a real-outcome backtest (that would need running all three profiles continuously), but a genuine forecast-vs-forecast comparison building up over time.</div>
         ${renderProfileComparison(d.profile_comparison_totals)}
@@ -1610,6 +1606,13 @@ async function refresh() {
         ${renderCircuitHistoryCharts(d.circuits, d.circuit_history)}
       </div>
     </div>
+    <div class="tab-page" data-tab="gridwarm">
+      <div class="gl-wrap">
+        <div class="gl-h">GridWarm</div>
+        <div class="gl-sub">Predicted temperature and heating cost from a physics-based model of each zone's heat loss/gain — advisory only, never controls your heating. This tab only shows up once a heat pump is configured (see <code>thermal_zones</code> in apps.yaml).</div>
+        ${renderThermalZones(d.thermal_zones)}
+      </div>
+    </div>
     <div class="tab-page" data-tab="tariffs">
       <div class="gl-wrap">
         <div class="gl-h">Tariff comparison</div>
@@ -1640,6 +1643,13 @@ async function refresh() {
   const hasCircuits = !!(d.circuits && d.circuits.length);
   document.getElementById('gl-nav-circuits').style.display = hasCircuits ? '' : 'none';
   if (!hasCircuits && currentTab === 'circuits') {
+    currentTab = 'overview';
+  }
+  // GridWarm tab only makes sense once a heat pump zone is actually
+  // configured — same on-demand nav visibility pattern as Circuits above.
+  const hasGridwarm = !!(d.thermal_zones && d.thermal_zones.length);
+  document.getElementById('gl-nav-gridwarm').style.display = hasGridwarm ? '' : 'none';
+  if (!hasGridwarm && currentTab === 'gridwarm') {
     currentTab = 'overview';
   }
   selectTab(currentTab);
