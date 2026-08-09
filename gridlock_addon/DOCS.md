@@ -171,6 +171,46 @@ entirely. See `apps.yaml` for the two threshold percentages
 (`load_mgmt_warn_pct`/`load_mgmt_critical_pct`) if you want to tune how much
 margin is kept below the real trip point.
 
+## Heat pump thermal model (Phase 1, advisory only)
+
+If you have a heat pump, GridLock can predict each zone's temperature and
+heating cost from a simple physics model of its own heat loss and heat
+input — shown on the Forecast tab's "Heat pump forecast" card alongside the
+heat pump's COP. **This never writes to any climate or heating entity** — it
+only predicts and displays, so it's safe to try even on a heat pump GridLock
+knows nothing else about.
+
+A "zone" is either a room (heated by a shared heat pump whose output varies
+with outdoor temperature) or a hot water tank (heated by the same heat
+pump's separate DHW circuit, losing heat to indoor ambient rather than the
+outdoors). Both use the same model, just with different numbers — list as
+many as you have thermostats for; there's no need to pick one "representative"
+room, since each zone is modelled and displayed independently. There's no
+auto-discovery here — heat-pump-controller entity names are specific to the
+installed hardware — so each zone is listed explicitly under `thermal_zones`
+in `apps.yaml`, which has a fully-commented example covering every room a
+shared heat pump serves plus a hot water tank. Leave the block out entirely
+to disable this.
+
+Some of the numbers involved (heat loss rate, static heat gain, thermal
+mass) are genuinely hard to know exactly without instrumenting the house —
+if you've previously derived your own figures (e.g. by timing how fast a
+room cools with the heating off), reuse them; otherwise the example's
+comments explain what each one means and a reasonable starting point. The
+model is deliberately approximate for Phase 1 (in particular, `heat_share`
+— how much of a shared heat pump's total output reaches any one room — is a
+rough guess, not a measurement) — compare the dashboard's predicted vs.
+actual temperature line over a few days and adjust the numbers that look
+most off, the same way you'd tune any forecast.
+
+**Phase 2** (not built yet): using the model to actually pre-heat on cheap
+electricity and coast through expensive periods, rather than just
+predicting. Feasible on the same foundation, but writing to a live
+thermostat in a lived-in house is a different risk category from
+advisory-only prediction — wrong comfort decisions affect people living
+there, not just cost — so it's being kept deliberately separate rather than
+bundled in from the start.
+
 ## Modes (`battery_risk_profile` in `apps.yaml`)
 
 The planning engine is a linear program, not a greedy heuristic — it

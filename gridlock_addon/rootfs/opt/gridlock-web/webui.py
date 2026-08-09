@@ -139,6 +139,7 @@ def build_status():
     carbon = get("sensor.gridlock_carbon_intensity") or {}
     ssen = get("sensor.gridlock_ssen_local_outages") or {}
     circuits = get("sensor.gridlock_circuits") or {}
+    thermal = get("sensor.gridlock_heatpump_forecast") or {}
     saving_raw = get(status_attrs.get("saving_events_entity")) or {}
     saving_attrs = saving_raw.get("attributes", {})
 
@@ -213,6 +214,7 @@ def build_status():
         "learned_load_profile": forecast.get("attributes", {}).get("learned_load_profile") or [],
         "circuits": circuits.get("attributes", {}).get("circuits") or [],
         "circuit_history": circuits.get("attributes", {}).get("history") or [],
+        "thermal_zones": thermal.get("attributes", {}).get("zones") or [],
         "bill_reconciliation_history": savings.get("attributes", {}).get("bill_reconciliation_history") or [],
         "bill_breakdown": savings.get("attributes", {}).get("bill_breakdown"),
         "bill_month_to_date": savings.get("attributes", {}).get("bill_month_to_date"),
@@ -1137,6 +1139,44 @@ function triadLeave() {
   const tt = document.getElementById('gl-triad-tooltip');
   if (tt) tt.style.display = 'none';
 }
+function renderThermalZoneChart(zone) {
+  const rows = zone.forecast_data || [];
+  const n = rows.length;
+  if (!n) return '<div style="color:var(--dim)">No forecast data yet.</div>';
+  const H = 116;
+  const allTemps = rows.flatMap(r => [r.internal_temp, r.external_temp, r.target_temp]);
+  const lo = Math.min(...allTemps) - 1, hi = Math.max(...allTemps) + 1;
+  const y = v => H - 6 - ((v - lo) / ((hi - lo) || 1)) * (H - 16);
+  const line = key => rows.map((r, i) => `${triadX(i, n).toFixed(1)},${y(r[key]).toFixed(1)}`).join(' ');
+  return `
+    <div class="gl-combo-legend" style="margin-bottom:4px">
+      <span><span class="gl-legend-dot" style="background:var(--cyan)"></span>Predicted temperature</span>
+      <span><span class="gl-legend-dot" style="background:var(--violet)"></span>External / ambient</span>
+      <span><span class="gl-legend-dot" style="background:var(--amber)"></span>Target</span>
+    </div>
+    <svg class="gl-triad-chart" viewBox="0 0 ${VB_W} ${H}" preserveAspectRatio="none">
+      <polyline points="${line('external_temp')}" fill="none" stroke="var(--violet)" stroke-width="1.5" stroke-dasharray="4,3" />
+      <polyline points="${line('target_temp')}" fill="none" stroke="var(--amber)" stroke-width="1.5" stroke-dasharray="2,2" />
+      <polyline points="${line('internal_temp')}" fill="none" stroke="var(--cyan)" stroke-width="2.5" />
+    </svg>`;
+}
+function renderThermalZones(zones) {
+  if (!zones || !zones.length) {
+    return '<div style="color:var(--dim)">No heat pump zones configured — add a <code>thermal_zones</code> block to apps.yaml to enable this (see DOCS.md). Advisory only: this never controls your heating, it only predicts and displays.</div>';
+  }
+  const cards = zones.map(z => `
+    <div class="gl-wrap" style="margin-bottom:12px">
+      <div class="gl-h" style="font-size:15px">${esc(z.name)} ${z.heating_on ? '🔥' : ''}</div>
+      <div class="gl-grid" style="margin-bottom:4px">
+        <div class="gl-tile"><div class="lbl">Now</div><div class="val num">${Number(z.current_temp).toFixed(1)}°C</div></div>
+        <div class="gl-tile"><div class="lbl">Target</div><div class="val num">${Number(z.target_temp).toFixed(1)}°C</div></div>
+        <div class="gl-tile"><div class="lbl">COP</div><div class="val num">${Number(z.cop).toFixed(2)}</div></div>
+        <div class="gl-tile"><div class="lbl">Predicted today</div><div class="val num">${Number(z.predicted_kwh_today).toFixed(2)} kWh</div></div>
+      </div>
+      ${renderThermalZoneChart(z)}
+    </div>`).join('');
+  return `${cards}<div style="color:var(--dim);font-size:12px">Prediction only — not controlling your heating.</div>`;
+}
 // Shared tick-label row for the flex `.gl-bars` charts — one column per
 // bar so labels line up with renderLoadProfileChart/renderCarbonChart's
 // own `.gl-bar-col` grid exactly, but only every Nth column gets text so
@@ -1492,6 +1532,11 @@ async function refresh() {
           ? `<div class="gl-sub" style="margin-top:12px;color:var(--amber)">🌡️ Thermal derate active — charge/discharge commands reduced to <b>${(Number(d.thermal_derate) * 100).toFixed(0)}%</b> of configured rate while the inverter's this warm.</div>`
           : ''}
         <div class="gl-sub" style="margin-top:12px">Cycling protection: <b style="color:var(--ink)">${esc(d.battery_risk_profile)}</b>${d.battery_degradation_cost === null || d.battery_degradation_cost === undefined ? '' : ` — needs at least ${(Number(d.battery_degradation_cost) * 100).toFixed(1)}p/kWh spread to self-consume from the battery`}${d.export_degradation_cost === null || d.export_degradation_cost === undefined ? '' : `, ${(Number(d.export_degradation_cost) * 100).toFixed(1)}p/kWh to export it`}. Set <code>battery_risk_profile</code> (eco / balanced / max_profit) in apps.yaml.</div>
+      </div>
+      <div class="gl-wrap">
+        <div class="gl-h">Heat pump forecast</div>
+        <div class="gl-sub">Predicted temperature and heating cost from a physics-based model of each zone's heat loss/gain — advisory only, never controls your heating.</div>
+        ${renderThermalZones(d.thermal_zones)}
       </div>
       <div class="gl-wrap">
         <div class="gl-h">Risk profile comparison</div>

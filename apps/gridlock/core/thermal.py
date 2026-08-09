@@ -1,0 +1,117 @@
+"""Thermal model — predicts a heated zone's temperature trajectory and the
+electrical cost of keeping it there, from a simple heat-loss/heat-input
+physics model. Phase 1: advisory only. Nothing in this module, or anything
+that calls it, ever writes to a climate/heating entity — it only forecasts,
+for display alongside the actual measured temperature.
+
+One zone shape, `simulate()`, covers two real uses:
+- A room, heated by a shared heat pump whose thermal output varies with
+  outdoor temperature — heat is lost toward the (changing) outdoor
+  temperature, and only a fraction of the heat pump's total output
+  actually reaches any one room when several rooms share it (`heat_share`).
+- A hot water tank, heated by the same heat pump's separate DHW circuit —
+  heat is lost toward a roughly-constant indoor ambient temperature
+  instead of the outdoors, and gets the heat pump's full output while
+  it's actively running in DHW mode (`heat_share=1.0`).
+
+Both are just "a heated mass loses heat toward some reference temperature,
+and gains heat whenever the heat source is running, gated by a
+target-temperature hysteresis band" — parameterised differently, not two
+separate models.
+
+Heat loss is split into two independently-measurable terms, both taken
+directly from the site's own real numbers rather than invented here:
+- `heat_loss_degrees`: °C lost per hour per °C of (internal - external)
+  difference — the dominant term, derived by timing an actual
+  heating-off cooldown, so it's already in the temperature domain and
+  needs no thermal-mass conversion at all.
+- `heat_loss_watts`: a smaller, non-diff-scaled fixed loss (background
+  ventilation/inefficiency), which — unlike the term above — is a power
+  figure and does need `thermal_mass_wh_per_c` to convert into a
+  temperature effect.
+"""
+
+from dataclasses import dataclass
+
+AIR_WH_PER_M3_PER_C = 1200.0 / 3600.0  # volumetric heat capacity of air
+WATER_WH_PER_LITRE_PER_C = 4186.0 / 3600.0  # specific heat of water
+
+
+@dataclass
+class ThermalParams:
+    heat_loss_degrees: float
+    heat_loss_watts: float = 0.0
+    heat_gain_static: float = 0.0
+    heat_max_power: float = 0.0
+    heat_min_power: float = 0.0
+    heat_share: float = 1.0
+    heating_cop: float = 3.0
+    thermal_mass_wh_per_c: float = 500.0
+    hysteresis: float = 0.5
+    hysteresis_off: float = 0.1
+
+
+def thermal_mass_from_volume(volume_m3, fabric_factor=4.0):
+    """A room's effective thermal mass is dominated by its furniture,
+    walls and floor, not just the air in it — `fabric_factor` (Wh per m3
+    per C) is a rough typical-construction multiplier over plain air, not
+    a measured figure. Meant as a starting default only: refine by
+    comparing the dashboard's predicted-vs-actual temperature curve."""
+    return volume_m3 * fabric_factor
+
+
+def thermal_mass_from_litres(litres):
+    """Water's specific heat is a real physical constant — unlike a
+    room, a tank's thermal mass doesn't need a fudge factor, just its
+    capacity in litres (~1kg/litre)."""
+    return litres * WATER_WH_PER_LITRE_PER_C
+
+
+def simulate(internal_temp0, external_temp_curve, target_temp_curve, params,
+             heating_on0=False, step_minutes=30):
+    """Step the zone forward one entry per (external_temp, target_temp)
+    pair. Returns a list of dicts, one per step:
+    {internal_temp, external_temp, target_temp, heating_on, heat_kw,
+    electrical_kw} — internal_temp/heat_kw/electrical_kw are this step's
+    predicted values, not the input to it (so trace[0] is one step ahead
+    of internal_temp0, matching how the battery SoC trace already works).
+    """
+    n = min(len(external_temp_curve), len(target_temp_curve))
+    hours_per_step = step_minutes / 60.0
+    temp = internal_temp0
+    heating_on = heating_on0
+    out = []
+    for i in range(n):
+        ext = external_temp_curve[i]
+        target = target_temp_curve[i]
+
+        # Hysteresis band around the target -- switches on once hysteresis
+        # below it, off once hysteresis_off above it, matching a real
+        # thermostat's on/off deadband rather than an idealised instant
+        # on/off exactly at the setpoint.
+        if temp <= target - params.hysteresis:
+            heating_on = True
+        elif temp >= target + params.hysteresis_off:
+            heating_on = False
+
+        if heating_on:
+            heat_power_w = (params.heat_max_power if temp < target
+                             else params.heat_min_power) * params.heat_share
+        else:
+            heat_power_w = 0.0
+
+        diff = temp - ext
+        loss_c_per_hr = (params.heat_loss_degrees * diff
+                          + params.heat_loss_watts / params.thermal_mass_wh_per_c)
+        gain_c_per_hr = (heat_power_w + params.heat_gain_static) / params.thermal_mass_wh_per_c
+        temp = temp + (gain_c_per_hr - loss_c_per_hr) * hours_per_step
+
+        out.append({
+            "internal_temp": temp,
+            "external_temp": ext,
+            "target_temp": target,
+            "heating_on": heating_on,
+            "heat_kw": heat_power_w / 1000.0,
+            "electrical_kw": heat_power_w / params.heating_cop / 1000.0,
+        })
+    return out

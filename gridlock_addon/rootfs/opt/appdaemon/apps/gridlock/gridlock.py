@@ -23,6 +23,7 @@ from core.registry import HASensorRegistry
 from core.inverter import SigenergyAdapter
 from core.tariff import OctopusTariffProvider
 from core.forecast import SolcastForecastProvider, LearnedLoadForecastProvider
+from core import thermal as core_thermal
 
 STATE_FILES = ("load_profile.json", "savings_state.json", "savings_history.json",
                "cost_tracking_state.json", "decision_log.json",
@@ -38,6 +39,16 @@ PLAN_TABLE_COLS = ["slot", "import_p", "export_p", "pv_kwh", "load_kwh",
                    "session_baseline_kwh", "session_export_baseline_kwh",
                    "soc_pct", "cost_delta_p", "total_gbp",
                    "import_rank", "export_rank"]
+
+# The thermal model steps at a finer resolution than the battery plan's own
+# 30-min slots (core/thermal.py's docstring/tests: a fast zone like a hot
+# water tank can reach its target well within a single 30-min slot, and
+# simulating at that coarse a resolution overshoots wildly since nothing
+# gets a chance to react mid-slot). Simulated points are then downsampled
+# to one per battery-plan slot for publishing, keeping payload size
+# comparable to the SoC/solar forecasts rather than 576 raw points.
+THERMAL_STEP_MIN = 5
+THERMAL_HORIZON_STEPS = SLOT_MIN * HORIZON_SLOTS // THERMAL_STEP_MIN
 
 # Confirmed in production (2026-07-30): a value equal to exactly 0/0.0
 # nested inside a set_state() attributes payload — a dict key or a list
@@ -400,6 +411,16 @@ class GridLock(hass.Hass):
             self.load_mgmt_warn_kw = max_import_kw * float(a.get("load_mgmt_warn_pct", 0.80))
             self.load_mgmt_critical_kw = max_import_kw * float(a.get("load_mgmt_critical_pct", 0.90))
         self._prev_load_mgmt_state = None  # None / "warn" / "critical"
+
+        # Heat pump thermal model (Phase 1, advisory only — see
+        # core/thermal.py's docstring for the model itself; this never
+        # writes to any climate/heating entity, only predicts and
+        # displays). Each entry is a fully independent zone (a room, or
+        # a hot water tank) — no brand-naming heuristic makes sense for
+        # a specific named thermostat/heat-pump-controller, so these are
+        # taken as direct config rather than auto-discovered.
+        self.thermal_zones = [self._build_thermal_zone(z) for z in a.get("thermal_zones", [])]
+        self._thermal_forecast_warned = set()
 
         self.notify_service = a.get("notify_service")
         self._prev_storm_active = False
@@ -1624,6 +1645,175 @@ class GridLock(hass.Hass):
                                    "today_kwh": round(today_kwh, 2),
                                    "tomorrow_kwh": round(tomorrow_kwh, 2)})
 
+    # ------------------------------------------------------------------
+    # HEAT PUMP THERMAL MODEL (Phase 1, advisory only — see
+    # core/thermal.py's docstring. Never writes to any climate/heating
+    # entity, only predicts and displays.)
+    # ------------------------------------------------------------------
+    def _build_thermal_zone(self, z):
+        """Turn one thermal_zones apps.yaml entry into its ThermalParams
+        plus the entity IDs needed to read it each tick. Thermal mass can
+        be given directly, or derived from heat_volume (a room — air plus
+        furniture/fabric, an approximation) or tank_litres (a tank —
+        exact water physics, no fudge factor needed) — whichever the
+        entry provides."""
+        if "thermal_mass_wh_per_c" in z:
+            mass = float(z["thermal_mass_wh_per_c"])
+        elif "tank_litres" in z:
+            mass = core_thermal.thermal_mass_from_litres(float(z["tank_litres"]))
+        else:
+            mass = core_thermal.thermal_mass_from_volume(float(z.get("heat_volume", 30.0)))
+        params = core_thermal.ThermalParams(
+            heat_loss_degrees=float(z.get("heat_loss_degrees", 0.0)),
+            heat_loss_watts=float(z.get("heat_loss_watts", 0.0)),
+            heat_gain_static=float(z.get("heat_gain_static", 0.0)),
+            heat_max_power=float(z.get("heat_max_power", 0.0)),
+            heat_min_power=float(z.get("heat_min_power", 0.0)),
+            heat_share=float(z.get("heat_share", 1.0)),
+            heating_cop=float(z.get("heating_cop", 3.0)),
+            thermal_mass_wh_per_c=mass,
+            hysteresis=float(z.get("hysteresis", 0.5)),
+            hysteresis_off=float(z.get("hysteresis_off", 0.1)))
+        return {"name": z.get("name", "Zone"),
+                "internal_temp_entity": z.get("internal_temp_entity"),
+                "target_temp_entity": z.get("target_temp_entity"),
+                "target_temp_attribute": z.get("target_temp_attribute"),
+                "external_temp_entity": z.get("external_temp_entity"),
+                "external_temp_constant": z.get("external_temp_constant"),
+                "weather_entity": z.get("weather_entity"),
+                "heating_entity": z.get("heating_entity"),
+                "cop_entity": z.get("cop_entity"),
+                "params": params}
+
+    def _thermal_target_temp(self, zone):
+        ent = zone["target_temp_entity"]
+        if not ent:
+            return None
+        attr = zone["target_temp_attribute"]
+        if attr:
+            v = self.get_state(ent, attribute=attr)
+            try:
+                return float(v) if v not in (None, "unknown", "unavailable") else None
+            except (ValueError, TypeError):
+                return None
+        return self.get_float_state(ent, None)
+
+    def _thermal_external_temp(self, zone):
+        if zone["external_temp_entity"]:
+            v = self.get_float_state(zone["external_temp_entity"], None)
+            if v is not None:
+                return v
+        return float(zone["external_temp_constant"]) if zone["external_temp_constant"] is not None else 18.0
+
+    def _thermal_weather_curve(self, weather_entity, now, n_steps, step_minutes, fallback_temp):
+        """Best-effort external-temperature forecast for a room zone (a
+        tank uses a constant ambient instead — see
+        _thermal_external_temp — so never calls this at all). Home
+        Assistant moved multi-point weather forecasts from a plain
+        attribute to a service call in recent versions; try the older
+        attribute first (still exposed by some integrations), then the
+        service call, and fall back to holding the current reading flat
+        across the whole horizon rather than failing the tick if neither
+        is available — a flat approximation is still more useful than no
+        forecast at all for an advisory-only feature."""
+        points = []
+        if weather_entity and self.entity_exists(weather_entity):
+            raw = self.get_state(weather_entity, attribute="forecast")
+            if isinstance(raw, list) and raw:
+                points = raw
+            else:
+                try:
+                    resp = self.call_service("weather/get_forecasts", entity_id=weather_entity,
+                                             type="hourly", return_response=True) or {}
+                    points = (resp.get(weather_entity, {}) or {}).get("forecast", []) or []
+                except Exception as exc:  # noqa: BLE001 — best-effort only
+                    if weather_entity not in self._thermal_forecast_warned:
+                        self.log(f"Couldn't get a weather forecast from {weather_entity} for "
+                                 f"the thermal model ({exc!r}) — holding the current external "
+                                 "temperature flat across the horizon instead.", level="WARNING")
+                        self._thermal_forecast_warned.add(weather_entity)
+        parsed = []
+        for p in points:
+            try:
+                t = self._iso(p.get("datetime") or p.get("period_start"))
+                parsed.append((t, float(p["temperature"])))
+            except (KeyError, ValueError, TypeError):
+                continue
+        parsed.sort(key=lambda p: p[0])
+
+        curve, idx = [], 0
+        for i in range(n_steps):
+            t = now + timedelta(minutes=step_minutes * i)
+            while idx + 1 < len(parsed) and parsed[idx + 1][0] <= t:
+                idx += 1
+            curve.append(parsed[idx][1] if parsed else fallback_temp)
+        return curve
+
+    def _run_thermal_forecast(self, zone, now):
+        internal_temp = self.get_float_state(zone["internal_temp_entity"], None)
+        if internal_temp is None:
+            return None
+        target_temp = self._thermal_target_temp(zone)
+        if target_temp is None:
+            target_temp = internal_temp
+        external_now = self._thermal_external_temp(zone)
+        heating_on = bool(zone["heating_entity"]) and self.get_state(zone["heating_entity"]) == "on"
+
+        external_curve = (self._thermal_weather_curve(
+            zone["weather_entity"], now, THERMAL_HORIZON_STEPS, THERMAL_STEP_MIN, external_now)
+            if zone["weather_entity"] else [external_now] * THERMAL_HORIZON_STEPS)
+        target_curve = [target_temp] * THERMAL_HORIZON_STEPS
+
+        trace = core_thermal.simulate(internal_temp, external_curve, target_curve, zone["params"],
+                                       heating_on0=heating_on, step_minutes=THERMAL_STEP_MIN)
+        steps_per_day = int(24 * 60 / THERMAL_STEP_MIN)
+        predicted_kwh_today = sum(s["electrical_kw"] * THERMAL_STEP_MIN / 60.0
+                                   for s in trace[:steps_per_day])
+
+        # Downsample to one point per battery-plan slot for the dashboard
+        # — keeps payload size comparable to the SoC/solar forecasts
+        # rather than publishing every 5-min simulation step.
+        per_slot = SLOT_MIN // THERMAL_STEP_MIN
+        forecast_data = [
+            {"x": (now + timedelta(minutes=SLOT_MIN * (i + 1))).isoformat(),
+             "internal_temp": round(trace[j]["internal_temp"], 2),
+             "external_temp": round(trace[j]["external_temp"], 2),
+             "target_temp": round(trace[j]["target_temp"], 2),
+             "heating_on": trace[j]["heating_on"]}
+            for i, j in enumerate(range(per_slot - 1, len(trace), per_slot))]
+
+        live_cop = self.get_float_state(zone["cop_entity"], None) if zone["cop_entity"] else None
+        return {"name": zone["name"],
+                "current_temp": round(internal_temp, 2),
+                "target_temp": round(target_temp, 2),
+                "external_temp": round(external_now, 2),
+                "heating_on": heating_on,
+                "cop": round(live_cop, 2) if live_cop is not None else zone["params"].heating_cop,
+                "predicted_kwh_today": round(predicted_kwh_today, 2),
+                "forecast_data": forecast_data}
+
+    def _publish_thermal_forecast(self, now):
+        if not self.thermal_zones:
+            return
+        zones_out = []
+        for zone in self.thermal_zones:
+            try:
+                result = self._run_thermal_forecast(zone, now)
+            except Exception as exc:  # noqa: BLE001 — one bad zone shouldn't drop the rest
+                self.log(f"Thermal forecast for zone '{zone['name']}' failed: {exc!r}",
+                         level="WARNING")
+                result = None
+            if result:
+                zones_out.append(result)
+        if not zones_out:
+            return
+        self.set_state("sensor.gridlock_heatpump_forecast",
+                       state=f"{zones_out[0]['current_temp']:.1f}",
+                       attributes={"friendly_name": "GridLock Heat Pump Forecast",
+                                   "unit_of_measurement": "°C",
+                                   "icon": "mdi:heat-pump",
+                                   "zones": zones_out})
+
     def _load_circuit_state(self):
         state = self._load_json("circuit_state.json", {})
         self.circuit_day = state.get("day")
@@ -1926,6 +2116,7 @@ class GridLock(hass.Hass):
         self._update_savings(now)
         self.publish_solar_forecast(now)
         self.publish_storm_status()
+        self._publish_thermal_forecast(now)
 
         slots = self.build_slots(now)
         result = self._solve_plan(slots, soc0, now)

@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.9.0 - 2026-08-09
+
+### Improvement
+- New: heat pump thermal model (Phase 1, advisory only) — predicts each configured zone's temperature and heating cost from its own heat loss/gain, shown on a new Forecast tab card alongside COP
+- Covers any number of rooms sharing one heat pump, plus a hot water tank, each modelled independently via a new `thermal_zones` block in `apps.yaml`
+- Never writes to any climate/heating entity — prediction and display only
+
 ## 3.8.2 - 2026-08-08
 
 ### Fix

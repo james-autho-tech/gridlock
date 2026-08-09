@@ -273,6 +273,97 @@ gridlock:
   # load_mgmt_warn_pct: 0.80     # start throttling the charge rate above this % of the fuse rating
   # load_mgmt_critical_pct: 0.90  # the real ceiling charging throttles toward — never charge past this
 
+  # --- Heat pump thermal model (Phase 1, advisory only) ---
+  # Predicts each zone's temperature and heating cost from its own heat
+  # loss/gain — never writes to any climate/heating entity, only
+  # predicts and displays (see the Forecast tab's "Heat pump forecast"
+  # card). No auto-discovery here — a heat-pump-controller's exact
+  # entity names are specific to the installed hardware, so list your
+  # own zones explicitly. Leave the whole block out to disable.
+  #
+  # Repeat the same block per room the heat pump serves — heat_share is
+  # each one's rough slice of the shared output (three rooms here, so
+  # ~0.33 each — a Phase 1 approximation, refine per-room via the
+  # dashboard's predicted-vs-actual overlay once it's had a few days of
+  # real data). Skip a second climate entity for the same physical room
+  # if you have one for a valve/TRV rather than a separate zone (e.g. a
+  # spare TRV in a room that already has its own room thermostat).
+  #
+  # thermal_zones:
+  #   - name: "Bedroom 4"
+  #     internal_temp_entity: climate.bedroom_4_qing_thermo
+  #     target_temp_entity: climate.bedroom_4_qing_thermo
+  #     target_temp_attribute: temperature
+  #     external_temp_entity: sensor.openweathermap_temperature
+  #     weather_entity: weather.openweathermap   # optional: a real forecast curve instead of holding today's reading flat
+  #     heating_entity: binary_sensor.loft_heatpump_controller_compressor_running
+  #     cop_entity: sensor.loft_heatpump_controller_coefficient_of_performance  # optional
+  #     heat_loss_degrees: 0.035   # °C lost per hour per °C of (inside - outside) diff — from timing a real cooldown with heating off
+  #     heat_loss_watts: 170       # smaller fixed background loss, on top of the above
+  #     heat_gain_static: 300      # passive gain from occupants/electronics/incidental solar, watts
+  #     heat_max_power: 7000       # heat pump's total thermal output flat out, watts — shared across every zone it serves
+  #     heat_min_power: 2000       # thermal output once modulating down near target, watts
+  #     heat_share: 0.33
+  #     heating_cop: 4.15
+  #     heat_volume: 123           # m3 — used to estimate thermal mass (air + furniture/fabric, an approximation)
+  #     hysteresis: 0.5            # °C below target that (re)starts heating
+  #     hysteresis_off: 0.1        # °C above target that stops heating
+  #   - name: "Master Bedroom"
+  #     internal_temp_entity: climate.master_bedroom_master_bedroom_thermo
+  #     target_temp_entity: climate.master_bedroom_master_bedroom_thermo
+  #     target_temp_attribute: temperature
+  #     external_temp_entity: sensor.openweathermap_temperature
+  #     weather_entity: weather.openweathermap
+  #     heating_entity: binary_sensor.loft_heatpump_controller_compressor_running
+  #     cop_entity: sensor.loft_heatpump_controller_coefficient_of_performance
+  #     # No room-specific calibration for this one yet — reusing Bedroom 4's
+  #     # heat_loss/heat_gain/heat_volume figures as a starting point until
+  #     # the dashboard's overlay shows whether they need adjusting.
+  #     heat_loss_degrees: 0.035
+  #     heat_loss_watts: 170
+  #     heat_gain_static: 300
+  #     heat_max_power: 7000
+  #     heat_min_power: 2000
+  #     heat_share: 0.33
+  #     heating_cop: 4.15
+  #     heat_volume: 123
+  #     hysteresis: 0.5
+  #     hysteresis_off: 0.1
+  #   - name: "Downstairs"
+  #     internal_temp_entity: climate.smart_thermostat_x
+  #     target_temp_entity: climate.smart_thermostat_x
+  #     target_temp_attribute: temperature
+  #     external_temp_entity: sensor.openweathermap_temperature
+  #     weather_entity: weather.openweathermap
+  #     heating_entity: binary_sensor.loft_heatpump_controller_compressor_running
+  #     cop_entity: sensor.loft_heatpump_controller_coefficient_of_performance
+  #     heat_loss_degrees: 0.035
+  #     heat_loss_watts: 170
+  #     heat_gain_static: 300
+  #     heat_max_power: 7000
+  #     heat_min_power: 2000
+  #     heat_share: 0.33
+  #     heating_cop: 4.15
+  #     heat_volume: 123
+  #     hysteresis: 0.5
+  #     hysteresis_off: 0.1
+  #   - name: "Hot Water Tank"
+  #     internal_temp_entity: sensor.loft_heatpump_controller_t1s_dhw
+  #     target_temp_entity: number.loft_heatpump_controller_set_dhw_tank_temperature_t5s
+  #     external_temp_constant: 18  # a tank loses heat to indoor ambient, not the outdoors — no weather entity needed
+  #     heating_entity: switch.loft_heatpump_controller_power_dhw_t5s
+  #     cop_entity: sensor.loft_heatpump_controller_coefficient_of_performance
+  #     heat_loss_degrees: 0        # negligible for a well-insulated cylinder — heat_loss_watts covers standing loss instead
+  #     heat_loss_watts: 60         # typical unvented-cylinder standing loss — check your own cylinder's spec sheet if known
+  #     heat_gain_static: 0
+  #     heat_max_power: 3500        # heat pumps typically derate well below their space-heating max at DHW's higher flow temp
+  #     heat_min_power: 1500
+  #     heat_share: 1.0             # DHW gets the full (derated) output while actively running, not split with space heating
+  #     heating_cop: 2.5            # usually notably lower than space-heating COP, due to the higher flow temp DHW needs
+  #     tank_litres: 150            # exact physics from here — no fudge factor needed, unlike heat_volume above
+  #     hysteresis: 2.0
+  #     hysteresis_off: 0.5
+
   # SSEN Power Track — polled directly by the engine, no HA sensors needed.
   # Postcode prefix (outward code + first digit of inward code, e.g.
   # "SW1A 1") — literal value (see note above re: !secret not working
