@@ -216,7 +216,12 @@ def build_status():
         "circuit_history": circuits.get("attributes", {}).get("history") or [],
         "thermal_zones": thermal.get("attributes", {}).get("zones") or [],
         "thermal_plan_summary": thermal.get("attributes", {}).get("plan_summary") or "",
-        "gridwarm_control_mode": thermal.get("attributes", {}).get("control_mode") or "read_only",
+        # Live and direct, same as mode_override above -- not sourced
+        # from sensor.gridlock_gridwarm's own attributes, which only
+        # get republished once per 5-min tick (and not at all if no
+        # zones are configured) and would make a click here look like
+        # it did nothing for up to 5 minutes.
+        "gridwarm_control_mode": (get("input_select.gridlock_gridwarm_mode") or {}).get("state", "read_only"),
         "thermal_cost_total": thermal.get("attributes", {}).get("predicted_cost_today_total"),
         "thermal_cost_baseline_total": thermal.get("attributes", {}).get("predicted_cost_today_baseline_total"),
         "bill_reconciliation_history": savings.get("attributes", {}).get("bill_reconciliation_history") or [],

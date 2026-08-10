@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.12.1 - 2026-08-10
+
+### Fix
+- GridWarm's READ-ONLY/ACTIVE toggle appeared to do nothing when clicked — it was reading its displayed state from `sensor.gridlock_gridwarm`'s own attributes, which only republish once per 5-minute tick (and not at all with no zones configured), instead of the `input_select` directly and live like the battery mode toggle does. The click itself was working the whole time; the dashboard just hadn't caught up
+
 ## 3.12.0 - 2026-08-10
 
 ### Improvement
