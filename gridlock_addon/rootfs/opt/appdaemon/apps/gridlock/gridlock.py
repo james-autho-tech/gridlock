@@ -499,6 +499,17 @@ class GridLock(hass.Hass):
             self.set_state(self.ent_mode_override, state="auto",
                            attributes={"friendly_name": "GridLock Mode Override",
                                        "options": ["auto", "eco", "balanced", "max_profit"]})
+        # GridWarm's own master safety switch — a global gate above every
+        # per-zone control_entity/pause helper, not a replacement for
+        # them. Defaults to read_only regardless of what's configured in
+        # apps.yaml, so active control never starts just because a zone
+        # happens to have control_entity set — it has to be switched to
+        # active here too, explicitly, from the UI.
+        self.ent_gridwarm_mode = "input_select.gridlock_gridwarm_mode"
+        if not self.entity_exists(self.ent_gridwarm_mode):
+            self.set_state(self.ent_gridwarm_mode, state="read_only",
+                           attributes={"friendly_name": "GridLock GridWarm Control Mode",
+                                       "options": ["read_only", "active"]})
 
         # Triggers
         if self.ent_ev:
@@ -1955,7 +1966,11 @@ class GridLock(hass.Hass):
         pause_helper = self._thermal_pause_helper(zone["name"])
         state = self._thermal_control_state.setdefault(
             zone["name"], {"off_since": None, "last_commanded": None})
-        paused = self.get_state(pause_helper) == "off"
+        # The global master switch (defaults read_only) always wins over
+        # a zone's own per-zone pause helper -- both have to say "go"
+        # for anything to actually be written.
+        read_only = self.get_state(self.ent_gridwarm_mode) != "active"
+        paused = read_only or self.get_state(pause_helper) == "off"
         # Always published, even while paused/before the first real
         # decision -- the dashboard needs somewhere to show control
         # status regardless of whether a write is about to happen.
@@ -2028,6 +2043,7 @@ class GridLock(hass.Hass):
                                    "plan_summary": plan_summary,
                                    "predicted_cost_today_total": round(total_cost, 2),
                                    "predicted_cost_today_baseline_total": round(baseline_cost, 2),
+                                   "control_mode": self.get_state(self.ent_gridwarm_mode) or "read_only",
                                    "zones": zones_out})
 
     def _load_circuit_state(self):

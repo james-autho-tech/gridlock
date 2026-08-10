@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.12.0 - 2026-08-10
+
+### Improvement
+- New global master switch for GridWarm active control — a READ-ONLY/ACTIVE segmented toggle on the GridWarm tab (`input_select.gridlock_gridwarm_mode`, auto-created, defaults READ-ONLY). Nothing gets written to any `control_entity` unless this is explicitly switched to ACTIVE, on top of each zone's own pause helper — a config mistake or leftover `control_entity` can't silently start controlling hardware
+
 ## 3.11.1 - 2026-08-10
 
 ### Fix

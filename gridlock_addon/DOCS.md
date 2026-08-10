@@ -256,6 +256,15 @@ tick based on its own plan, instead of just predicting. This is **off
 unless `control_entity` is explicitly set** — nothing else about GridWarm
 changes behaviour just because this exists.
 
+On top of that, there's a global master switch — the **READ-ONLY / ACTIVE**
+toggle on the GridWarm tab (`input_select.gridlock_gridwarm_mode`, auto-
+created, defaults to `READ-ONLY`). Nothing gets written to any
+`control_entity` unless this is explicitly switched to `ACTIVE`, regardless
+of what's configured in `apps.yaml` — a config mistake or an old file
+lying around can't silently start controlling hardware on its own. Both
+this and each zone's own pause helper have to say "go" for a write to
+actually happen.
+
 Use a dedicated "force water tank heating" override built into your heat
 pump's own integration for exactly this, if it has one — **not** the
 tank's main DHW power/enable switch, which may also gate other internal

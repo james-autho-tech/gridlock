@@ -216,6 +216,7 @@ def build_status():
         "circuit_history": circuits.get("attributes", {}).get("history") or [],
         "thermal_zones": thermal.get("attributes", {}).get("zones") or [],
         "thermal_plan_summary": thermal.get("attributes", {}).get("plan_summary") or "",
+        "gridwarm_control_mode": thermal.get("attributes", {}).get("control_mode") or "read_only",
         "thermal_cost_total": thermal.get("attributes", {}).get("predicted_cost_today_total"),
         "thermal_cost_baseline_total": thermal.get("attributes", {}).get("predicted_cost_today_baseline_total"),
         "bill_reconciliation_history": savings.get("attributes", {}).get("bill_reconciliation_history") or [],
@@ -401,6 +402,8 @@ PAGE = r"""<!doctype html>
   .gl-seg-btn.active[data-mode="eco"] { background:rgba(52,211,153,.18); color:var(--green); }
   .gl-seg-btn.active[data-mode="balanced"] { background:rgba(56,189,248,.18); color:var(--cyan); }
   .gl-seg-btn.active[data-mode="max_profit"] { background:rgba(167,139,250,.18); color:var(--violet); }
+  .gl-seg-btn.active[data-mode="read_only"] { background:rgba(148,163,184,.18); color:var(--dim); }
+  .gl-seg-btn.active[data-mode="active"] { background:rgba(248,113,113,.18); color:var(--red); }
   .gl-seg-btn:disabled { opacity:.5; cursor:wait; }
   .gl-btn-sm { background:rgba(255,255,255,.06); border:1px solid var(--line); color:var(--ink);
                font-size:11px; padding:3px 9px; border-radius:6px; cursor:pointer;
@@ -685,6 +688,26 @@ async function setGridwarmPause(pauseHelper, paused) {
     });
   } catch (e) { /* surfaced on next refresh() if the engine never picks it up */ }
   setTimeout(() => { gridwarmPauseBusy = false; refresh(); }, 1500);
+}
+let gridwarmModeBusy = false;
+async function setGridwarmMode(mode) {
+  if (gridwarmModeBusy) return;
+  gridwarmModeBusy = true;
+  document.querySelectorAll('.gl-gridwarm-mode-btn').forEach(b => b.disabled = true);
+  try {
+    await fetch('api/gridwarm-mode', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode }),
+    });
+  } catch (e) { /* surfaced on next refresh() if the engine never picks it up */ }
+  setTimeout(() => { gridwarmModeBusy = false; refresh(); }, 1500);
+}
+function renderGridwarmModeToggle(mode) {
+  const opts = [['read_only', 'READ-ONLY'], ['active', 'ACTIVE']];
+  const seg = opts.map(([val, label]) =>
+    `<button class="gl-seg-btn gl-gridwarm-mode-btn${val === mode ? ' active' : ''}" data-mode="${val}" onclick="setGridwarmMode('${val}')">${label}</button>`
+  ).join('');
+  return `<div class="gl-segmented" style="display:inline-flex">${seg}</div>`;
 }
 function renderHeaderRight(d) {
   const modes = [['eco', 'ECO'], ['balanced', 'BALANCED'], ['max_profit', 'MAX PROFIT']];
@@ -1685,8 +1708,11 @@ async function refresh() {
     </div>
     <div class="tab-page" data-tab="gridwarm">
       <div class="gl-wrap">
-        <div class="gl-h">GridWarm</div>
-        <div class="gl-sub">Looks ahead at the outdoor temperature forecast for each zone — easing off before a forecast warm-up, adding a little heat ahead of a forecast cold snap — instead of only reacting to the current outdoor temperature. Advisory only, never controls your heating. This tab only shows up once a heat pump is configured (see <code>gridwarm</code> in apps.yaml).</div>
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+          <div class="gl-h">GridWarm</div>
+          ${renderGridwarmModeToggle(d.gridwarm_control_mode)}
+        </div>
+        <div class="gl-sub">Looks ahead at the outdoor temperature forecast for each zone — easing off before a forecast warm-up, adding a little heat ahead of a forecast cold snap — instead of only reacting to the current outdoor temperature. READ-ONLY (the default) only predicts and displays, never writes anywhere. ACTIVE lets any zone with its own <code>control_entity</code> configured actually be commanded — this tab only shows up once a heat pump is configured (see <code>gridwarm</code> in apps.yaml).</div>
         ${d.thermal_plan_summary ? `<div class="gl-sub" style="color:var(--ink)">${esc(d.thermal_plan_summary)}</div>` : ''}
         ${renderThermalZones(d.thermal_zones)}
       </div>
@@ -1755,6 +1781,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_mode()
         elif path.endswith("/api/gridwarm-pause"):
             self._handle_gridwarm_pause()
+        elif path.endswith("/api/gridwarm-mode"):
+            self._handle_gridwarm_mode()
         else:
             self._send(404, b"not found", "text/plain")
 
@@ -1790,6 +1818,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
             ha_call_service(f"input_boolean/turn_{'off' if paused else 'on'}", entity)
             self._send(200, json.dumps({"ok": True}).encode(), "application/json")
+        except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
+            self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
+
+    def _handle_gridwarm_mode(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+            mode = str(body.get("mode", "")).lower()
+            if mode not in ("read_only", "active"):
+                self._send(400, json.dumps({"error": "mode must be read_only or active"}).encode(),
+                           "application/json")
+                return
+            ha_call_service("input_select/select_option",
+                            "input_select.gridlock_gridwarm_mode", option=mode)
+            self._send(200, json.dumps({"ok": True, "mode": mode}).encode(), "application/json")
         except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
             self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
 
