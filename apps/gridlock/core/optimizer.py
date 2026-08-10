@@ -303,7 +303,13 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
 
         grid_in = charge[i] + grid_to_load[i]
         grid_out = pv_to_grid[i] + eff * batt_to_export[i]
-        grid_cost_terms.append(imp * grid_in - exp * grid_out)
+        # EV charging draws straight off the grid alongside everything
+        # else in this slot, at the same dispatch-adjusted rate already
+        # baked into `imp` (see slots.py's cheap_floor clamp during an
+        # IOG window) — folded in here rather than tracked as a separate
+        # figure so cost_delta_p/total_gbp are the true total spend, not
+        # an approximation that quietly excludes EV.
+        grid_cost_terms.append(imp * (grid_in + s.get("ev_kwh", 0.0)) - exp * grid_out)
 
         # Octoplus Power Down (formerly Saving Sessions): reward for
         # importing LESS than the predicted per-slot baseline, paid in
@@ -437,7 +443,7 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
 
         grid_in = _val(charge[i]) + _val(grid_to_load[i])
         grid_out = _val(pv_to_grid[i]) + eff * _val(batt_to_export[i])
-        delta = s["imp"] * grid_in - s["exp"] * grid_out
+        delta = s["imp"] * (grid_in + s.get("ev_kwh", 0.0)) - s["exp"] * grid_out
         grid_cost_total += delta
         soc_pct = _val(soc[i]) / cap * 100.0
         trace.append(round(soc_pct, 1))

@@ -320,8 +320,8 @@ PAGE = r"""<!doctype html>
                background:var(--amber); }
   .gl-h { font-size:12px; letter-spacing:1.6px; text-transform:uppercase;
           color:var(--dim); margin-bottom:10px; }
-  .gl-scroll { max-height:520px; overflow-y:auto; }
-  .gl-scroll-mini { max-height:230px; overflow-y:hidden; }
+  .gl-scroll { max-height:520px; overflow-y:auto; overflow-x:auto; }
+  .gl-scroll-mini { max-height:230px; overflow-y:hidden; overflow-x:auto; }
   .gl-more-btn { display:block; width:100%; margin-top:12px; padding:9px;
                  background:none; border:1px solid var(--line); border-radius:8px;
                  color:var(--cyan); font-size:12px; font-weight:600; letter-spacing:.3px;
@@ -446,7 +446,6 @@ PAGE = r"""<!doctype html>
   }
 
   /* ---- plan table (client-rendered from plan_table data) ---- */
-  .gl-table-scroll { overflow-x:auto; }
   table.gl-plan { width:100%; border-collapse:collapse; font-size:13px;
           font-family:ui-monospace,SFMono-Regular,Menlo,monospace; white-space:nowrap; }
   table.gl-plan th { position:sticky; top:0; background:var(--panel); z-index:1;
@@ -967,7 +966,7 @@ function renderPlanTable(table, opts) {
       <td>£${Number(r.total_gbp).toFixed(2)}</td>
     </tr>`;
   }).join('');
-  return `<div class="gl-table-scroll"><table class="gl-plan">
+  return `<table class="gl-plan">
     <tr><th>Slot</th><th>Import</th><th>Export</th><th>PV kWh</th><th>Load kWh</th>
         <th>Grid kWh</th><th>Charge kWh</th><th title="Battery kWh discharged this slot, self-consumption + export combined">Battery kWh</th>
         <th>Action</th>
@@ -977,7 +976,7 @@ function renderPlanTable(table, opts) {
         <th>SoC</th>
         <th>Grid £</th><th>Total £</th></tr>
     ${trs}
-  </table></div>`;
+  </table>`;
 }
 // Groups the flat entities dict (label -> entity_id, from gridlock.py's
 // discovered-entity attributes) into the categories the spec asked for

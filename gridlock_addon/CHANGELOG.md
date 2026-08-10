@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.13.0 - 2026-08-10
+
+### Fix
+- Plan table's cost figures (`cost_delta_p`/`total_gbp`) silently excluded EV charging cost — a row showing 0.27 grid kWh and 3.70 EV kWh at 3.5p only priced the 0.27, understating the real cost of that slot. EV charging cost is now folded directly into the same grid £ figures rather than tracked separately
+- Dashboard tables with a scrollable header row (the Plan table) weren't actually sticking on scroll — two nested scroll containers (one for vertical, one for horizontal) fought each other and broke the sticky positioning. Merged into a single scroll container per table so the header row now stays pinned while scrolling
+
 ## 3.12.1 - 2026-08-10
 
 ### Fix

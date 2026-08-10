@@ -396,6 +396,27 @@ def test_ev_dispatch_slot_caps_charge_rate_and_blocks_export():
     )
 
 
+def test_ev_charging_cost_is_folded_into_cost_trace_delta():
+    """A real Plan table row showed grid_kwh 0.27, EV 3.70kWh, import 3.5p
+    and a cost_delta of only +0.9p — 0.27 x 3.5p, with the 3.7kWh of EV
+    charging silently excluded. The user's own read on it: EV charging is
+    real grid draw at the same rate, so it belongs in the same £ figure,
+    not a separate tracked column. With battery charging disabled here,
+    grid_in is 0, so delta must equal imp * ev_kwh exactly."""
+    rows = [{"imp": CHEAP, "exp": 0.0, "load": 0.0, "dispatch": True, "ev_kwh": 3.7}]
+    slots = make_slots(rows, CHEAP)
+    cfg = base_cfg(battery_kwh=20.0, charge_kw=0.0, discharge_kw=0.0,
+                    export_rate_kw=0.0, ev_concurrent_charge_kw=0.0)
+
+    result = optimizer.solve(slots, soc0_pct=50.0, cfg=cfg)
+    assert not result.infeasible
+    expected_delta = CHEAP * 3.7
+    assert abs(result.cost_trace[0]["delta"] - expected_delta) < 1e-3, (
+        "delta must include EV charging cost (imp * ev_kwh), not just "
+        "battery/load grid draw"
+    )
+
+
 def test_daily_target_cutoff_halts_further_export():
     from datetime import timezone
     degradation = 0.05
