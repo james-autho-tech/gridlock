@@ -355,7 +355,7 @@ gridlock:
   #     hysteresis: 0.5
   #     hysteresis_off: 0.1
   #   - name: "Hot Water Tank"
-  #     internal_temp_entity: sensor.loft_heatpump_controller_t1s_dhw
+  #     internal_temp_entity: sensor.loft_heatpump_controller_water_tank_temperature_t5
   #     target_temp_entity: number.loft_heatpump_controller_set_dhw_tank_temperature_t5s
   #     external_temp_constant: 18  # a tank loses heat to indoor ambient, not the outdoors — no weather entity needed
   #     heating_entity: switch.loft_heatpump_controller_power_dhw_t5s

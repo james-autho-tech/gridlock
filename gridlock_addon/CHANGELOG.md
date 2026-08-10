@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.9.4 - 2026-08-09
+
+### Fix
+- Corrected the Hot Water Tank example's `internal_temp_entity` — was pointed at a different DHW-circuit sensor (T1S) instead of the tank's own measured temperature (T5), reading several degrees hot on a real install
+
 ## 3.9.3 - 2026-08-09
 
 ### Fix
