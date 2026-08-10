@@ -289,6 +289,13 @@ gridlock:
   # if you have one for a valve/TRV rather than a separate zone (e.g. a
   # spare TRV in a room that already has its own room thermostat).
   #
+  # internal_temp_entity pointed at a climate.* entity automatically
+  # reads its current_temperature attribute (a climate entity's own
+  # state is its HVAC mode, not a temperature) — set
+  # internal_temp_attribute explicitly only if you're pointing this at
+  # something that isn't a climate.* entity and doesn't just hold the
+  # temperature as its plain state.
+  #
   # thermal_zones:
   #   - name: "Bedroom 4"
   #     internal_temp_entity: climate.bedroom_4_qing_thermo

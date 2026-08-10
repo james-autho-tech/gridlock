@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.9.3 - 2026-08-09
+
+### Fix
+- GridWarm room zones pointed at a `climate.*` entity were silently dropped — a climate entity's own state is its HVAC mode, not a temperature, so the live reading needs its `current_temperature` attribute instead (now auto-detected by domain, confirmed against a real install where only the non-climate hot water tank zone was showing up)
+
 ## 3.9.2 - 2026-08-09
 
 ### Improvement

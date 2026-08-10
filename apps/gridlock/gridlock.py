@@ -1676,6 +1676,7 @@ class GridLock(hass.Hass):
             hysteresis_off=float(z.get("hysteresis_off", 0.1)))
         return {"name": z.get("name", "Zone"),
                 "internal_temp_entity": z.get("internal_temp_entity"),
+                "internal_temp_attribute": z.get("internal_temp_attribute"),
                 "target_temp_entity": z.get("target_temp_entity"),
                 "target_temp_attribute": z.get("target_temp_attribute"),
                 "external_temp_entity": z.get("external_temp_entity"),
@@ -1684,6 +1685,26 @@ class GridLock(hass.Hass):
                 "heating_entity": z.get("heating_entity"),
                 "cop_entity": z.get("cop_entity"),
                 "params": params}
+
+    def _thermal_internal_temp(self, zone):
+        """A climate.* entity's own state is its HVAC mode ("heat"/"off"),
+        not a temperature — its live reading is the current_temperature
+        attribute instead. Auto-detect that by domain so a room zone
+        pointed at a climate entity (the common case) works with no
+        extra config; internal_temp_attribute can still override it for
+        anything that doesn't follow that convention."""
+        ent = zone["internal_temp_entity"]
+        if not ent:
+            return None
+        attr = zone["internal_temp_attribute"] or (
+            "current_temperature" if ent.startswith("climate.") else None)
+        if attr:
+            v = self.get_state(ent, attribute=attr)
+            try:
+                return float(v) if v not in (None, "unknown", "unavailable") else None
+            except (ValueError, TypeError):
+                return None
+        return self.get_float_state(ent, None)
 
     def _thermal_target_temp(self, zone):
         ent = zone["target_temp_entity"]
@@ -1750,7 +1771,7 @@ class GridLock(hass.Hass):
         return curve
 
     def _run_thermal_forecast(self, zone, now):
-        internal_temp = self.get_float_state(zone["internal_temp_entity"], None)
+        internal_temp = self._thermal_internal_temp(zone)
         if internal_temp is None:
             return None
         target_temp = self._thermal_target_temp(zone)
