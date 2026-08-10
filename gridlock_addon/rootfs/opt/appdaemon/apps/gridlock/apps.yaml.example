@@ -301,6 +301,14 @@ gridlock:
   # gridwarm:
   #   active: true
   #   zones:
+  #     # One heating zone for the whole house (a single loop/thermostat
+  #     # setup, the common case) — use whichever room's sensor is most
+  #     # representative as internal_temp_entity, heat_share: 1.0 since
+  #     # it's the only zone, not a slice shared with others. If you
+  #     # genuinely have separate independently-heated zones (their own
+  #     # loops/valves, not just extra thermometers around one house),
+  #     # repeat this block per zone instead, with heat_share split
+  #     # between them.
   #     - name: "Bedroom 4"
   #       internal_temp_entity: climate.bedroom_4_qing_thermo
   #       target_temp_entity: climate.bedroom_4_qing_thermo
@@ -312,9 +320,9 @@ gridlock:
   #       heat_loss_degrees: 0.035   # °C lost per hour per °C of (inside - outside) diff — from timing a real cooldown with heating off
   #       heat_loss_watts: 170       # smaller fixed background loss, on top of the above
   #       heat_gain_static: 300      # passive gain from occupants/electronics/incidental solar, watts
-  #       heat_max_power: 7000       # heat pump's total thermal output flat out, watts — shared across every zone it serves
+  #       heat_max_power: 7000       # heat pump's total thermal output flat out, watts
   #       heat_min_power: 2000       # thermal output once modulating down near target, watts
-  #       heat_share: 0.33           # this zone's rough slice of that shared output (three rooms here) -- a Phase 1 approximation, refine via the dashboard's predicted-vs-actual overlay
+  #       heat_share: 1.0            # the only zone -- gets the whole output, not a slice of it
   #       heating_cop: 4.15
   #       heat_volume: 123           # m3 — used to estimate thermal mass (air + furniture/fabric, an approximation)
   #       hysteresis: 0.5            # °C below target that (re)starts heating
@@ -322,46 +330,6 @@ gridlock:
   #       anticipation_lookahead_hours: 3.0   # how far ahead to look for a trend (default shown)
   #       anticipation_sensitivity: 0.3       # °C of target adjustment per °C of anticipated swing (default shown)
   #       anticipation_max_adjust: 2.0        # caps the adjustment either way (default shown)
-  #     - name: "Master Bedroom"
-  #       active: false   # kept out of the anticipation curve on purpose -- run this one as cool as possible, no forecast-driven nudging either way. Still predicted and shown on the dashboard, just tracks whatever the thermostat itself is set to.
-  #       internal_temp_entity: climate.master_bedroom_master_bedroom_thermo
-  #       target_temp_entity: climate.master_bedroom_master_bedroom_thermo
-  #       target_temp_attribute: temperature
-  #       external_temp_entity: sensor.openweathermap_temperature
-  #       weather_entity: weather.openweathermap
-  #       heating_entity: binary_sensor.loft_heatpump_controller_compressor_running
-  #       cop_entity: sensor.loft_heatpump_controller_coefficient_of_performance
-  #       # No room-specific calibration for this one yet — reusing Bedroom 4's
-  #       # heat_loss/heat_gain/heat_volume figures as a starting point until
-  #       # the dashboard's overlay shows whether they need adjusting.
-  #       heat_loss_degrees: 0.035
-  #       heat_loss_watts: 170
-  #       heat_gain_static: 300
-  #       heat_max_power: 7000
-  #       heat_min_power: 2000
-  #       heat_share: 0.33
-  #       heating_cop: 4.15
-  #       heat_volume: 123
-  #       hysteresis: 0.5
-  #       hysteresis_off: 0.1
-  #     - name: "Downstairs"
-  #       internal_temp_entity: climate.smart_thermostat_x
-  #       target_temp_entity: climate.smart_thermostat_x
-  #       target_temp_attribute: temperature
-  #       external_temp_entity: sensor.openweathermap_temperature
-  #       weather_entity: weather.openweathermap
-  #       heating_entity: binary_sensor.loft_heatpump_controller_compressor_running
-  #       cop_entity: sensor.loft_heatpump_controller_coefficient_of_performance
-  #       heat_loss_degrees: 0.035
-  #       heat_loss_watts: 170
-  #       heat_gain_static: 300
-  #       heat_max_power: 7000
-  #       heat_min_power: 2000
-  #       heat_share: 0.33
-  #       heating_cop: 4.15
-  #       heat_volume: 123
-  #       hysteresis: 0.5
-  #       hysteresis_off: 0.1
   #     - name: "Hot Water Tank"
   #       internal_temp_entity: sensor.loft_heatpump_controller_water_tank_temperature_t5
   #       target_temp_entity: number.loft_heatpump_controller_set_dhw_tank_temperature_t5s
@@ -376,8 +344,8 @@ gridlock:
   #       heat_share: 1.0             # DHW gets the full (derated) output while actively running, not split with space heating
   #       heating_cop: 2.5            # usually notably lower than space-heating COP, due to the higher flow temp DHW needs
   #       tank_litres: 150            # exact physics from here — no fudge factor needed, unlike heat_volume above
-  #     hysteresis: 2.0
-  #     hysteresis_off: 0.5
+  #       hysteresis: 2.0
+  #       hysteresis_off: 0.5
 
   # SSEN Power Track — polled directly by the engine, no HA sensors needed.
   # Postcode prefix (outward code + first digit of inward code, e.g.

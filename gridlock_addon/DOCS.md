@@ -208,14 +208,17 @@ with outdoor temperature) or a hot water tank (heated by the same heat
 pump's separate DHW circuit, losing heat to indoor ambient rather than the
 outdoors — with no weather entity, a tank simply has no trend to anticipate
 and holds steady, which is expected). Both use the same model, just with
-different numbers — list as many as you have thermostats for; there's no
-need to pick one "representative" room, since each zone is modelled and
-displayed independently. There's no auto-discovery here — heat-pump-
+different numbers. Most houses only have one real *heating* zone even if
+there are several thermostats scattered around it for reading temperature
+in different rooms — in that case, list just one zone (whichever room's
+sensor is the most representative) with `heat_share: 1.0`, not one entry
+per thermostat. Only list more than one zone if the house genuinely has
+separate, independently-heated loops (their own valves/zone controllers,
+not just extra thermometers). There's no auto-discovery here — heat-pump-
 controller entity names are specific to the installed hardware — so each
 zone is listed explicitly under `gridwarm.zones` in `apps.yaml`, which has a
-fully-commented example covering every room a shared heat pump serves plus
-a hot water tank. Set `gridwarm.active: false`, or leave the whole block
-out, to disable this entirely.
+fully-commented single-zone-plus-tank example. Set `gridwarm.active: false`,
+or leave the whole block out, to disable this entirely.
 
 Each individual zone can also be set `active: false` on its own — it's
 still predicted and shown on the dashboard as normal, just with the

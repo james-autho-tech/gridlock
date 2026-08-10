@@ -592,7 +592,16 @@ class GridLock(hass.Hass):
             return default
         try:
             v = self.get_state(entity_id)
-            return float(v) if v not in (None, "unknown", "unavailable") else default
+            if v in (None, "unknown", "unavailable"):
+                return default
+            f = float(v)
+            # float() happily parses the literal strings "nan"/"inf" —
+            # a state that's ever exactly that (a broken template
+            # sensor, an upstream integration erroring) would otherwise
+            # poison every downstream calculation that reads it (found
+            # via GridWarm's cost figures coming back "£NaN" — the true
+            # source was one of these, not GridWarm's own arithmetic).
+            return f if math.isfinite(f) else default
         except (ValueError, TypeError):
             return default
 
@@ -1814,7 +1823,12 @@ class GridLock(hass.Hass):
         step_ratio = SLOT_MIN // THERMAL_STEP_MIN
         rate_curve = []
         for s in slots:
-            rate_curve.extend([s["imp"]] * step_ratio)
+            # A single non-finite rate (a bad upstream reading slipping
+            # through) would otherwise poison every cost figure it's
+            # summed into, not just this one slot -- NaN + anything is
+            # NaN.
+            imp = s["imp"] if math.isfinite(s["imp"]) else self.default_import
+            rate_curve.extend([imp] * step_ratio)
         if len(rate_curve) < THERMAL_HORIZON_STEPS:
             pad_n = THERMAL_HORIZON_STEPS - len(rate_curve)
             rate_curve.extend([rate_curve[-1] if rate_curve else self.default_import] * pad_n)

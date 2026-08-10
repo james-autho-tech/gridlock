@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.10.1 - 2026-08-09
+
+### Fix
+- `get_float_state()` now rejects non-finite readings (a literal "nan"/"inf" state string parses successfully in Python's `float()`, so one bad upstream sensor could silently poison every downstream calculation that read it) — root cause of GridWarm showing "£NaN" for every zone's predicted cost
+- GridWarm's own rate curve additionally guards against a non-finite import rate as a second line of defence
+- Fixed a latent indentation bug in the Hot Water Tank example — `hysteresis`/`hysteresis_off` were one level too shallow, silently outside that zone's own config block
+
+### Improvement
+- Shipped example simplified to one heating zone (most houses have a single loop even with several thermostats scattered around it for temperature reading) plus the hot water tank, instead of three separate room entries — `heat_share: 1.0` now that it's the only zone, not a three-way split
+
 ## 3.10.0 - 2026-08-09
 
 ### Improvement
