@@ -260,13 +260,23 @@ Use a dedicated "force water tank heating" override built into your heat
 pump's own integration for exactly this, if it has one — **not** the
 tank's main DHW power/enable switch, which may also gate other internal
 functions you don't want interrupted (e.g. anti-legionella disinfection
-cycles). For the Midea-based "Heatpump Controller" ESPHome integration
-this session was built against, that's
-`switch.<device>_forced_water_tank_heating` — a register the project's own
-example automations already use for exactly this kind of external control
-(see [Mosibi/Midea-heat-pump-ESPHome](https://github.com/Mosibi/Midea-heat-pump-ESPHome)).
-Other integrations will expose something equivalent under a different
-name, if at all — check before enabling this.
+cycles).
+
+**Test it manually before ever setting `control_entity`, and don't trust
+naming or upstream documentation alone.** On the Midea-based "Heatpump
+Controller" ESPHome integration this session was built against, the
+seemingly obvious candidate — `switch.<device>_forced_water_tank_heating`,
+a register [the project's own example automations](https://github.com/Mosibi/Midea-heat-pump-ESPHome)
+use for exactly this kind of external control — turned out on real
+hardware to trigger the resistive backup/immersion heater instead of the
+heat pump compressor (confirmed by a massive power draw with the
+compressor never engaging). The register name and the upstream project's
+own documented usage both suggested otherwise; neither was reliable
+enough on their own. Before enabling this, go to Developer Tools →
+Actions in Home Assistant, call `switch.turn_on` against your candidate
+entity, and confirm the compressor actually runs and power draw looks
+like a heat pump, not a resistive element, before adding it to
+`apps.yaml`.
 
 Two safety bounds apply on top of whatever the plan wants, both biased
 toward heating rather than withholding it (commanding heat on is always

@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.11.1 - 2026-08-10
+
+### Fix
+- Retracted the `forced_water_tank_heating` example as a recommended GridWarm control entity — confirmed on a real install that it triggers the resistive backup heater (massive power draw, compressor never engaged), not the heat pump compressor, despite the register naming and the upstream project's own example automations both suggesting otherwise. `apps.yaml`/DOCS.md now warn explicitly: test any candidate control entity in Developer Tools → Actions and confirm the compressor actually runs before ever setting `control_entity`
+
 ## 3.11.0 - 2026-08-10
 
 ### Improvement

@@ -350,15 +350,24 @@ gridlock:
   #       # control_entity is set. GridWarm will then actually write to
   #       # this switch each tick (on/off) based on its own plan, instead
   #       # of just predicting. Only use a dedicated force-heating
-  #       # override built for exactly this by your heat pump's own
-  #       # integration -- never the tank's main DHW power/enable switch,
-  #       # which may also gate unrelated internal functions (this
-  #       # project's own example automations use exactly this register
-  #       # for external control: github.com/Mosibi/Midea-heat-pump-ESPHome).
-  #       # control_entity: switch.loft_heatpump_controller_forced_water_tank_heating
+  #       # override that's CONFIRMED, by actually testing it in Developer
+  #       # Tools > Actions and watching what happens (compressor running,
+  #       # power draw, tank temperature), to genuinely command the heat
+  #       # pump compressor -- not an entity that merely looks right by
+  #       # name or by another project's own documentation. Confirmed the
+  #       # hard way on the Midea-based "Heatpump Controller" ESPHome
+  #       # integration this session was built against: its documented
+  #       # switch.<device>_forced_water_tank_heating (used by that
+  #       # project's own example automations for exactly this) actually
+  #       # triggered the resistive backup heater on real hardware --
+  #       # massive power draw, compressor never engaged -- despite the
+  #       # register naming and upstream docs both suggesting otherwise.
+  #       # Never use the tank's main DHW power/enable switch either, which
+  #       # may gate unrelated internal functions. Test before enabling.
+  #       # control_entity: switch.your_confirmed_dhw_force_heating_switch
   #       # control_safety_min_temp: 45   # hard floor -- heat regardless of plan below this, never negotiable
   #       # control_max_off_hours: 6      # never hold heating off continuously longer than this, in case it interacts with the heat pump's own internal cycles (e.g. anti-legionella) in ways not confirmed here
-  #       # A real HA helper input_boolean.gridlock_gridwarm_control_hot_water_tank
+  #       # A real HA helper input_boolean.gridlock_gridwarm_control_<zone>
   #       # is auto-created as a pause switch -- flip it off any time to
   #       # instantly stop GridWarm touching this switch and hand control
   #       # back to the heat pump's own normal logic.
