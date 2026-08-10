@@ -215,6 +215,9 @@ def build_status():
         "circuits": circuits.get("attributes", {}).get("circuits") or [],
         "circuit_history": circuits.get("attributes", {}).get("history") or [],
         "thermal_zones": thermal.get("attributes", {}).get("zones") or [],
+        "thermal_plan_summary": thermal.get("attributes", {}).get("plan_summary") or "",
+        "thermal_cost_total": thermal.get("attributes", {}).get("predicted_cost_today_total"),
+        "thermal_cost_baseline_total": thermal.get("attributes", {}).get("predicted_cost_today_baseline_total"),
         "bill_reconciliation_history": savings.get("attributes", {}).get("bill_reconciliation_history") or [],
         "bill_breakdown": savings.get("attributes", {}).get("bill_breakdown"),
         "bill_month_to_date": savings.get("attributes", {}).get("bill_month_to_date"),
@@ -1140,43 +1143,86 @@ function triadLeave() {
   const tt = document.getElementById('gl-triad-tooltip');
   if (tt) tt.style.display = 'none';
 }
-function renderThermalZoneChart(zone) {
-  const rows = zone.forecast_data || [];
-  const n = rows.length;
-  if (!n) return '<div style="color:var(--dim)">No forecast data yet.</div>';
-  const H = 116;
-  const allTemps = rows.flatMap(r => [r.internal_temp, r.external_temp, r.target_temp]);
+const GRIDWARM_COLORS = ['var(--cyan)', 'var(--amber)', 'var(--violet)', 'var(--green)', 'var(--red)'];
+function renderThermalZoneTable(zones) {
+  const rows = zones.map(z => `
+    <tr>
+      <td><span class="gl-legend-dot" style="background:${z._color}"></span>${esc(z.name)}${z.heating_on ? ' 🔥' : ''}</td>
+      <td class="num">${Number(z.current_temp).toFixed(1)}°C</td>
+      <td class="num">${Number(z.target_temp).toFixed(1)}°C</td>
+      <td class="num">${Number(z.cop).toFixed(2)}</td>
+      <td class="num">£${Number(z.predicted_cost_today).toFixed(2)}</td>
+      <td class="num" style="color:var(--dim)">£${Number(z.predicted_cost_today_baseline).toFixed(2)} fixed</td>
+    </tr>`).join('');
+  return `<div style="overflow-x:auto"><table class="gridlock-plan">
+    <tr><th>Zone</th><th>Now</th><th>Target</th><th>COP</th><th>Plan cost today</th><th>Fixed-target cost</th></tr>
+    ${rows}
+  </table></div>`;
+}
+function renderThermalCombinedChart(zones) {
+  if (!zones.length) return '';
+  const n = zones[0].forecast_data.length;
+  const H = 140;
+  const allTemps = zones.flatMap(z => z.forecast_data.map(p => p.internal_temp))
+    .concat(zones[0].forecast_data.map(p => p.external_temp));
   const lo = Math.min(...allTemps) - 1, hi = Math.max(...allTemps) + 1;
   const y = v => H - 6 - ((v - lo) / ((hi - lo) || 1)) * (H - 16);
-  const line = key => rows.map((r, i) => `${triadX(i, n).toFixed(1)},${y(r[key]).toFixed(1)}`).join(' ');
+  // Anticipation shading -- all zones share roughly the same weather
+  // forecast, so any one zone's own action sequence marks the bands for
+  // all of them. Two directions, two colors: easing off ahead of a
+  // forecast warm-up vs adding a little heat ahead of a forecast cold
+  // snap.
+  const bandsFor = (matchAction, color) => {
+    const bands = [];
+    let start = null;
+    zones[0].forecast_data.forEach((p, i) => {
+      const match = p.action === matchAction;
+      if (match && start === null) start = i;
+      if (!match && start !== null) { bands.push([start, i]); start = null; }
+    });
+    if (start !== null) bands.push([start, n]);
+    return bands.map(([s, e]) =>
+      `<rect x="${triadX(s, n).toFixed(1)}" y="0" width="${(triadX(e, n) - triadX(s, n)).toFixed(1)}" height="${H}" fill="${color}" opacity="0.08" />`
+    ).join('');
+  };
+  const bandRects = bandsFor('Easing (warm-up)', 'var(--cyan)') + bandsFor('Ahead of cold', 'var(--amber)');
+  const extLine = zones[0].forecast_data.map((p, i) => `${triadX(i, n).toFixed(1)},${y(p.external_temp).toFixed(1)}`).join(' ');
+  const zoneLines = zones.map(z => {
+    const pts = z.forecast_data.map((p, j) => `${triadX(j, n).toFixed(1)},${y(p.internal_temp).toFixed(1)}`).join(' ');
+    return `<polyline points="${pts}" fill="none" stroke="${z._color}" stroke-width="2" />`;
+  }).join('');
+  const legend = zones.map(z =>
+    `<span><span class="gl-legend-dot" style="background:${z._color}"></span>${esc(z.name)}</span>`).join('');
   return `
     <div class="gl-combo-legend" style="margin-bottom:4px">
-      <span><span class="gl-legend-dot" style="background:var(--cyan)"></span>Predicted temperature</span>
-      <span><span class="gl-legend-dot" style="background:var(--violet)"></span>External / ambient</span>
-      <span><span class="gl-legend-dot" style="background:var(--amber)"></span>Target</span>
+      ${legend}
+      <span><span class="gl-legend-dot" style="background:var(--dim)"></span>External</span>
+      <span><span class="gl-legend-dot" style="background:var(--cyan);opacity:.4"></span>Easing (warm-up ahead)</span>
+      <span><span class="gl-legend-dot" style="background:var(--amber);opacity:.4"></span>Ahead of cold snap</span>
     </div>
     <svg class="gl-triad-chart" viewBox="0 0 ${VB_W} ${H}" preserveAspectRatio="none">
-      <polyline points="${line('external_temp')}" fill="none" stroke="var(--violet)" stroke-width="1.5" stroke-dasharray="4,3" />
-      <polyline points="${line('target_temp')}" fill="none" stroke="var(--amber)" stroke-width="1.5" stroke-dasharray="2,2" />
-      <polyline points="${line('internal_temp')}" fill="none" stroke="var(--cyan)" stroke-width="2.5" />
+      ${bandRects}
+      <polyline points="${extLine}" fill="none" stroke="var(--dim)" stroke-width="1.5" stroke-dasharray="4,3" />
+      ${zoneLines}
     </svg>`;
 }
 function renderThermalZones(zones) {
   if (!zones || !zones.length) {
-    return '<div style="color:var(--dim)">GridWarm isn\'t configured yet — add a <code>thermal_zones</code> block to apps.yaml to enable it (see DOCS.md). Advisory only: this never controls your heating, it only predicts and displays.</div>';
+    return '<div style="color:var(--dim)">GridWarm isn\'t configured yet — add a <code>gridwarm</code> block to apps.yaml to enable it (see DOCS.md). Advisory only: this never controls your heating, it only predicts and displays.</div>';
   }
-  const cards = zones.map(z => `
-    <div class="gl-wrap" style="margin-bottom:12px">
-      <div class="gl-h" style="font-size:15px">${esc(z.name)} ${z.heating_on ? '🔥' : ''}</div>
-      <div class="gl-grid" style="margin-bottom:4px">
-        <div class="gl-tile"><div class="lbl">Now</div><div class="val num">${Number(z.current_temp).toFixed(1)}°C</div></div>
-        <div class="gl-tile"><div class="lbl">Target</div><div class="val num">${Number(z.target_temp).toFixed(1)}°C</div></div>
-        <div class="gl-tile"><div class="lbl">COP</div><div class="val num">${Number(z.cop).toFixed(2)}</div></div>
-        <div class="gl-tile"><div class="lbl">Predicted today</div><div class="val num">${Number(z.predicted_kwh_today).toFixed(2)} kWh</div></div>
-      </div>
-      ${renderThermalZoneChart(z)}
-    </div>`).join('');
-  return `${cards}<div style="color:var(--dim);font-size:12px">Prediction only — not controlling your heating.</div>`;
+  // Group by temperature range, not an explicit "kind" config -- a hot
+  // water tank (40-65C) plotted on the same axis as rooms (15-25C) would
+  // flatten the room lines to an unreadable sliver, so it gets its own
+  // chart instead. No real room reaches 35C, so that's a safe split point.
+  const colored = zones.map((z, i) => ({ ...z, _color: GRIDWARM_COLORS[i % GRIDWARM_COLORS.length] }));
+  const isHighTemp = z => Math.max(z.current_temp, ...z.forecast_data.map(p => p.internal_temp)) > 35;
+  const rooms = colored.filter(z => !isHighTemp(z));
+  const tanks = colored.filter(isHighTemp);
+  return `
+    ${renderThermalZoneTable(colored)}
+    ${rooms.length ? `<div style="margin-top:14px"><div class="lbl" style="margin-bottom:6px">Rooms</div>${renderThermalCombinedChart(rooms)}</div>` : ''}
+    ${tanks.length ? `<div style="margin-top:14px"><div class="lbl" style="margin-bottom:6px">Hot water</div>${renderThermalCombinedChart(tanks)}</div>` : ''}
+    <div style="color:var(--dim);font-size:12px;margin-top:10px">Recommended schedule only — not applied automatically. Never controls your heating.</div>`;
 }
 // Shared tick-label row for the flex `.gl-bars` charts — one column per
 // bar so labels line up with renderLoadProfileChart/renderCarbonChart's
@@ -1609,7 +1655,8 @@ async function refresh() {
     <div class="tab-page" data-tab="gridwarm">
       <div class="gl-wrap">
         <div class="gl-h">GridWarm</div>
-        <div class="gl-sub">Predicted temperature and heating cost from a physics-based model of each zone's heat loss/gain — advisory only, never controls your heating. This tab only shows up once a heat pump is configured (see <code>thermal_zones</code> in apps.yaml).</div>
+        <div class="gl-sub">Looks ahead at the outdoor temperature forecast for each zone — easing off before a forecast warm-up, adding a little heat ahead of a forecast cold snap — instead of only reacting to the current outdoor temperature. Advisory only, never controls your heating. This tab only shows up once a heat pump is configured (see <code>gridwarm</code> in apps.yaml).</div>
+        ${d.thermal_plan_summary ? `<div class="gl-sub" style="color:var(--ink)">${esc(d.thermal_plan_summary)}</div>` : ''}
         ${renderThermalZones(d.thermal_zones)}
       </div>
     </div>

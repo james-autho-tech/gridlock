@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.10.0 - 2026-08-09
+
+### Improvement
+- GridWarm now looks ahead at each zone's outdoor temperature forecast — easing the target down before a forecast warm-up, nudging it up ahead of a forecast cold snap — instead of only reacting to the current outdoor temperature the way a plain weather-compensation curve does
+- Compares this against reacting with no lookahead at all, in both kWh and £, on a new consolidated GridWarm tab: one compact zone table plus a combined chart per zone group (rooms together, hot water tank separate — its temperature range would otherwise flatten the room lines)
+- Heat output stays low-and-slow (gentle, continuous) unless a zone is genuinely far behind, rather than cycling to full power like a boiler
+- Config restructured under a named `gridwarm:` block with its own `active` flag (was a bare `thermal_zones:` list, easy to mis-indent) — each zone can also be set `active: false` on its own to exclude it from the forecast-driven adjustment while still predicting and displaying it
+- Plan table's Action pill now shows "Saving Session Export" for any forecast row that falls inside a joined Saving Session window, not just the current live slot
+
+### Fix
+- GridWarm no longer implies its plan beats real weather compensation's own efficiency — the model doesn't simulate flow temperature, so comparisons and labels now honestly describe it as "with lookahead" vs "reacting only to the current temperature", not "vs weather compensation"
+
 ## 3.9.4 - 2026-08-09
 
 ### Fix

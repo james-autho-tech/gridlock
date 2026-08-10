@@ -49,6 +49,7 @@ class ThermalParams:
     thermal_mass_wh_per_c: float = 500.0
     hysteresis: float = 0.5
     hysteresis_off: float = 0.1
+    boost_threshold_degrees: float = 2.0
 
 
 def thermal_mass_from_volume(volume_m3, fabric_factor=4.0):
@@ -65,6 +66,38 @@ def thermal_mass_from_litres(litres):
     room, a tank's thermal mass doesn't need a fudge factor, just its
     capacity in litres (~1kg/litre)."""
     return litres * WATER_WH_PER_LITRE_PER_C
+
+
+def anticipatory_target_curve(base_target, external_temp_curve, lookahead_steps=36,
+                               sensitivity=0.3, max_adjust=2.0):
+    """A plain weather-compensation curve only ever reacts to the
+    CURRENT outdoor temperature. This looks ahead instead: if it's
+    about to get milder, ease the target down now (passive warming
+    will do some of the work, so less active heating is needed to stay
+    comfortable); if it's about to turn colder, nudge the target up now
+    (get ahead of the cold snap while it's still easy/efficient,
+    instead of playing catch-up once already cold).
+
+    This adjusts the target this model works from, not a literal flow
+    temperature -- the model has no separate flow-temp variable to
+    simulate -- but the real effect is the same: heat less now if
+    warmth is coming, a bit more now if cold is coming.
+
+    external_temp_curve: forecast, one entry per simulate() step.
+    lookahead_steps: how far ahead to look for the trend (in steps, not
+    minutes -- the caller's step_minutes decides what that means).
+    sensitivity: °C of target adjustment per °C of anticipated swing.
+    max_adjust: caps the adjustment so a big forecast swing can't push
+    the target further than this in either direction.
+    """
+    n = len(external_temp_curve)
+    out = []
+    for i in range(n):
+        future_i = min(i + lookahead_steps, n - 1)
+        trend = external_temp_curve[future_i] - external_temp_curve[i]
+        adjust = max(-max_adjust, min(max_adjust, -sensitivity * trend))
+        out.append(base_target + adjust)
+    return out
 
 
 def simulate(internal_temp0, external_temp_curve, target_temp_curve, params,
@@ -95,7 +128,15 @@ def simulate(internal_temp0, external_temp_curve, target_temp_curve, params,
             heating_on = False
 
         if heating_on:
-            heat_power_w = (params.heat_max_power if temp < target
+            # Low and slow by default -- a heat pump run continuously at
+            # its gentle output level is both more efficient (better COP
+            # at partial load) and more comfortable than cycling to full
+            # power and back like a boiler. Only escalate to heat_max_power
+            # once genuinely behind (a big shortfall, e.g. after being off
+            # a while, or a real cold snap) -- the small pre-heat/coast
+            # swings price_aware_target_curve makes shouldn't trigger it.
+            heat_power_w = (params.heat_max_power
+                             if (target - temp) > params.boost_threshold_degrees
                              else params.heat_min_power) * params.heat_share
         else:
             heat_power_w = 0.0

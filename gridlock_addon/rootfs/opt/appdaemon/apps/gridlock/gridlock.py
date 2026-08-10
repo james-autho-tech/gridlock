@@ -412,14 +412,25 @@ class GridLock(hass.Hass):
             self.load_mgmt_critical_kw = max_import_kw * float(a.get("load_mgmt_critical_pct", 0.90))
         self._prev_load_mgmt_state = None  # None / "warn" / "critical"
 
-        # GridWarm — the heat pump thermal model (Phase 1, advisory only;
-        # see core/thermal.py's docstring for the model itself. This
-        # never writes to any climate/heating entity, only predicts and
-        # displays). Each entry is a fully independent zone (a room, or
-        # a hot water tank) — no brand-naming heuristic makes sense for
-        # a specific named thermostat/heat-pump-controller, so these are
-        # taken as direct config rather than auto-discovered.
-        self.thermal_zones = [self._build_thermal_zone(z) for z in a.get("thermal_zones", [])]
+        # GridWarm — the heat pump thermal model + off-peak plan (Phase 1,
+        # advisory only; see core/thermal.py's docstring for the model
+        # itself. This never writes to any climate/heating entity, only
+        # predicts and displays). A named sub-block with its own
+        # "active" flag, not a bare top-level list key — a stray
+        # indentation mistake under a bare key silently produces an
+        # empty/wrong config with no error (confirmed the hard way on a
+        # real install), whereas a wrong "active" value at least fails
+        # loudly/visibly rather than just doing nothing. Each zone entry
+        # is fully independent (a room, or a hot water tank) — no
+        # brand-naming heuristic makes sense for a specific named
+        # thermostat/heat-pump-controller, so these are taken as direct
+        # config rather than auto-discovered. Defaults to active
+        # whenever the block/zones exist, so just listing zones is
+        # enough — "active: false" is purely an explicit pause switch
+        # that doesn't require deleting the whole block.
+        gridwarm_cfg = a.get("gridwarm") or {}
+        self.thermal_zones = ([self._build_thermal_zone(z) for z in gridwarm_cfg.get("zones", [])]
+                              if gridwarm_cfg.get("active", True) else [])
         self._thermal_forecast_warned = set()
 
         self.notify_service = a.get("notify_service")
@@ -1437,6 +1448,7 @@ class GridLock(hass.Hass):
         rows = []
         plan_table = []
         for i, s in enumerate(slots):
+            in_saving_session = any(ws <= s["start"] < we for ws, we in saving_windows)
             if i == 0 and live_label:
                 act = live_label
                 ll = live_label.lower()
@@ -1480,9 +1492,17 @@ class GridLock(hass.Hass):
                         # needed.
                         act = "Forced Bypass"
                         colour = "#fb923c"
+                elif act == "EXPORT" and in_saving_session:
+                    # Forecast rows only ever showed plain "EXPORT" here —
+                    # the saving_cell 💰 icon below already knew this slot
+                    # sits inside a joined Saving Session, but the Action
+                    # pill itself didn't say so unless it happened to be
+                    # the live (i==0) slot, which gets this same label via
+                    # _tick_inner's own live_label. Match that naming here
+                    # too, instead of only the current slot getting credit.
+                    act = "Saving Session Export"
             ev_cell = (f"<span style='color:#38bdf8'>⚡ {s['ev_kwh']:.2f}</span>"
                        if s["dispatch"] else "—")
-            in_saving_session = any(ws <= s["start"] < we for ws, we in saving_windows)
             saving_cell = "<span style='color:#facc15'>💰</span>" if in_saving_session else "—"
             # Power Up (Free Electricity) doesn't need its own window
             # list the way Saving Sessions does — no opt-in, so every
@@ -1651,7 +1671,7 @@ class GridLock(hass.Hass):
     # entity, only predicts and displays.)
     # ------------------------------------------------------------------
     def _build_thermal_zone(self, z):
-        """Turn one thermal_zones apps.yaml entry into its ThermalParams
+        """Turn one gridwarm.zones apps.yaml entry into its ThermalParams
         plus the entity IDs needed to read it each tick. Thermal mass can
         be given directly, or derived from heat_volume (a room — air plus
         furniture/fabric, an approximation) or tank_litres (a tank —
@@ -1673,7 +1693,8 @@ class GridLock(hass.Hass):
             heating_cop=float(z.get("heating_cop", 3.0)),
             thermal_mass_wh_per_c=mass,
             hysteresis=float(z.get("hysteresis", 0.5)),
-            hysteresis_off=float(z.get("hysteresis_off", 0.1)))
+            hysteresis_off=float(z.get("hysteresis_off", 0.1)),
+            boost_threshold_degrees=float(z.get("boost_threshold_degrees", 2.0)))
         return {"name": z.get("name", "Zone"),
                 "internal_temp_entity": z.get("internal_temp_entity"),
                 "internal_temp_attribute": z.get("internal_temp_attribute"),
@@ -1684,6 +1705,19 @@ class GridLock(hass.Hass):
                 "weather_entity": z.get("weather_entity"),
                 "heating_entity": z.get("heating_entity"),
                 "cop_entity": z.get("cop_entity"),
+                "anticipation_lookahead_steps": int(
+                    float(z.get("anticipation_lookahead_hours", 3.0)) * 60 / THERMAL_STEP_MIN),
+                # active: false keeps the zone predicted and shown on the
+                # dashboard as normal, just with its anticipation forced
+                # off -- it tracks whatever the thermostat's own target
+                # is, no forecast-driven adjustment either way. For a
+                # room you specifically want to run as cool as you can
+                # get away with, rather than nudged up ahead of a cold
+                # snap like the others.
+                "anticipation_sensitivity": (float(z.get("anticipation_sensitivity", 0.3))
+                                             if z.get("active", True) else 0.0),
+                "anticipation_max_adjust": (float(z.get("anticipation_max_adjust", 2.0))
+                                            if z.get("active", True) else 0.0),
                 "params": params}
 
     def _thermal_internal_temp(self, zone):
@@ -1770,7 +1804,23 @@ class GridLock(hass.Hass):
             curve.append(parsed[idx][1] if parsed else fallback_temp)
         return curve
 
-    def _run_thermal_forecast(self, zone, now):
+    def _thermal_rate_curve(self, slots):
+        """One import rate per 5-min thermal step, aligned to the battery
+        plan's own 30-min slots (self.build_slots) — used only to price
+        whatever the model predicts it'll draw, for a £ figure alongside
+        the kWh one. GridWarm's plan itself doesn't react to price at
+        all (see anticipatory_target_curve) — this is purely for
+        reporting what today's plan is expected to cost."""
+        step_ratio = SLOT_MIN // THERMAL_STEP_MIN
+        rate_curve = []
+        for s in slots:
+            rate_curve.extend([s["imp"]] * step_ratio)
+        if len(rate_curve) < THERMAL_HORIZON_STEPS:
+            pad_n = THERMAL_HORIZON_STEPS - len(rate_curve)
+            rate_curve.extend([rate_curve[-1] if rate_curve else self.default_import] * pad_n)
+        return rate_curve[:THERMAL_HORIZON_STEPS]
+
+    def _run_thermal_forecast(self, zone, now, rate_curve):
         internal_temp = self._thermal_internal_temp(zone)
         if internal_temp is None:
             return None
@@ -1783,13 +1833,33 @@ class GridLock(hass.Hass):
         external_curve = (self._thermal_weather_curve(
             zone["weather_entity"], now, THERMAL_HORIZON_STEPS, THERMAL_STEP_MIN, external_now)
             if zone["weather_entity"] else [external_now] * THERMAL_HORIZON_STEPS)
-        target_curve = [target_temp] * THERMAL_HORIZON_STEPS
 
-        trace = core_thermal.simulate(internal_temp, external_curve, target_curve, zone["params"],
+        # The GridWarm plan: ease the target down ahead of a forecast
+        # warm-up (passive warming will do some of the work) and nudge
+        # it up ahead of a forecast cold snap (get ahead of it while
+        # it's easy), rather than only reacting to the current outdoor
+        # temperature the way a plain weather-compensation curve does.
+        # Compared against a fixed-target baseline (no lookahead at
+        # all) so the dashboard shows whether the lookahead is actually
+        # worth anything, not just asserted to be.
+        plan_curve = core_thermal.anticipatory_target_curve(
+            target_temp, external_curve, lookahead_steps=zone["anticipation_lookahead_steps"],
+            sensitivity=zone["anticipation_sensitivity"], max_adjust=zone["anticipation_max_adjust"])
+        trace = core_thermal.simulate(internal_temp, external_curve, plan_curve, zone["params"],
                                        heating_on0=heating_on, step_minutes=THERMAL_STEP_MIN)
+        baseline_trace = core_thermal.simulate(
+            internal_temp, external_curve, [target_temp] * THERMAL_HORIZON_STEPS, zone["params"],
+            heating_on0=heating_on, step_minutes=THERMAL_STEP_MIN)
+
         steps_per_day = int(24 * 60 / THERMAL_STEP_MIN)
         predicted_kwh_today = sum(s["electrical_kw"] * THERMAL_STEP_MIN / 60.0
                                    for s in trace[:steps_per_day])
+        baseline_kwh_today = sum(s["electrical_kw"] * THERMAL_STEP_MIN / 60.0
+                                  for s in baseline_trace[:steps_per_day])
+        predicted_cost_today = sum(s["electrical_kw"] * THERMAL_STEP_MIN / 60.0 * rate_curve[j]
+                                    for j, s in enumerate(trace[:steps_per_day]))
+        baseline_cost_today = sum(s["electrical_kw"] * THERMAL_STEP_MIN / 60.0 * rate_curve[j]
+                                   for j, s in enumerate(baseline_trace[:steps_per_day]))
 
         # Downsample to one point per battery-plan slot for the dashboard
         # — keeps payload size comparable to the SoC/solar forecasts
@@ -1800,7 +1870,10 @@ class GridLock(hass.Hass):
              "internal_temp": round(trace[j]["internal_temp"], 2),
              "external_temp": round(trace[j]["external_temp"], 2),
              "target_temp": round(trace[j]["target_temp"], 2),
-             "heating_on": trace[j]["heating_on"]}
+             "heating_on": trace[j]["heating_on"],
+             "action": ("Ahead of cold" if plan_curve[j] > target_temp + 0.1
+                        else "Easing (warm-up)" if plan_curve[j] < target_temp - 0.1
+                        else "Steady")}
             for i, j in enumerate(range(per_slot - 1, len(trace), per_slot))]
 
         live_cop = self.get_float_state(zone["cop_entity"], None) if zone["cop_entity"] else None
@@ -1811,15 +1884,19 @@ class GridLock(hass.Hass):
                 "heating_on": heating_on,
                 "cop": round(live_cop, 2) if live_cop is not None else zone["params"].heating_cop,
                 "predicted_kwh_today": round(predicted_kwh_today, 2),
+                "predicted_kwh_today_baseline": round(baseline_kwh_today, 2),
+                "predicted_cost_today": round(predicted_cost_today, 2),
+                "predicted_cost_today_baseline": round(baseline_cost_today, 2),
                 "forecast_data": forecast_data}
 
     def _publish_thermal_forecast(self, now):
         if not self.thermal_zones:
             return
+        rate_curve = self._thermal_rate_curve(self.build_slots(now))
         zones_out = []
         for zone in self.thermal_zones:
             try:
-                result = self._run_thermal_forecast(zone, now)
+                result = self._run_thermal_forecast(zone, now, rate_curve)
             except Exception as exc:  # noqa: BLE001 — one bad zone shouldn't drop the rest
                 self.log(f"Thermal forecast for zone '{zone['name']}' failed: {exc!r}",
                          level="WARNING")
@@ -1828,11 +1905,23 @@ class GridLock(hass.Hass):
                 zones_out.append(result)
         if not zones_out:
             return
+        total_cost = sum(z["predicted_cost_today"] for z in zones_out)
+        baseline_cost = sum(z["predicted_cost_today_baseline"] for z in zones_out)
+        saving = baseline_cost - total_cost
+        plan_summary = (
+            f"Anticipating temperature swings ahead — easing off before forecast warm-ups, "
+            f"adding a little heat ahead of cold snaps — predicted £{total_cost:.2f} today "
+            f"across {len(zones_out)} zone{'s' if len(zones_out) != 1 else ''} vs £{baseline_cost:.2f} "
+            f"reacting only to the current temperature "
+            f"({'saving' if saving >= 0 else 'costing'} £{abs(saving):.2f}).")
         self.set_state("sensor.gridlock_gridwarm",
                        state=f"{zones_out[0]['current_temp']:.1f}",
                        attributes={"friendly_name": "GridLock GridWarm",
                                    "unit_of_measurement": "°C",
                                    "icon": "mdi:heat-pump",
+                                   "plan_summary": plan_summary,
+                                   "predicted_cost_today_total": round(total_cost, 2),
+                                   "predicted_cost_today_baseline_total": round(baseline_cost, 2),
                                    "zones": zones_out})
 
     def _load_circuit_state(self):

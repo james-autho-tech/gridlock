@@ -1,6 +1,6 @@
 from core.thermal import (ThermalParams, simulate, thermal_mass_from_volume,
                            thermal_mass_from_litres, AIR_WH_PER_M3_PER_C,
-                           WATER_WH_PER_LITRE_PER_C)
+                           WATER_WH_PER_LITRE_PER_C, anticipatory_target_curve)
 
 
 def _room_params(**overrides):
@@ -73,6 +73,22 @@ def test_electrical_kw_derives_from_heat_power_and_cop_and_is_zero_when_off():
     assert cooling["electrical_kw"] == 0.0
 
 
+def test_small_shortfall_stays_low_and_slow_not_full_power():
+    """A heat pump run continuously at its gentle output is both more
+    efficient and more comfortable than cycling to full power like a
+    boiler -- a small deficit (the kind anticipatory_target_curve's own
+    modest adjustments produce) should stay on heat_min_power, only
+    escalating to heat_max_power for a genuinely large shortfall."""
+    params = _room_params(heat_max_power=7000, heat_min_power=2000, heat_share=1.0,
+                           boost_threshold_degrees=2.0)
+    small_deficit = simulate(19.0, [10.0], [20.0], params, heating_on0=False, step_minutes=5)[0]
+    assert small_deficit["heating_on"] is True
+    assert small_deficit["heat_kw"] == 2.0  # heat_min_power, not heat_max_power
+
+    large_deficit = simulate(15.0, [10.0], [20.0], params, heating_on0=False, step_minutes=5)[0]
+    assert large_deficit["heat_kw"] == 7.0  # genuinely behind -- heat_max_power
+
+
 def test_heat_share_scales_effective_heat_input_for_a_shared_heat_source():
     full = simulate(10.0, [5.0], [20.0], _room_params(heat_share=1.0),
                      heating_on0=False, step_minutes=5)[0]
@@ -80,6 +96,53 @@ def test_heat_share_scales_effective_heat_input_for_a_shared_heat_source():
                         heating_on0=False, step_minutes=5)[0]
     assert quarter["heat_kw"] == full["heat_kw"] * 0.25
     assert quarter["internal_temp"] < full["internal_temp"]
+
+
+def test_anticipatory_curve_eases_target_down_ahead_of_a_warm_up():
+    # Flat 5C for a while, then rising to 18C -- the classic case from
+    # the user's own description: know it's about to get milder, so
+    # don't heat as hard right now.
+    external = [5.0] * 24 + [18.0] * 24
+    curve = anticipatory_target_curve(20.0, external, lookahead_steps=24,
+                                       sensitivity=0.3, max_adjust=2.0)
+    assert curve[0] < 20.0  # eased down in anticipation of the warm-up
+    # Once the warm-up has already happened and nothing further is
+    # coming (flat tail), there's no more trend left to anticipate.
+    assert curve[-1] == 20.0
+
+
+def test_anticipatory_curve_raises_target_ahead_of_a_cold_snap():
+    external = [15.0] * 24 + [0.0] * 24
+    curve = anticipatory_target_curve(20.0, external, lookahead_steps=24,
+                                       sensitivity=0.3, max_adjust=2.0)
+    assert curve[0] > 20.0  # gets ahead of the cold snap while it's easy
+
+
+def test_anticipatory_curve_adjustment_is_capped():
+    external = [0.0] * 24 + [40.0] * 24  # an extreme swing
+    curve = anticipatory_target_curve(20.0, external, lookahead_steps=24,
+                                       sensitivity=0.3, max_adjust=2.0)
+    assert curve[0] == 18.0  # capped at -max_adjust, not -0.3*40=-12
+
+
+def test_anticipatory_curve_is_a_no_op_with_no_trend_ahead():
+    curve = anticipatory_target_curve(20.0, [10.0] * 48, lookahead_steps=12)
+    assert curve == [20.0] * 48
+
+
+def test_anticipatory_curve_still_heats_back_up_via_hysteresis():
+    """A downward anticipatory adjustment isn't a hard floor enforced
+    separately -- simulate()'s own hysteresis is what stops the zone
+    free-falling, by heating back up once it drops hysteresis below
+    whatever the (eased) target is."""
+    params = _room_params(hysteresis=0.5, hysteresis_off=0.1)
+    external = [5.0] * 48 + [18.0] * 48  # warm-up coming partway through
+    targets = anticipatory_target_curve(20.0, external, lookahead_steps=48)
+    trace = simulate(20.0, external, targets, params, heating_on0=False, step_minutes=30)
+    # Eased target floors at 18.0 (capped -2.0 adjustment) -- hysteresis
+    # keeps it from drifting far below that, not free-falling toward the
+    # 5C external temp.
+    assert all(s["internal_temp"] > 17.0 for s in trace)
 
 
 def test_fine_step_resolution_avoids_wildly_overshooting_a_fast_zone():

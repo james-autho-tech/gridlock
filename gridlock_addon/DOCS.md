@@ -173,7 +173,7 @@ entirely. See `apps.yaml` for the two threshold percentages
 (`load_mgmt_warn_pct`/`load_mgmt_critical_pct`) if you want to tune how much
 margin is kept below the real trip point.
 
-## GridWarm: heat pump thermal model (Phase 1, advisory only)
+## GridWarm: heat pump thermal model + anticipatory plan (Phase 1, advisory only)
 
 If you have a heat pump, GridLock can predict each zone's temperature and
 heating cost from a simple physics model of its own heat loss and heat
@@ -183,17 +183,46 @@ same on-demand pattern the Circuits tab already uses. **This never writes
 to any climate or heating entity** — it only predicts and displays, so it's
 safe to try even on a heat pump GridLock knows nothing else about.
 
+A plain weather-compensation curve only ever reacts to the *current*
+outdoor temperature. GridWarm looks ahead instead, using the same
+`weather.*` entity's forecast the dashboard's header already shows current
+conditions from (just the forecast data instead of the current reading) —
+if it's about to get milder, it eases the target down now, since passive
+warming will do some of the work; if it's about to turn colder, it nudges
+the target up now, getting ahead of the cold snap while the heat pump is
+still running efficiently rather than playing catch-up once it's already
+cold. The dashboard compares this against reacting with no lookahead at
+all, in both kWh and £, so you can see whether the lookahead is actually
+worth anything for your house — it isn't a guaranteed win every day, since
+it depends on how much the forecast genuinely swings.
+
+This adjusts the *target* the model works from, not a literal flow
+temperature — there's no separate flow-temperature variable simulated here
+— but the real effect is the same: heat less now if warmth is coming, a
+little more now if cold is coming. Heat output itself stays "low and slow"
+(gentle and continuous) unless a zone is genuinely far behind, rather than
+cycling to full power like a boiler.
+
 A "zone" is either a room (heated by a shared heat pump whose output varies
 with outdoor temperature) or a hot water tank (heated by the same heat
 pump's separate DHW circuit, losing heat to indoor ambient rather than the
-outdoors). Both use the same model, just with different numbers — list as
-many as you have thermostats for; there's no need to pick one "representative"
-room, since each zone is modelled and displayed independently. There's no
-auto-discovery here — heat-pump-controller entity names are specific to the
-installed hardware — so each zone is listed explicitly under `thermal_zones`
-in `apps.yaml`, which has a fully-commented example covering every room a
-shared heat pump serves plus a hot water tank. Leave the block out entirely
-to disable this.
+outdoors — with no weather entity, a tank simply has no trend to anticipate
+and holds steady, which is expected). Both use the same model, just with
+different numbers — list as many as you have thermostats for; there's no
+need to pick one "representative" room, since each zone is modelled and
+displayed independently. There's no auto-discovery here — heat-pump-
+controller entity names are specific to the installed hardware — so each
+zone is listed explicitly under `gridwarm.zones` in `apps.yaml`, which has a
+fully-commented example covering every room a shared heat pump serves plus
+a hot water tank. Set `gridwarm.active: false`, or leave the whole block
+out, to disable this entirely.
+
+Each individual zone can also be set `active: false` on its own — it's
+still predicted and shown on the dashboard as normal, just with the
+forecast-driven adjustment forced off, so it simply tracks whatever the
+thermostat itself is set to. Useful for a room you deliberately want to
+keep as cool as possible rather than nudged up ahead of a cold snap like
+the others.
 
 Some of the numbers involved (heat loss rate, static heat gain, thermal
 mass) are genuinely hard to know exactly without instrumenting the house —
@@ -206,11 +235,11 @@ rough guess, not a measurement) — compare the dashboard's predicted vs.
 actual temperature line over a few days and adjust the numbers that look
 most off, the same way you'd tune any forecast.
 
-**Phase 2** (not built yet): using the model to actually pre-heat on cheap
-electricity and coast through expensive periods, rather than just
-predicting. Feasible on the same foundation, but writing to a live
-thermostat in a lived-in house is a different risk category from
-advisory-only prediction — wrong comfort decisions affect people living
+**Phase 2** (not built yet): actually writing the anticipated schedule to
+the thermostat, rather than just recommending it. Feasible on the same
+foundation, but writing to a live thermostat in a lived-in house is a
+different risk category from advisory-only prediction — wrong comfort
+decisions affect people living
 there, not just cost — so it's being kept deliberately separate rather than
 bundled in from the start.
 
