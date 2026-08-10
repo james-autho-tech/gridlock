@@ -346,6 +346,22 @@ gridlock:
   #       tank_litres: 150            # exact physics from here — no fudge factor needed, unlike heat_volume above
   #       hysteresis: 2.0
   #       hysteresis_off: 0.5
+  #       # Active control -- opt-in, this whole feature is off unless
+  #       # control_entity is set. GridWarm will then actually write to
+  #       # this switch each tick (on/off) based on its own plan, instead
+  #       # of just predicting. Only use a dedicated force-heating
+  #       # override built for exactly this by your heat pump's own
+  #       # integration -- never the tank's main DHW power/enable switch,
+  #       # which may also gate unrelated internal functions (this
+  #       # project's own example automations use exactly this register
+  #       # for external control: github.com/Mosibi/Midea-heat-pump-ESPHome).
+  #       # control_entity: switch.loft_heatpump_controller_forced_water_tank_heating
+  #       # control_safety_min_temp: 45   # hard floor -- heat regardless of plan below this, never negotiable
+  #       # control_max_off_hours: 6      # never hold heating off continuously longer than this, in case it interacts with the heat pump's own internal cycles (e.g. anti-legionella) in ways not confirmed here
+  #       # A real HA helper input_boolean.gridlock_gridwarm_control_hot_water_tank
+  #       # is auto-created as a pause switch -- flip it off any time to
+  #       # instantly stop GridWarm touching this switch and hand control
+  #       # back to the heat pump's own normal logic.
 
   # SSEN Power Track — polled directly by the engine, no HA sensors needed.
   # Postcode prefix (outward code + first digit of inward code, e.g.

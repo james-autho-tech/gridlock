@@ -133,8 +133,8 @@ def simulate(internal_temp0, external_temp_curve, target_temp_curve, params,
             # at partial load) and more comfortable than cycling to full
             # power and back like a boiler. Only escalate to heat_max_power
             # once genuinely behind (a big shortfall, e.g. after being off
-            # a while, or a real cold snap) -- the small pre-heat/coast
-            # swings price_aware_target_curve makes shouldn't trigger it.
+            # a while, or a real cold snap) -- the small adjustments
+            # anticipatory_target_curve makes shouldn't trigger it.
             heat_power_w = (params.heat_max_power
                              if (target - temp) > params.boost_threshold_degrees
                              else params.heat_min_power) * params.heat_share
@@ -156,3 +156,29 @@ def simulate(internal_temp0, external_temp_curve, target_temp_curve, params,
             "electrical_kw": heat_power_w / params.heating_cop / 1000.0,
         })
     return out
+
+
+def decide_dhw_command(desired_on, current_temp, safety_min_temp, off_duration_hours,
+                        max_off_hours):
+    """The actual on/off command to send to real hardware, layering two
+    safety overrides on top of the model's own desired_on decision
+    (simulate()'s first-step heating_on, already anticipation-aware).
+    Both overrides bias toward heating rather than withholding it, since
+    commanding heat ON is always the safe failure mode here -- holding
+    it OFF is not:
+
+    - safety_min_temp: a hard floor -- never withhold heat below this,
+      regardless of what the model or plan wants.
+    - max_off_hours: caps how long this can continuously hold heating
+      off, as a conservative margin against unconfirmed interactions
+      with the heat pump's own internal cycles (e.g. anti-legionella
+      disinfection, which runs on its own separate schedule/logic this
+      model has no visibility into) -- better to occasionally heat
+      "unnecessarily" than to risk silently suppressing a safety cycle
+      for an extended, indefinite stretch.
+    """
+    if current_temp <= safety_min_temp:
+        return True
+    if not desired_on and off_duration_hours >= max_off_hours:
+        return True
+    return desired_on

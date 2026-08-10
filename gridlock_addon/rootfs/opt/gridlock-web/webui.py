@@ -402,6 +402,10 @@ PAGE = r"""<!doctype html>
   .gl-seg-btn.active[data-mode="balanced"] { background:rgba(56,189,248,.18); color:var(--cyan); }
   .gl-seg-btn.active[data-mode="max_profit"] { background:rgba(167,139,250,.18); color:var(--violet); }
   .gl-seg-btn:disabled { opacity:.5; cursor:wait; }
+  .gl-btn-sm { background:rgba(255,255,255,.06); border:1px solid var(--line); color:var(--ink);
+               font-size:11px; padding:3px 9px; border-radius:6px; cursor:pointer;
+               font-family:inherit; margin-left:6px; }
+  .gl-btn-sm:hover { background:rgba(255,255,255,.12); }
   .gl-weather { display:flex; align-items:center; gap:12px; font-size:12px; color:var(--dim); }
   .gl-weather .temp { font-size:15px; font-weight:700; color:var(--ink); }
   .gl-weather-icon { font-size:18px; }
@@ -669,6 +673,18 @@ async function setMode(mode) {
     });
   } catch (e) { /* surfaced on next refresh() if the engine never picks it up */ }
   setTimeout(() => { modeSwitchBusy = false; refresh(); }, 1500);
+}
+let gridwarmPauseBusy = false;
+async function setGridwarmPause(pauseHelper, paused) {
+  if (gridwarmPauseBusy) return;
+  gridwarmPauseBusy = true;
+  try {
+    await fetch('api/gridwarm-pause', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pause_helper: pauseHelper, paused }),
+    });
+  } catch (e) { /* surfaced on next refresh() if the engine never picks it up */ }
+  setTimeout(() => { gridwarmPauseBusy = false; refresh(); }, 1500);
 }
 function renderHeaderRight(d) {
   const modes = [['eco', 'ECO'], ['balanced', 'BALANCED'], ['max_profit', 'MAX PROFIT']];
@@ -1144,7 +1160,21 @@ function triadLeave() {
   if (tt) tt.style.display = 'none';
 }
 const GRIDWARM_COLORS = ['var(--cyan)', 'var(--amber)', 'var(--violet)', 'var(--green)', 'var(--red)'];
+function renderGridwarmControlCell(control) {
+  if (!control) return '<span style="color:var(--dim)">—</span>';
+  if (control.paused) {
+    return `<span class="gl-pill gl-pill-eco">⏸️ Paused</span>
+      <button class="gl-btn-sm" onclick="setGridwarmPause('${control.pause_helper}', false)">Resume</button>`;
+  }
+  const statePill = control.commanded === null || control.commanded === undefined
+    ? '<span style="color:var(--dim)">—</span>'
+    : control.commanded
+      ? '<span class="gl-pill gl-pill-charge">🔥 Heating</span>'
+      : '<span class="gl-pill gl-pill-eco">Off</span>';
+  return `${statePill} <button class="gl-btn-sm" onclick="setGridwarmPause('${control.pause_helper}', true)">Pause</button>`;
+}
 function renderThermalZoneTable(zones) {
+  const anyControlled = zones.some(z => z.control);
   const rows = zones.map(z => `
     <tr>
       <td><span class="gl-legend-dot" style="background:${z._color}"></span>${esc(z.name)}${z.heating_on ? ' 🔥' : ''}</td>
@@ -1153,9 +1183,10 @@ function renderThermalZoneTable(zones) {
       <td class="num">${Number(z.cop).toFixed(2)}</td>
       <td class="num">£${Number(z.predicted_cost_today).toFixed(2)}</td>
       <td class="num" style="color:var(--dim)">£${Number(z.predicted_cost_today_baseline).toFixed(2)} fixed</td>
+      ${anyControlled ? `<td>${renderGridwarmControlCell(z.control)}</td>` : ''}
     </tr>`).join('');
   return `<div style="overflow-x:auto"><table class="gridlock-plan">
-    <tr><th>Zone</th><th>Now</th><th>Target</th><th>COP</th><th>Plan cost today</th><th>Fixed-target cost</th></tr>
+    <tr><th>Zone</th><th>Now</th><th>Target</th><th>COP</th><th>Plan cost today</th><th>Fixed-target cost</th>${anyControlled ? '<th>Control</th>' : ''}</tr>
     ${rows}
   </table></div>`;
 }
@@ -1720,9 +1751,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split("?", 1)[0].rstrip("/")
-        if not path.endswith("/api/mode"):
+        if path.endswith("/api/mode"):
+            self._handle_mode()
+        elif path.endswith("/api/gridwarm-pause"):
+            self._handle_gridwarm_pause()
+        else:
             self._send(404, b"not found", "text/plain")
-            return
+
+    def _handle_mode(self):
         try:
             length = int(self.headers.get("Content-Length", 0) or 0)
             body = json.loads(self.rfile.read(length) or b"{}")
@@ -1736,6 +1772,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
                             "input_select.gridlock_mode_override", option=mode)
             self._send(200, json.dumps({"ok": True, "mode": mode}).encode(),
                        "application/json")
+        except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
+            self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
+
+    def _handle_gridwarm_pause(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+            entity = str(body.get("pause_helper", ""))
+            paused = bool(body.get("paused"))
+            # Only ever GridWarm's own auto-created pause helpers — this
+            # endpoint must not become a general "flip any input_boolean"
+            # proxy just because the payload shape would allow it.
+            if not entity.startswith("input_boolean.gridlock_gridwarm_control_"):
+                self._send(400, json.dumps({"error": "not a GridWarm pause helper"}).encode(),
+                           "application/json")
+                return
+            ha_call_service(f"input_boolean/turn_{'off' if paused else 'on'}", entity)
+            self._send(200, json.dumps({"ok": True}).encode(), "application/json")
         except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
             self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
 

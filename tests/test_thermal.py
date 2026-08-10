@@ -1,6 +1,7 @@
 from core.thermal import (ThermalParams, simulate, thermal_mass_from_volume,
                            thermal_mass_from_litres, AIR_WH_PER_M3_PER_C,
-                           WATER_WH_PER_LITRE_PER_C, anticipatory_target_curve)
+                           WATER_WH_PER_LITRE_PER_C, anticipatory_target_curve,
+                           decide_dhw_command)
 
 
 def _room_params(**overrides):
@@ -160,3 +161,37 @@ def test_fine_step_resolution_avoids_wildly_overshooting_a_fast_zone():
                       heating_on0=False, step_minutes=5)
     peak = max(s["internal_temp"] for s in trace)
     assert peak < 52.0 + 5.0  # nowhere near the ~20C coarse-step overshoot
+
+
+def test_decide_dhw_command_follows_model_when_no_overrides_apply():
+    assert decide_dhw_command(True, 50.0, safety_min_temp=45.0,
+                               off_duration_hours=0.0, max_off_hours=6.0) is True
+    assert decide_dhw_command(False, 50.0, safety_min_temp=45.0,
+                               off_duration_hours=0.0, max_off_hours=6.0) is False
+
+
+def test_decide_dhw_command_safety_floor_overrides_model_wanting_off():
+    # The model wants heating off, but the tank is at/below the hard
+    # floor -- heat regardless, this is the safe failure mode.
+    assert decide_dhw_command(False, 45.0, safety_min_temp=45.0,
+                               off_duration_hours=0.0, max_off_hours=6.0) is True
+    assert decide_dhw_command(False, 40.0, safety_min_temp=45.0,
+                               off_duration_hours=0.0, max_off_hours=6.0) is True
+
+
+def test_decide_dhw_command_max_off_cap_overrides_extended_off_periods():
+    # Comfortably above the floor, but held off long enough to hit the cap.
+    assert decide_dhw_command(False, 50.0, safety_min_temp=45.0,
+                               off_duration_hours=5.9, max_off_hours=6.0) is False
+    assert decide_dhw_command(False, 50.0, safety_min_temp=45.0,
+                               off_duration_hours=6.0, max_off_hours=6.0) is True
+    assert decide_dhw_command(False, 50.0, safety_min_temp=45.0,
+                               off_duration_hours=8.0, max_off_hours=6.0) is True
+
+
+def test_decide_dhw_command_off_duration_irrelevant_while_already_heating():
+    # off_duration_hours only matters when the model actually wants it
+    # off -- a long-elapsed value shouldn't force anything while the
+    # model already wants heating on.
+    assert decide_dhw_command(True, 50.0, safety_min_temp=45.0,
+                               off_duration_hours=100.0, max_off_hours=6.0) is True

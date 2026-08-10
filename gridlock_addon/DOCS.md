@@ -173,15 +173,19 @@ entirely. See `apps.yaml` for the two threshold percentages
 (`load_mgmt_warn_pct`/`load_mgmt_critical_pct`) if you want to tune how much
 margin is kept below the real trip point.
 
-## GridWarm: heat pump thermal model + anticipatory plan (Phase 1, advisory only)
+## GridWarm: heat pump thermal model + anticipatory plan
 
 If you have a heat pump, GridLock can predict each zone's temperature and
 heating cost from a simple physics model of its own heat loss and heat
 input — shown on its own **GridWarm** tab alongside the heat pump's COP.
 That tab only appears once at least one zone is configured (see below), the
-same on-demand pattern the Circuits tab already uses. **This never writes
-to any climate or heating entity** — it only predicts and displays, so it's
-safe to try even on a heat pump GridLock knows nothing else about.
+same on-demand pattern the Circuits tab already uses. **Prediction never
+writes to any climate or heating entity** — it's safe to try even on a heat
+pump GridLock knows nothing else about. A hot water tank zone can
+additionally opt into active control (see "Active control" below), which
+does write to one specific switch you configure — off by default, and kept
+deliberately separate from prediction, which always stays advisory-only
+regardless.
 
 A plain weather-compensation curve only ever reacts to the *current*
 outdoor temperature. GridWarm looks ahead instead, using the same
@@ -238,13 +242,59 @@ rough guess, not a measurement) — compare the dashboard's predicted vs.
 actual temperature line over a few days and adjust the numbers that look
 most off, the same way you'd tune any forecast.
 
-**Phase 2** (not built yet): actually writing the anticipated schedule to
-the thermostat, rather than just recommending it. Feasible on the same
-foundation, but writing to a live thermostat in a lived-in house is a
-different risk category from advisory-only prediction — wrong comfort
-decisions affect people living
-there, not just cost — so it's being kept deliberately separate rather than
-bundled in from the start.
+**Room zones stay advisory-only for now.** Writing to a live thermostat in a
+lived-in house is a different risk category from a hot water tank — wrong
+comfort decisions affect people living there, not just cost — so active
+control is deliberately limited to DHW for the moment, not bundled in for
+rooms from the start.
+
+### Active control (hot water tank only)
+
+A tank zone can set `control_entity` to a switch that forces the heat pump
+to heat the tank on or off — GridWarm will then actually command it each
+tick based on its own plan, instead of just predicting. This is **off
+unless `control_entity` is explicitly set** — nothing else about GridWarm
+changes behaviour just because this exists.
+
+Use a dedicated "force water tank heating" override built into your heat
+pump's own integration for exactly this, if it has one — **not** the
+tank's main DHW power/enable switch, which may also gate other internal
+functions you don't want interrupted (e.g. anti-legionella disinfection
+cycles). For the Midea-based "Heatpump Controller" ESPHome integration
+this session was built against, that's
+`switch.<device>_forced_water_tank_heating` — a register the project's own
+example automations already use for exactly this kind of external control
+(see [Mosibi/Midea-heat-pump-ESPHome](https://github.com/Mosibi/Midea-heat-pump-ESPHome)).
+Other integrations will expose something equivalent under a different
+name, if at all — check before enabling this.
+
+Two safety bounds apply on top of whatever the plan wants, both biased
+toward heating rather than withholding it (commanding heat on is always
+the safe failure mode here):
+
+- `control_safety_min_temp` (default 45°C) — a hard floor; heating is
+  forced on below this regardless of the plan, full stop.
+- `control_max_off_hours` (default 6) — caps how long this can hold
+  heating off continuously. This exists because GridWarm has no visibility
+  into your heat pump's own internal cycles (anti-legionella disinfection
+  in particular) — better to occasionally heat "unnecessarily" than risk
+  silently suppressing a safety cycle for an extended, indefinite stretch.
+  This is a conservative margin, not a confirmed interaction — the
+  disinfection function itself is never touched by this feature at all,
+  but whether it can still run its own schedule while this switch holds
+  heating off hasn't been verified against real hardware behaviour.
+
+A real HA helper, `input_boolean.gridlock_gridwarm_control_<zone name>`, is
+auto-created as a manual pause switch — flip it (from Settings → Helpers,
+or the Pause button next to the zone's Control status on the GridWarm tab)
+to instantly stop GridWarm touching the switch and hand control back to the
+heat pump's own normal logic. Every command GridWarm actually sends is
+also visible in the Log tab, same as every other decision it makes.
+
+**Given this is the first thing in GridLock that writes to a heating
+device at all, watch it closely for the first day or two** — confirm hot
+water is actually available when needed, and pause it immediately via the
+helper above if anything looks wrong.
 
 ## Modes (`battery_risk_profile` in `apps.yaml`)
 

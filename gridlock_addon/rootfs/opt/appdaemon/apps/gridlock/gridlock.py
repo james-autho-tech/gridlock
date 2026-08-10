@@ -412,26 +412,38 @@ class GridLock(hass.Hass):
             self.load_mgmt_critical_kw = max_import_kw * float(a.get("load_mgmt_critical_pct", 0.90))
         self._prev_load_mgmt_state = None  # None / "warn" / "critical"
 
-        # GridWarm — the heat pump thermal model + off-peak plan (Phase 1,
-        # advisory only; see core/thermal.py's docstring for the model
-        # itself. This never writes to any climate/heating entity, only
-        # predicts and displays). A named sub-block with its own
-        # "active" flag, not a bare top-level list key — a stray
-        # indentation mistake under a bare key silently produces an
-        # empty/wrong config with no error (confirmed the hard way on a
-        # real install), whereas a wrong "active" value at least fails
-        # loudly/visibly rather than just doing nothing. Each zone entry
-        # is fully independent (a room, or a hot water tank) — no
-        # brand-naming heuristic makes sense for a specific named
-        # thermostat/heat-pump-controller, so these are taken as direct
-        # config rather than auto-discovered. Defaults to active
-        # whenever the block/zones exist, so just listing zones is
-        # enough — "active: false" is purely an explicit pause switch
-        # that doesn't require deleting the whole block.
+        # GridWarm — the heat pump thermal model + off-peak plan (see
+        # core/thermal.py's docstring for the model itself). Prediction
+        # is always advisory only; a zone only ever gets written to if
+        # it explicitly sets control_entity (see _control_thermal_zone).
+        # A named sub-block with its own "active" flag, not a bare
+        # top-level list key — a stray indentation mistake under a bare
+        # key silently produces an empty/wrong config with no error
+        # (confirmed the hard way on a real install), whereas a wrong
+        # "active" value at least fails loudly/visibly rather than just
+        # doing nothing. Each zone entry is fully independent (a room,
+        # or a hot water tank) — no brand-naming heuristic makes sense
+        # for a specific named thermostat/heat-pump-controller, so these
+        # are taken as direct config rather than auto-discovered.
+        # Defaults to active whenever the block/zones exist, so just
+        # listing zones is enough — "active: false" is purely an
+        # explicit pause switch that doesn't require deleting the whole
+        # block.
         gridwarm_cfg = a.get("gridwarm") or {}
         self.thermal_zones = ([self._build_thermal_zone(z) for z in gridwarm_cfg.get("zones", [])]
                               if gridwarm_cfg.get("active", True) else [])
         self._thermal_forecast_warned = set()
+        self._thermal_control_state = {}
+        for zone in self.thermal_zones:
+            if not zone["control_entity"]:
+                continue
+            pause_helper = self._thermal_pause_helper(zone["name"])
+            if not self.entity_exists(pause_helper):
+                self.log(f"Create {pause_helper} as a real HA helper (Settings > Devices > "
+                         f"Helpers) to be able to pause GridWarm's control of '{zone['name']}' "
+                         "from the UI. Falling back to virtual entity (defaults on); the "
+                         "toggle won't be controllable until you do.", level="WARNING")
+                self.set_state(pause_helper, state="on")
 
         self.notify_service = a.get("notify_service")
         self._prev_storm_active = False
@@ -1675,9 +1687,14 @@ class GridLock(hass.Hass):
                                    "tomorrow_kwh": round(tomorrow_kwh, 2)})
 
     # ------------------------------------------------------------------
-    # HEAT PUMP THERMAL MODEL (Phase 1, advisory only — see
-    # core/thermal.py's docstring. Never writes to any climate/heating
-    # entity, only predicts and displays.)
+    # HEAT PUMP THERMAL MODEL (GridWarm — see core/thermal.py's
+    # docstring for the model itself). Prediction and the anticipation
+    # curve are always advisory only. Active control of a zone's own
+    # heating switch (control_entity) is a separate, explicit opt-in per
+    # zone — off unless configured, gated by a per-zone pause helper,
+    # and bounded by a hard safety floor + a cap on continuous off-time
+    # (see core.thermal.decide_dhw_command). This is the one thing in
+    # GridLock that writes to a heating device at all.
     # ------------------------------------------------------------------
     def _build_thermal_zone(self, z):
         """Turn one gridwarm.zones apps.yaml entry into its ThermalParams
@@ -1727,6 +1744,14 @@ class GridLock(hass.Hass):
                                              if z.get("active", True) else 0.0),
                 "anticipation_max_adjust": (float(z.get("anticipation_max_adjust", 2.0))
                                             if z.get("active", True) else 0.0),
+                # Active control -- opt-in, off unless control_entity is
+                # explicitly set. Everything else about this zone (the
+                # prediction, the anticipation curve) stays advisory-only
+                # regardless; this is the one specific switch GridWarm is
+                # allowed to actually command.
+                "control_entity": z.get("control_entity"),
+                "control_safety_min_temp": float(z.get("control_safety_min_temp", 45.0)),
+                "control_max_off_hours": float(z.get("control_max_off_hours", 6.0)),
                 "params": params}
 
     def _thermal_internal_temp(self, zone):
@@ -1896,12 +1921,74 @@ class GridLock(hass.Hass):
                 "target_temp": round(target_temp, 2),
                 "external_temp": round(external_now, 2),
                 "heating_on": heating_on,
+                # The model's own first-step decision (already reflects
+                # the anticipation-adjusted plan_curve and its hysteresis
+                # band) -- this is what active control, if enabled for
+                # this zone, actually commands. Distinct from the LIVE
+                # "heating_on" above, which is what the hardware is
+                # observed doing right now, not what the model wants.
+                "desired_heating_on": trace[0]["heating_on"],
                 "cop": round(live_cop, 2) if live_cop is not None else zone["params"].heating_cop,
                 "predicted_kwh_today": round(predicted_kwh_today, 2),
                 "predicted_kwh_today_baseline": round(baseline_kwh_today, 2),
                 "predicted_cost_today": round(predicted_cost_today, 2),
                 "predicted_cost_today_baseline": round(baseline_cost_today, 2),
                 "forecast_data": forecast_data}
+
+    def _thermal_pause_helper(self, zone_name):
+        slug = re.sub(r"[^a-z0-9]+", "_", zone_name.lower()).strip("_")
+        return f"input_boolean.gridlock_gridwarm_control_{slug}"
+
+    def _control_thermal_zone(self, zone, now, result):
+        """The one place anything in GridLock writes to a heating device
+        — off by default, only runs at all if control_entity is set for
+        this zone. Gated by a per-zone pause helper (auto-created, same
+        pattern as input_boolean.gridlock_enable) so it can be switched
+        off instantly from the UI without editing apps.yaml or
+        restarting. See core.thermal.decide_dhw_command for the actual
+        safety-floor / max-continuous-off-time logic this defers to —
+        this method is just the HA read/write glue around it."""
+        entity = zone["control_entity"]
+        if not entity:
+            result["control"] = None
+            return
+        pause_helper = self._thermal_pause_helper(zone["name"])
+        state = self._thermal_control_state.setdefault(
+            zone["name"], {"off_since": None, "last_commanded": None})
+        paused = self.get_state(pause_helper) == "off"
+        # Always published, even while paused/before the first real
+        # decision -- the dashboard needs somewhere to show control
+        # status regardless of whether a write is about to happen.
+        result["control"] = {"entity": entity, "pause_helper": pause_helper,
+                              "paused": paused, "commanded": state["last_commanded"]}
+        if paused:
+            return
+        off_duration_hours = ((now - state["off_since"]).total_seconds() / 3600.0
+                              if state["off_since"] else 0.0)
+        command = core_thermal.decide_dhw_command(
+            result["desired_heating_on"], result["current_temp"],
+            zone["control_safety_min_temp"], off_duration_hours, zone["control_max_off_hours"])
+        state["off_since"] = None if command else (state["off_since"] or now)
+        result["control"]["commanded"] = command
+        if command == state["last_commanded"]:
+            return
+        state["last_commanded"] = command
+        # target={"entity_id": ...}, not the plain entity_id= kwarg --
+        # matches the one other place in this codebase that actually
+        # commands hardware (core/inverter.py's SigenergyAdapter).
+        self.call_service(f"switch/turn_{'on' if command else 'off'}", target={"entity_id": entity})
+        # decide_dhw_command only ever forces ON, never OFF -- so "off"
+        # can only mean the plan itself wanted off, no override needed.
+        if not command:
+            reason = "GridWarm plan — heating off"
+        elif result["current_temp"] <= zone["control_safety_min_temp"]:
+            reason = "Safety floor reached — heating forced on regardless of plan"
+        elif off_duration_hours >= zone["control_max_off_hours"]:
+            reason = ("Held off long enough to hit the safety cap — heating on to give the "
+                      "heat pump's own cycles a chance to run")
+        else:
+            reason = "GridWarm plan — heating on"
+        self._log_decision(f"GridWarm: {zone['name']} {'ON' if command else 'OFF'}", reason)
 
     def _publish_thermal_forecast(self, now):
         if not self.thermal_zones:
@@ -1917,6 +2004,11 @@ class GridLock(hass.Hass):
                 result = None
             if result:
                 zones_out.append(result)
+                try:
+                    self._control_thermal_zone(zone, now, result)
+                except Exception as exc:  # noqa: BLE001 — never let a control write crash the tick
+                    self.log(f"Thermal control for zone '{zone['name']}' failed: {exc!r}",
+                             level="ERROR")
         if not zones_out:
             return
         total_cost = sum(z["predicted_cost_today"] for z in zones_out)

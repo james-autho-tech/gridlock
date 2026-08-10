@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.11.0 - 2026-08-10
+
+### Improvement
+- New: GridWarm active control for a hot water tank zone — set `control_entity` on a zone to let GridWarm actually command a forced-heating switch each tick based on its own plan, instead of only predicting. Off unless explicitly configured; the first thing in GridLock that writes to a heating device at all
+- Two safety bounds always apply on top of the plan, both biased toward heating rather than withholding it: a hard minimum-temperature floor, and a cap on how long heating can be held off continuously (a conservative margin against unconfirmed interactions with the heat pump's own internal cycles, e.g. anti-legionella disinfection)
+- A real HA helper (`input_boolean.gridlock_gridwarm_control_<zone>`) is auto-created as a manual pause switch, with a Pause/Resume button next to the zone's live control status on the GridWarm tab — every command is also visible in the Log tab
+- Room zones are explicitly not covered by this — active control stays limited to DHW for now, given the higher stakes of writing to a live thermostat
+
 ## 3.10.1 - 2026-08-09
 
 ### Fix
