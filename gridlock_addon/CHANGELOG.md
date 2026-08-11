@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.13.1 - 2026-08-11
+
+### Fix
+- Live control never actually held the battery back during cheap off-peak import slots — the Plan table's "Bypass" label reflects a hard rule in the optimizer's own math (don't cycle the battery to serve load when importing fresh at the same cheap rate is strictly cheaper), but the live tick just sent plain "Maximum Self Consumption" mode with the full discharge rate allowed, so the real inverter drained the battery anyway. Cheap-rate ECO slots now cap discharge to 0, actually preserving the battery for the next peak/export window like the plan always claimed
+
 ## 3.13.0 - 2026-08-10
 
 ### Fix

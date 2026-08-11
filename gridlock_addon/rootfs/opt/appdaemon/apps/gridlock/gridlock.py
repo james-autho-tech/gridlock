@@ -2466,6 +2466,20 @@ class GridLock(hass.Hass):
             self.apply(self.mode_discharge, self.discharge_kw, self.charge_kw,
                        "Export",
                        f"Planned export @ {cur['exp']*100:.1f}p", plan_html)
+        elif cur["imp"] <= self.cheap_rate:
+            # Mirrors the LP's own hard constraint (core/optimizer.py:
+            # batt_to_load[i] == 0 whenever imp <= cheap_rate) — importing
+            # fresh at this same cheap rate is strictly cheaper than
+            # cycling stored charge to avoid paying it, so the battery
+            # must actually be held back here, not just labelled that way
+            # in the Plan table. "Maximum Self Consumption" mode has no
+            # notion of price and will draw the battery for load regardless
+            # unless disch_kw is explicitly capped to 0 — same pattern
+            # already used for EV Protection above.
+            self.apply(self.mode_eco, 0.0, self.charge_kw,
+                       "Bypass",
+                       f"Cheap off-peak import @ {cur['imp']*100:.1f}p — "
+                       "holding battery back for later", plan_html)
         else:
             self.apply(self.mode_eco, self.discharge_kw, self.charge_kw,
                        "Self Consumption", "Planned ECO slot", plan_html)
