@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.13.3 - 2026-08-11
+
+### Improvement
+- EV Protection now uses "Command Charging (PV First)" with battery charge/discharge both clamped to 0, instead of Eco mode — keeps the inverter's own PV routing alive (unlike bypass) so solar generated while the EV is charging goes straight to the house instead of topping up the battery mid-EV-session
+
 ## 3.13.2 - 2026-08-11
 
 ### Fix

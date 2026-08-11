@@ -2451,9 +2451,15 @@ class GridLock(hass.Hass):
                            f"{self.ev_concurrent_charge_kw}kW, discharge 0",
                            plan_html)
             else:
-                self.apply(self.mode_eco, 0.0, self.charge_kw,
+                # "Command Charging (PV First)" keeps the inverter's own PV
+                # routing alive (unlike MODE_BYPASS, which switches that off
+                # entirely) — charge_kw=0 just blocks the battery itself from
+                # taking any of that PV, so surplus solar goes to the house/
+                # EV instead of topping up the battery while it's charging.
+                self.apply(self.inverter_adapter.MODE_CHARGE_PV_FIRST, 0.0, 0.0,
                            "EV Protection",
-                           "EV charging: battery discharge clamped to 0",
+                           "EV charging: battery charge/discharge both "
+                           "clamped to 0 — PV still free to serve the house",
                            plan_html)
             return
 

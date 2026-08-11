@@ -47,6 +47,12 @@ class SigenergyAdapter(InverterAdapter):
     MODE_DISCHARGE = "Command Discharging (PV First)"
     MODE_ECO = "Maximum Self Consumption"
     MODE_BYPASS = "Unknown"  # Sigenergy's own documented pass-through state
+    # PV still serves load/export normally in this mode (unlike MODE_BYPASS,
+    # which switches the inverter's own PV routing off entirely) — only the
+    # battery's own charge/discharge behaviour is being commanded. Confirmed
+    # against a real install's own select.*_remote_ems_control_mode options
+    # list, not guessed from the name alone.
+    MODE_CHARGE_PV_FIRST = "Command Charging (PV First)"
 
     def __init__(self, ent_mode, ent_disch_limit, ent_charge_limit,
                  ent_discharge_cutoff=None,
