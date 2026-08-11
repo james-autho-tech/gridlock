@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.13.2 - 2026-08-11
+
+### Fix
+- Cheap off-peak "Bypass" slots now actually switch the inverter to Sigenergy's own documented pass-through state ("Unknown"), not just Eco mode with discharge capped to 0. Same end result electrically, but the dashboard's "Bypass" label now matches what the hardware is really set to, not an approximation of it
+
 ## 3.13.1 - 2026-08-11
 
 ### Fix
