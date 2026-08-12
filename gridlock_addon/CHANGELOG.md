@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.13.5 - 2026-08-11
+
+### Fix
+- Plan table's Saving/Power Up cells showed a misleading "+0.0p" whenever the reward rounded to zero (e.g. no reliable Octopus baseline yet) instead of just showing the plain icon. A reward that rounds to nothing now shows nothing, rather than implying GridLock calculated a real (if tiny) figure
+
 ## 3.13.4 - 2026-08-11
 
 ### Fix
