@@ -187,10 +187,20 @@ class GridLock(hass.Hass):
         # session-reward modelling to have anything to read; discovery
         # degrades gracefully to "no reward modelling" if neither is
         # found or enabled, same as any other optional sensor.
+        # Two separate baseline sensors exist depending on which programme
+        # the account is actually on — confirmed via the integration's own
+        # source (octoplus/power_down_baseline.py vs
+        # octoplus/saving_session_baseline.py, same attribute shape, just a
+        # different unique_id suffix) — mirrors the same two-programme
+        # fallback already used for ent_saving_events above, just applied
+        # to the baseline sensor too. Previously only the Power Down suffix
+        # was tried, so a classic-Saving-Sessions account could never find
+        # its baseline no matter what was enabled in HA.
         self.ent_power_down_baseline = (a.get("power_down_baseline_entity")
                                         or self.overrides.get("power_down_baseline_entity_override")
                                         or self.registry.find_sibling(
-            import_stem, "sensor", ["_octoplus_power_down_baseline"]))
+            import_stem, "sensor",
+            ["_octoplus_power_down_baseline", "_octoplus_saving_session_baseline"]))
         self.ent_power_up_baseline = (a.get("power_up_baseline_entity")
                                       or self.overrides.get("power_up_baseline_entity_override")
                                       or self.registry.find_sibling(
@@ -206,7 +216,9 @@ class GridLock(hass.Hass):
             a.get("power_down_export_baseline_entity")
             or self.overrides.get("power_down_export_baseline_entity_override")
             or self.registry.find_sibling(
-                export_stem, "sensor", ["_export_octoplus_power_down_baseline"]))
+                export_stem, "sensor",
+                ["_export_octoplus_power_down_baseline",
+                 "_export_octoplus_saving_session_baseline"]))
         self.ent_power_up_export_baseline = (
             a.get("power_up_export_baseline_entity")
             or self.overrides.get("power_up_export_baseline_entity_override")

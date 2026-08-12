@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.13.4 - 2026-08-11
+
+### Fix
+- Session reward discovery only ever looked for the `_octoplus_power_down_baseline` sensor — accounts on the classic Saving Sessions programme (via the `_octoplus_saving_session_events` fallback) have a completely separate `_octoplus_saving_session_baseline` sensor instead, which was never being found, so reward tracking could never produce anything for them regardless of what was enabled in HA. Baseline discovery (both import and export) now tries both suffixes, mirroring the fallback already used for the events entity itself
+
 ## 3.13.3 - 2026-08-11
 
 ### Improvement
