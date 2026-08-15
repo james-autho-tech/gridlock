@@ -250,6 +250,12 @@ class GridLock(hass.Hass):
                                or self.overrides.get("load_power_entity_override")
                                or self.registry.find_load_entity())
         self.decision_log = self._load_json("decision_log.json", [])
+        # {code: end_iso} for every Saving Session code GridLock has ever
+        # submitted a join for — the entity's own joined_events attribute
+        # is NOT a reliable enough guard on its own (see
+        # check_and_join_sessions' own comment), so this is GridLock's own
+        # persisted memory, checked first.
+        self.joined_session_codes = self._load_json("saving_session_state.json", {})
 
         self._last_actual_energy_cost = 0.0
         self.savings_day = None
@@ -1162,20 +1168,36 @@ class GridLock(hass.Hass):
                         if self.ent_saving_events
                         and "_octoplus_saving_session_events" in self.ent_saving_events
                         else "octopus_energy/join_octoplus_power_down_session_event")
-        # available_events is supposed to already exclude anything in
-        # joined_events (the integration's own job), but this fires on
-        # every state change of ent_saving_events, and a lag between
-        # "join submitted" and the integration's next refresh removing it
-        # from available_events was enough to re-submit the join and
-        # re-notify for a session already joined moments earlier — cross-
-        # checking against joined_events here directly, rather than
-        # trusting available_events never overlaps, closes that gap.
-        joined_codes = {ev.get("code") for ev in
-                        self._attr_list(self.ent_saving_events, "joined_events")}
+        # joined_events turned out not to be a reliable enough guard on
+        # its own: checking against it (v3.14.0) still let the same batch
+        # get joined+notified twice in practice, because the integration
+        # can take longer to reflect a fresh join back into joined_events
+        # than it takes for ent_saving_events to fire another state-
+        # changed event (a second on_saving_event callback landing before
+        # the first join has round-tripped). joined_session_codes is
+        # GridLock's OWN persisted memory of what it has already
+        # submitted — checked and updated synchronously in this same
+        # call, so a second callback arriving microseconds later sees it
+        # immediately, with no dependency on the integration's own
+        # refresh timing at all.
+        now = self.get_now()
+        pruned = {}
+        for code, end in self.joined_session_codes.items():
+            try:
+                if self._iso(end) > now - timedelta(days=1):
+                    pruned[code] = end
+            except (ValueError, TypeError):
+                continue
+        self.joined_session_codes = pruned
+        already = (set(self.joined_session_codes) |
+                  {ev.get("code") for ev in
+                   self._attr_list(self.ent_saving_events, "joined_events")})
+        changed = False
         for ev in self._attr_list(self.ent_saving_events, "available_events"):
             code = ev.get("code")
-            if not code or code in joined_codes:
+            if not code or code in already:
                 continue
+            already.add(code)
             self.log(f"Saving Session {code} found - auto-enrolling")
             self.call_service(
                 join_service,
@@ -1189,6 +1211,10 @@ class GridLock(hass.Hass):
                         f"Joined {start} – {end} at {rate} pts/kWh.{plan_note}")
             self._log_decision("Saving Session joined",
                               f"Joined {start} – {end} at {rate} pts/kWh")
+            self.joined_session_codes[code] = end
+            changed = True
+        if changed:
+            self._save_json("saving_session_state.json", self.joined_session_codes)
 
     def _saving_session_plan_note(self, start, end):
         """Best-effort: solve a fresh plan and report how much battery

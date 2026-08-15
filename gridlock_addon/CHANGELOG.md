@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.14.1 - 2026-08-15
+
+### Fix
+- The 3.14.0 fix for duplicate Saving Session joins wasn't enough — checking against `joined_events` still allowed the same batch to be joined and notified twice, because the Octopus integration can take longer to reflect a fresh join back into `joined_events` than it takes for a second state-changed event to fire and re-run the check. Auto-join now keeps its own persisted record of every code it has ever submitted, checked and updated synchronously in the same call, with no dependency on the integration's own refresh timing
+
 ## 3.14.0 - 2026-08-15
 
 ### Fix
