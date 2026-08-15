@@ -68,6 +68,29 @@ def thermal_mass_from_litres(litres):
     return litres * WATER_WH_PER_LITRE_PER_C
 
 
+def usable_hot_water_litres(tank_temp, tank_litres, target_temp, cold_mains_temp=10.0):
+    """Litres of target_temp water obtainable by mixing the tank's full
+    contents down with cold mains — deliberately NOT just tank_litres.
+    A 250L tank at 60C mixed down to a 40C shower gives MORE than 250L of
+    usable water (250 * (60-10)/(40-10) = ~417L), since most of that
+    volume is topped up from the cold tap, not the tank itself. A tank at
+    or below target_temp gives zero: you can't mix hot water UP to a
+    higher temperature by adding cold. Simple energy-conservation mixing
+    (Vh*Th + Vc*Tc)/(Vh+Vc) = target, solved for total usable volume —
+    same water-physics reasoning as thermal_mass_from_litres above, no
+    fudge factor needed."""
+    if tank_temp <= target_temp or target_temp <= cold_mains_temp:
+        return 0.0
+    return tank_litres * (tank_temp - cold_mains_temp) / (target_temp - cold_mains_temp)
+
+
+def showers_available(usable_litres, litres_per_shower=40.0):
+    """A plain unit conversion — litres_per_shower is a rough UK-average
+    default (~8 minutes at ~5L/min), meant to be overridden with a site's
+    own real figure if known."""
+    return usable_litres / litres_per_shower if litres_per_shower > 0 else 0.0
+
+
 def anticipatory_target_curve(base_target, external_temp_curve, lookahead_steps=36,
                                sensitivity=0.3, max_adjust=2.0):
     """A plain weather-compensation curve only ever reacts to the

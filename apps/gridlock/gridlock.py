@@ -1162,20 +1162,33 @@ class GridLock(hass.Hass):
                         if self.ent_saving_events
                         and "_octoplus_saving_session_events" in self.ent_saving_events
                         else "octopus_energy/join_octoplus_power_down_session_event")
+        # available_events is supposed to already exclude anything in
+        # joined_events (the integration's own job), but this fires on
+        # every state change of ent_saving_events, and a lag between
+        # "join submitted" and the integration's next refresh removing it
+        # from available_events was enough to re-submit the join and
+        # re-notify for a session already joined moments earlier — cross-
+        # checking against joined_events here directly, rather than
+        # trusting available_events never overlaps, closes that gap.
+        joined_codes = {ev.get("code") for ev in
+                        self._attr_list(self.ent_saving_events, "joined_events")}
         for ev in self._attr_list(self.ent_saving_events, "available_events"):
             code = ev.get("code")
-            if code:
-                self.log(f"Saving Session {code} found - auto-enrolling")
-                self.call_service(
-                    join_service,
-                    target={"entity_id": self.ent_saving_events},
-                    event_code=code)
-                start = ev.get("start", "")
-                end = ev.get("end", "")
-                rate = ev.get("octopoints_per_kwh", "?")
-                plan_note = self._saving_session_plan_note(start, end)
-                self._notify("GridLock: Saving Session joined",
-                            f"Joined {start} – {end} at {rate} pts/kWh.{plan_note}")
+            if not code or code in joined_codes:
+                continue
+            self.log(f"Saving Session {code} found - auto-enrolling")
+            self.call_service(
+                join_service,
+                target={"entity_id": self.ent_saving_events},
+                event_code=code)
+            start = ev.get("start", "")
+            end = ev.get("end", "")
+            rate = ev.get("octopoints_per_kwh", "?")
+            plan_note = self._saving_session_plan_note(start, end)
+            self._notify("GridLock: Saving Session joined",
+                        f"Joined {start} – {end} at {rate} pts/kWh.{plan_note}")
+            self._log_decision("Saving Session joined",
+                              f"Joined {start} – {end} at {rate} pts/kWh")
 
     def _saving_session_plan_note(self, start, end):
         """Best-effort: solve a fresh plan and report how much battery
@@ -1775,6 +1788,13 @@ class GridLock(hass.Hass):
                 "control_entity": z.get("control_entity"),
                 "control_safety_min_temp": float(z.get("control_safety_min_temp", 45.0)),
                 "control_max_off_hours": float(z.get("control_max_off_hours", 6.0)),
+                # Usable-hot-water estimate — tank zones only (tank_litres
+                # is what makes it a tank rather than a room in the first
+                # place, see the mass branch above).
+                "tank_litres": float(z["tank_litres"]) if "tank_litres" in z else None,
+                "shower_temp_c": float(z.get("shower_temp_c", 40.0)),
+                "cold_mains_temp_c": float(z.get("cold_mains_temp_c", 10.0)),
+                "litres_per_shower": float(z.get("litres_per_shower", 40.0)),
                 "params": params}
 
     def _thermal_internal_temp(self, zone):
@@ -1939,6 +1959,12 @@ class GridLock(hass.Hass):
             for i, j in enumerate(range(per_slot - 1, len(trace), per_slot))]
 
         live_cop = self.get_float_state(zone["cop_entity"], None) if zone["cop_entity"] else None
+        usable_litres = showers = None
+        if zone["tank_litres"]:
+            usable_litres = core_thermal.usable_hot_water_litres(
+                internal_temp, zone["tank_litres"], zone["shower_temp_c"],
+                zone["cold_mains_temp_c"])
+            showers = core_thermal.showers_available(usable_litres, zone["litres_per_shower"])
         return {"name": zone["name"],
                 "current_temp": round(internal_temp, 2),
                 "target_temp": round(target_temp, 2),
@@ -1956,6 +1982,8 @@ class GridLock(hass.Hass):
                 "predicted_kwh_today_baseline": round(baseline_kwh_today, 2),
                 "predicted_cost_today": round(predicted_cost_today, 2),
                 "predicted_cost_today_baseline": round(baseline_cost_today, 2),
+                "usable_hot_water_litres": round(usable_litres, 1) if usable_litres is not None else None,
+                "showers_available": round(showers, 1) if showers is not None else None,
                 "forecast_data": forecast_data}
 
     def _thermal_pause_helper(self, zone_name):

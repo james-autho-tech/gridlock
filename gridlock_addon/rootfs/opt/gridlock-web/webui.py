@@ -1202,6 +1202,7 @@ function renderGridwarmControlCell(control) {
 }
 function renderThermalZoneTable(zones) {
   const anyControlled = zones.some(z => z.control);
+  const anyShowers = zones.some(z => z.showers_available != null);
   const rows = zones.map(z => `
     <tr>
       <td><span class="gl-legend-dot" style="background:${z._color}"></span>${esc(z.name)}${z.heating_on ? ' 🔥' : ''}</td>
@@ -1210,10 +1211,11 @@ function renderThermalZoneTable(zones) {
       <td class="num">${Number(z.cop).toFixed(2)}</td>
       <td class="num">£${Number(z.predicted_cost_today).toFixed(2)}</td>
       <td class="num" style="color:var(--dim)">£${Number(z.predicted_cost_today_baseline).toFixed(2)} fixed</td>
+      ${anyShowers ? `<td class="num">${z.showers_available != null ? `<span title="${Number(z.usable_hot_water_litres).toFixed(0)}L usable at your configured shower temperature">${Number(z.showers_available).toFixed(1)} showers</span>` : '—'}</td>` : ''}
       ${anyControlled ? `<td>${renderGridwarmControlCell(z.control)}</td>` : ''}
     </tr>`).join('');
   return `<div style="overflow-x:auto"><table class="gridlock-plan">
-    <tr><th>Zone</th><th>Now</th><th>Target</th><th>COP</th><th>Plan cost today</th><th>Fixed-target cost</th>${anyControlled ? '<th>Control</th>' : ''}</tr>
+    <tr><th>Zone</th><th>Now</th><th>Target</th><th>COP</th><th>Plan cost today</th><th>Fixed-target cost</th>${anyShowers ? '<th>Hot water</th>' : ''}${anyControlled ? '<th>Control</th>' : ''}</tr>
     ${rows}
   </table></div>`;
 }

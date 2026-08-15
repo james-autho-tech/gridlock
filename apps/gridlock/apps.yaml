@@ -346,6 +346,15 @@ gridlock:
   #       tank_litres: 150            # exact physics from here — no fudge factor needed, unlike heat_volume above
   #       hysteresis: 2.0
   #       hysteresis_off: 0.5
+  #       # Usable hot water estimate (dashboard only, doesn't affect the
+  #       # model) — a tank at target_temp_entity's own setpoint isn't the
+  #       # same as "full of usable hot water": mixing tank_litres down
+  #       # with cold mains to a comfortable shower temperature yields
+  #       # MORE than tank_litres if the tank's well above shower_temp_c,
+  #       # and drops toward zero as the tank cools toward shower_temp_c.
+  #       shower_temp_c: 40            # comfortable mixed shower temperature (default shown)
+  #       cold_mains_temp_c: 10        # UK mains cold-water temperature, roughly (default shown)
+  #       litres_per_shower: 40        # rough UK-average shower usage (default shown) — override with your own if known
   #       # Active control -- opt-in, this whole feature is off unless
   #       # control_entity is set. GridWarm will then actually write to
   #       # this switch each tick (on/off) based on its own plan, instead

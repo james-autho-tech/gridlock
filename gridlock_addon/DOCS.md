@@ -224,6 +224,18 @@ zone is listed explicitly under `gridwarm.zones` in `apps.yaml`, which has a
 fully-commented single-zone-plus-tank example. Set `gridwarm.active: false`,
 or leave the whole block out, to disable this entirely.
 
+A hot water tank zone (`tank_litres` set) also gets a usable-hot-water
+estimate on the GridWarm tab, shown as "X showers". This is deliberately
+not the same as "how full the tank is" — a tank at or below your configured
+shower temperature (`shower_temp_c`, default 40°C) has zero usable hot
+water no matter how many litres it holds, since you can't mix hot water UP
+to a higher temperature by adding cold, while a tank well above that
+temperature yields *more* usable litres than its own physical capacity,
+since most of a comfortable shower is topped up from the cold tap, not the
+tank. `cold_mains_temp_c` (default 10°C) and `litres_per_shower` (default
+40L) tune the conversion — override either with your own real numbers if
+you know them.
+
 Each individual zone can also be set `active: false` on its own — it's
 still predicted and shown on the dashboard as normal, just with the
 forecast-driven adjustment forced off, so it simply tracks whatever the

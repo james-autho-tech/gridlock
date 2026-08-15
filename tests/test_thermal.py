@@ -1,7 +1,8 @@
 from core.thermal import (ThermalParams, simulate, thermal_mass_from_volume,
                            thermal_mass_from_litres, AIR_WH_PER_M3_PER_C,
                            WATER_WH_PER_LITRE_PER_C, anticipatory_target_curve,
-                           decide_dhw_command)
+                           decide_dhw_command, usable_hot_water_litres,
+                           showers_available)
 
 
 def _room_params(**overrides):
@@ -195,3 +196,30 @@ def test_decide_dhw_command_off_duration_irrelevant_while_already_heating():
     # model already wants heating on.
     assert decide_dhw_command(True, 50.0, safety_min_temp=45.0,
                                off_duration_hours=100.0, max_off_hours=6.0) is True
+
+
+def test_usable_hot_water_exceeds_tank_litres_when_tank_is_well_above_target():
+    # 250L at 60C mixed down to a 40C shower with 10C mains: most of the
+    # usable volume is topped up from the cold tap, not the tank itself,
+    # so this is meant to come out well above the tank's own 250L.
+    usable = usable_hot_water_litres(60.0, 250.0, target_temp=40.0, cold_mains_temp=10.0)
+    assert usable == 250.0 * 50.0 / 30.0
+    assert usable > 250.0
+
+
+def test_usable_hot_water_is_zero_at_or_below_target_temp():
+    # The user's own example: 250L at 20C is nominally "full" but you
+    # can't mix hot water UP to a higher temperature by adding more cold.
+    assert usable_hot_water_litres(20.0, 250.0, target_temp=40.0, cold_mains_temp=10.0) == 0.0
+    assert usable_hot_water_litres(40.0, 250.0, target_temp=40.0, cold_mains_temp=10.0) == 0.0
+
+
+def test_usable_hot_water_scales_down_as_tank_cools_toward_target():
+    hot = usable_hot_water_litres(55.0, 250.0, target_temp=40.0, cold_mains_temp=10.0)
+    cooler = usable_hot_water_litres(45.0, 250.0, target_temp=40.0, cold_mains_temp=10.0)
+    assert hot > cooler > 0.0
+
+
+def test_showers_available_is_a_plain_unit_conversion():
+    assert showers_available(400.0, litres_per_shower=40.0) == 10.0
+    assert showers_available(0.0, litres_per_shower=40.0) == 0.0

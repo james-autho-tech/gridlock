@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.14.0 - 2026-08-15
+
+### Fix
+- Saving Session auto-join could repeatedly re-submit and re-notify for a session already joined moments earlier — `available_events` isn't guaranteed to have dropped it yet by the time the next state-change fires. Now cross-checked against `joined_events` directly before joining or notifying
+- Saving Session joins now also show up in GridLock's own persistent decision log (the dashboard's Log tab), not just a dismissible HA notification that's easy to lose
+
+### Improvement
+- GridWarm's Hot Water Tank zone now estimates usable hot water as "X showers", not just raw tank temperature — a tank at or below your shower temperature has zero usable hot water regardless of how full it is (can't mix hot water UP with cold), while a tank well above it yields more usable litres than its own physical capacity, since most of a shower is topped up from the cold tap. New optional `shower_temp_c` / `cold_mains_temp_c` / `litres_per_shower` zone config, sensible UK defaults if left unset
+
 ## 3.13.5 - 2026-08-11
 
 ### Fix
