@@ -485,6 +485,7 @@ class GridLock(hass.Hass):
         self._prev_storm_active = False
         self._prev_ev_protection = False
         self._prev_off_grid = False
+        self._prev_storm_reserve_sufficient = False
 
         # Failsafe / deadman switch — HA-link and Solcast-link liveness,
         # tracked every tick; see core/failsafe.py for the >15-minute
@@ -2560,6 +2561,24 @@ class GridLock(hass.Hass):
                 ev_concurrent_charge_kw=self.ev_concurrent_charge_kw, ev_active=ev_active,
                 usable_kwh=usable_kwh, expected_load_kwh=expected_load_kwh)
 
+        # Logged only on the transition into/out of this state, not every
+        # tick it remains true — logging it unconditionally each tick (as
+        # first shipped) permanently broke _log_decision's own dedup for
+        # BOTH this and whatever the normal plan action logs right after
+        # it, since dedup only ever compares against the single immediately
+        # preceding entry and these two calls kept alternating. off_grid
+        # excluded: off-grid+storm always holds regardless of reserve (see
+        # below), so there's nothing to announce standing down from.
+        reserve_sufficient_now = (bool(storm_decision) and not storm_decision["override"]
+                                  and not off_grid)
+        if reserve_sufficient_now and not self._prev_storm_reserve_sufficient:
+            self._log_decision(
+                "Storm Watch — Reserve Sufficient",
+                f"Weather alert ({storm}): already enough charge banked for the "
+                "estimated outage — continuing the normal plan instead of "
+                "holding/charging")
+        self._prev_storm_reserve_sufficient = reserve_sufficient_now
+
         if off_grid and storm:
             # Always the plain holding label here regardless of what
             # storm_decision says — off-grid means there's genuinely no
@@ -2637,11 +2656,11 @@ class GridLock(hass.Hass):
                            f"Weather alert ({storm}): holding charge, "
                            "exports suspended", plan_html)
                 return
-            self._log_decision(
-                "Storm Watch — Reserve Sufficient",
-                f"Weather alert ({storm}): already enough charge banked for an "
-                f"estimated {outage_hours:.1f}h outage — continuing the normal "
-                "plan instead of holding/charging")
+            # Reserve sufficient: already logged (once, on the transition
+            # into this state) further up — nothing more to do here, just
+            # fall through to the normal price-optimised action below,
+            # which logs its own decision exactly as it would with no
+            # storm active at all.
 
         # --- Saving session: force export ---
         if session and soc0 > self.floor_soc + 5:

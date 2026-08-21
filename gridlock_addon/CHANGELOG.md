@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.16.1 - 2026-08-16
+
+### Fix
+- "Storm Watch — Reserve Sufficient" spammed a fresh decision-log entry every 5-minute tick instead of only on genuine change — the reason text embedded the estimated outage hours, which ticks down constantly, so it never matched the previous entry; on top of that, logging it as a second decision alongside whatever the normal plan action already logs permanently broke dedup for both, since dedup only compares against the single immediately-preceding entry. Now logged once, on the transition into the state, exactly like every other Storm Watch/off-grid notification
+
 ## 3.16.0 - 2026-08-16
 
 ### Improvement
