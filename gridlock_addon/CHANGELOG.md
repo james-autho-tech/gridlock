@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.15.2 - 2026-08-16
+
+### Fix
+- Storm Watch's "Holding" state left the battery's charge-rate limit at its full configured value instead of zero — confirmed live: SoC 100%, state already showing "Storm Watch — Holding", but the inverter kept pulling ~1.7kW of grid import straight into an already-full battery, because "Maximum Self Consumption" mode doesn't itself know there's no headroom left, only the commanded rate limit does. Holding now genuinely holds: no further charging, regardless of EV state
+
 ## 3.15.1 - 2026-08-16
 
 ### Improvement

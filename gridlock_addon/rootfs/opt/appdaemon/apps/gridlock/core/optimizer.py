@@ -573,9 +573,16 @@ def storm_decision(soc0_pct, *, storm_target_soc, discharge_kw, charge_kw,
     before, this drives the live control command directly rather than
     the 48h plan."""
     disch = 0.0 if ev_active else discharge_kw
-    chg = ev_concurrent_charge_kw if ev_active else charge_kw
     if soc0_pct < storm_target_soc - 1:
+        chg = ev_concurrent_charge_kw if ev_active else charge_kw
         return {"state": "Storm Watch — Charging", "disch_kw": disch,
                 "charge_kw": chg, "charging": True}
+    # Once at/above target there's nothing left to charge TOWARD — holding
+    # means genuinely holding, not "cap discharge but leave a nonzero
+    # charge-rate allowance in place." Confirmed live: SoC 100%, state
+    # already "Storm Watch — Holding", and the inverter was still pulling
+    # ~1.7kW of grid import straight into an already-full battery, because
+    # "Maximum Self Consumption" mode doesn't itself know the battery has
+    # nowhere left to put that charge — only the commanded rate limit does.
     return {"state": "Storm Watch — Holding", "disch_kw": disch,
-            "charge_kw": chg, "charging": False}
+            "charge_kw": 0.0, "charging": False}

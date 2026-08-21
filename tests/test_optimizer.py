@@ -682,11 +682,29 @@ def test_storm_override_charges_regardless_of_price():
 
 
 def test_storm_override_holds_once_target_reached():
+    # A real install hit this live: SoC 100%, state already "Storm Watch —
+    # Holding", but the inverter kept pulling ~1.7kW of grid import
+    # straight into an already-full battery, because holding still left a
+    # nonzero charge-rate allowance in place from the charging phase.
+    # Holding must mean genuinely holding: no further charging allowed.
     decision = optimizer.storm_decision(
         soc0_pct=100.0, storm_target_soc=100.0, discharge_kw=10.0,
         charge_kw=10.0, ev_concurrent_charge_kw=5.0, ev_active=False)
     assert decision["charging"] is False
     assert decision["state"] == "Storm Watch — Holding"
+    assert decision["charge_kw"] == 0.0
+
+
+def test_storm_override_holds_charge_kw_zero_even_with_ev_active():
+    # Holding means "nothing left to charge toward" regardless of EV —
+    # the ev_active branch only matters while still actively charging
+    # UP to the target (a shared-circuit rate makes sense there), not
+    # once already at/above it.
+    decision = optimizer.storm_decision(
+        soc0_pct=100.0, storm_target_soc=100.0, discharge_kw=10.0,
+        charge_kw=10.0, ev_concurrent_charge_kw=5.0, ev_active=True)
+    assert decision["charge_kw"] == 0.0
+    assert decision["disch_kw"] == 0.0
 
 
 def test_storm_override_ev_active_clamps_discharge_zero():
