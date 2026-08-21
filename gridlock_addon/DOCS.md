@@ -367,6 +367,13 @@ panel for the SoH sensors this is meant to weigh against.
 - `storm_watch_entity` / `storm_watch_target_soc` — MeteoAlarm-driven
   override: charge to target and hold, no exports, regardless of
   price, while an alert matching the configured severity is active.
+  Stands down instead if the battery already has enough banked to
+  cover the estimated outage — SSEN's own estimated restoration time
+  when the trigger is a real SSEN outage, otherwise `storm_fallback_hours`
+  (default 10) — in which case the normal plan runs as if there were no
+  storm at all (still shown as "Active", it just isn't overriding
+  anything for that slot). No safety margin added on top of the
+  estimate: exactly enough is treated as enough, by design.
 - `ssen_postcode` — enables SSEN Power Track outage polling directly
   (no HA sensor needed); leave commented out to disable it.
 - `grid_connection_status_entity` — Sigenergy's own "grid connection

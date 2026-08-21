@@ -565,18 +565,34 @@ def solve(slots, soc0_pct, cfg, *, today_date=None):
 
 
 def storm_decision(soc0_pct, *, storm_target_soc, discharge_kw, charge_kw,
-                    ev_concurrent_charge_kw, ev_active):
+                    ev_concurrent_charge_kw, ev_active,
+                    usable_kwh=None, expected_load_kwh=None):
     """Pure port of the live Storm Watch override — charge to
     storm_target_soc regardless of price/peak-block, then hold (no
     exports). Deliberately not run through the LP: storm duration is
     unpredictable (weather alerts have no fixed end time), so, same as
     before, this drives the live control command directly rather than
-    the 48h plan."""
+    the 48h plan.
+
+    usable_kwh/expected_load_kwh (optional, both required together to take
+    effect): energy already banked above the normal floor vs. what's
+    forecast to be needed over the estimated outage window. When the
+    reserve already covers it outright (no safety margin added — an
+    explicit choice, not an oversight: the estimate itself, not an
+    arbitrary buffer on top, is what's meant to decide this), Storm Watch
+    has nothing left to protect against for this slot — "override": False
+    tells the caller to run its own normal price-optimised action instead
+    of forcing charge/hold against a risk that's already covered."""
+    if (usable_kwh is not None and expected_load_kwh is not None
+            and usable_kwh >= expected_load_kwh):
+        disch = 0.0 if ev_active else discharge_kw
+        return {"state": "Storm Watch — Reserve Sufficient", "disch_kw": disch,
+                "charge_kw": 0.0, "charging": False, "override": False}
     disch = 0.0 if ev_active else discharge_kw
     if soc0_pct < storm_target_soc - 1:
         chg = ev_concurrent_charge_kw if ev_active else charge_kw
         return {"state": "Storm Watch — Charging", "disch_kw": disch,
-                "charge_kw": chg, "charging": True}
+                "charge_kw": chg, "charging": True, "override": True}
     # Once at/above target there's nothing left to charge TOWARD — holding
     # means genuinely holding, not "cap discharge but leave a nonzero
     # charge-rate allowance in place." Confirmed live: SoC 100%, state
@@ -585,4 +601,4 @@ def storm_decision(soc0_pct, *, storm_target_soc, discharge_kw, charge_kw,
     # "Maximum Self Consumption" mode doesn't itself know the battery has
     # nowhere left to put that charge — only the commanded rate limit does.
     return {"state": "Storm Watch — Holding", "disch_kw": disch,
-            "charge_kw": 0.0, "charging": False}
+            "charge_kw": 0.0, "charging": False, "override": True}

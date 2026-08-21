@@ -418,6 +418,12 @@ class GridLock(hass.Hass):
             else:
                 self.storm_sources.append((item, default_sev))
         self.storm_target_soc = self.cfg.storm_target_soc
+        # Only used when the current storm trigger carries no estimated
+        # restoration time of its own (a weather alert, or the manual
+        # override) — an SSEN fault's own estimatedRestorationTimeUtc is
+        # always preferred when one's available (see
+        # _estimated_outage_hours), since it's real data rather than a guess.
+        self.storm_fallback_hours = float(a.get("storm_fallback_hours", 10.0))
 
         # Main fuse (Amps) load management — a pure live safety override,
         # not part of the LP optimiser at all: the optimizer has no
@@ -1366,6 +1372,32 @@ class GridLock(hass.Hass):
             return None
         state = self.get_state(self.ent_grid_connection_status)
         return state if state and "off grid" in str(state).lower() else None
+
+    def _estimated_outage_hours(self, now):
+        """SSEN's own estimated restoration time for the current local
+        outage(s), if any — real data, not a guess — taking the latest
+        among multiple concurrent faults so a second, longer-running fault
+        isn't silently ignored. Falls back to storm_fallback_hours when
+        there's no such estimate at all (a weather-alert or manual-override
+        trigger neither carry one) or it can't be parsed."""
+        times = []
+        for f in self.ssen_state.get("faults", []):
+            r = f.get("restore")
+            if not r:
+                continue
+            try:
+                times.append(self._iso(r))
+            except (ValueError, TypeError):
+                continue
+        if not times:
+            return self.storm_fallback_hours
+        hours = (max(times) - now).total_seconds() / 3600.0
+        return hours if hours > 0 else self.storm_fallback_hours
+
+    def _expected_load_kwh(self, now, hours):
+        n_slots = max(1, round(hours * 2))  # half-hour slots
+        return sum(self.load_provider.load_kwh(now + timedelta(minutes=30 * i))
+                   for i in range(n_slots))
 
     def storm_active(self):
         if self.get_state("input_boolean.gridlock_storm_watch") == "on":
@@ -2517,18 +2549,24 @@ class GridLock(hass.Hass):
         # just inside a "storm and not off_grid" branch — both the label
         # below and the apply() logic further down need it either way.
         storm_decision = None
+        outage_hours = None
         if storm:
+            outage_hours = self._estimated_outage_hours(now)
+            expected_load_kwh = self._expected_load_kwh(now, outage_hours)
+            usable_kwh = max(0.0, soc0 - self.floor_soc) / 100.0 * self.cfg.battery_kwh
             storm_decision = core_optimizer.storm_decision(
                 soc0, storm_target_soc=self.storm_target_soc,
                 discharge_kw=self.discharge_kw, charge_kw=self.charge_kw,
-                ev_concurrent_charge_kw=self.ev_concurrent_charge_kw, ev_active=ev_active)
+                ev_concurrent_charge_kw=self.ev_concurrent_charge_kw, ev_active=ev_active,
+                usable_kwh=usable_kwh, expected_load_kwh=expected_load_kwh)
 
         if off_grid and storm:
-            # Storm Watch's own "hold, no export" state already reads
-            # better than a generic off-grid label once there's a real
-            # storm reason behind it — kept as the primary label, with
-            # off-grid folded in as a suffix rather than replaced outright.
-            live_label = f"{storm_decision['state']} (Off-Grid)"
+            # Always the plain holding label here regardless of what
+            # storm_decision says — off-grid means there's genuinely no
+            # grid to export TO at all, which "reserve is already
+            # sufficient" doesn't change, so the apply() logic below never
+            # honours storm_decision's override flag in this combination.
+            live_label = "Storm Watch — Holding (Off-Grid)"
         elif off_grid:
             live_label = "Off-Grid — Self Consumption"
         elif storm:
@@ -2578,7 +2616,13 @@ class GridLock(hass.Hass):
                        plan_html)
             return
 
-        # --- Storm Watch overrides everything else: charge & hold ---
+        # --- Storm Watch overrides everything else: charge & hold, unless
+        #     there's already enough banked to cover the estimated outage
+        #     (see storm_decision's usable_kwh/expected_load_kwh), in
+        #     which case it stands down and the normal price-optimised
+        #     action below runs exactly as if there were no storm at all —
+        #     Storm Watch still shows Active, it just isn't overriding
+        #     anything right now. ---
         if storm:
             if storm_decision["charging"]:
                 self.apply(self.mode_charge, storm_decision["disch_kw"], storm_decision["charge_kw"],
@@ -2586,12 +2630,18 @@ class GridLock(hass.Hass):
                            f"Weather alert ({storm}): charging to "
                            f"{self.storm_target_soc:.0f}% regardless of rates",
                            plan_html)
-            else:
+                return
+            if storm_decision["override"]:
                 self.apply(self.mode_eco, storm_decision["disch_kw"], storm_decision["charge_kw"],
                            "Storm Watch — Holding",
                            f"Weather alert ({storm}): holding charge, "
                            "exports suspended", plan_html)
-            return
+                return
+            self._log_decision(
+                "Storm Watch — Reserve Sufficient",
+                f"Weather alert ({storm}): already enough charge banked for an "
+                f"estimated {outage_hours:.1f}h outage — continuing the normal "
+                "plan instead of holding/charging")
 
         # --- Saving session: force export ---
         if session and soc0 > self.floor_soc + 5:

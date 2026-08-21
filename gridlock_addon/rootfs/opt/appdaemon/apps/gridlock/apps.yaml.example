@@ -253,6 +253,15 @@ gridlock:
     - entity: binary_sensor.meteoalarm      # Met Office red warnings only
       severity: ["Extreme"]
   storm_watch_target_soc: 100
+  # If already enough battery is banked to cover the estimated outage,
+  # Storm Watch stands down for that slot instead of forcing charge/hold —
+  # the normal price-optimised plan runs as if there were no storm at all
+  # (still shows "Active" in the header, it just isn't overriding
+  # anything). SSEN's own estimated restoration time is used when the
+  # trigger is a real SSEN outage (real data, not a guess); this fallback
+  # only applies to triggers that carry no such estimate at all (a
+  # weather alert, or the manual override).
+  storm_fallback_hours: 10
 
   # --- Main fuse load management ---
   # Defaults ON at 100A (standard UK single-phase domestic supply) —

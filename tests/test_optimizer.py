@@ -713,3 +713,37 @@ def test_storm_override_ev_active_clamps_discharge_zero():
         charge_kw=10.0, ev_concurrent_charge_kw=5.0, ev_active=True)
     assert decision["disch_kw"] == 0.0
     assert decision["charge_kw"] == 5.0
+
+
+def test_storm_override_stands_down_when_reserve_already_covers_the_outage():
+    # The user's own example: Storm Watch active, but already enough
+    # battery banked to get through the estimated outage — carry on with
+    # the normal plan (including export, if that's what it wants) instead
+    # of forcing charge/hold against a risk that's already covered.
+    decision = optimizer.storm_decision(
+        soc0_pct=40.0, storm_target_soc=100.0, discharge_kw=10.0,
+        charge_kw=10.0, ev_concurrent_charge_kw=5.0, ev_active=False,
+        usable_kwh=6.0, expected_load_kwh=5.0)
+    assert decision["override"] is False
+    assert decision["charging"] is False
+    assert decision["state"] == "Storm Watch — Reserve Sufficient"
+
+
+def test_storm_override_still_charges_when_reserve_falls_short_of_the_outage():
+    decision = optimizer.storm_decision(
+        soc0_pct=40.0, storm_target_soc=100.0, discharge_kw=10.0,
+        charge_kw=10.0, ev_concurrent_charge_kw=5.0, ev_active=False,
+        usable_kwh=4.0, expected_load_kwh=5.0)
+    assert decision["override"] is True
+    assert decision["charging"] is True
+    assert decision["state"] == "Storm Watch — Charging"
+
+
+def test_storm_override_reserve_check_requires_no_safety_margin():
+    # Explicit choice, not an oversight: exactly enough is enough, no
+    # buffer added on top of the estimate itself.
+    decision = optimizer.storm_decision(
+        soc0_pct=40.0, storm_target_soc=100.0, discharge_kw=10.0,
+        charge_kw=10.0, ev_concurrent_charge_kw=5.0, ev_active=False,
+        usable_kwh=5.0, expected_load_kwh=5.0)
+    assert decision["override"] is False

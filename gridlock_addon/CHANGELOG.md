@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.16.0 - 2026-08-16
+
+### Improvement
+- Storm Watch now stands down instead of forcing charge/hold when there's already enough battery banked to cover the estimated outage — uses SSEN's own estimated restoration time for a real SSEN-triggered outage, falling back to a configurable `storm_fallback_hours` (default 10) for triggers with no such estimate (weather alerts, manual override). When reserve is sufficient the normal price-optimised plan runs exactly as it would with no storm active at all, including export if that's what it calculates as best — Storm Watch still shows "Active", it just isn't overriding anything for that slot. No safety margin added on top of the estimate, by explicit choice
+
 ## 3.15.2 - 2026-08-16
 
 ### Fix
