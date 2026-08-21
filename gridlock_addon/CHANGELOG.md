@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.15.1 - 2026-08-16
+
+### Improvement
+- Off-grid no longer blindly overrides Storm Watch — when both are active at once (usually the same real event), Storm Watch's own "Holding" state and reason stay the primary label, with off-grid folded in as context, since it already does exactly what's needed (no export, protect the held charge). Storm Watch's "charge toward target" behaviour is still skipped while genuinely off-grid, since there's no grid to charge from. The plain "Off-Grid — Self Consumption" label now only appears for a real unexpected outage with no storm/SSEN signal at all
+
 ## 3.15.0 - 2026-08-16
 
 ### Improvement

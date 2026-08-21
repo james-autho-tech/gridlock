@@ -2513,13 +2513,25 @@ class GridLock(hass.Hass):
                         "is charging concurrently.")
         self._prev_ev_protection = ev_protection_now
 
-        if off_grid:
-            live_label = "Off-Grid — Self Consumption"
-        elif storm:
+        # Computed whenever storm is active regardless of off_grid, not
+        # just inside a "storm and not off_grid" branch — both the label
+        # below and the apply() logic further down need it either way.
+        storm_decision = None
+        if storm:
             storm_decision = core_optimizer.storm_decision(
                 soc0, storm_target_soc=self.storm_target_soc,
                 discharge_kw=self.discharge_kw, charge_kw=self.charge_kw,
                 ev_concurrent_charge_kw=self.ev_concurrent_charge_kw, ev_active=ev_active)
+
+        if off_grid and storm:
+            # Storm Watch's own "hold, no export" state already reads
+            # better than a generic off-grid label once there's a real
+            # storm reason behind it — kept as the primary label, with
+            # off-grid folded in as a suffix rather than replaced outright.
+            live_label = f"{storm_decision['state']} (Off-Grid)"
+        elif off_grid:
+            live_label = "Off-Grid — Self Consumption"
+        elif storm:
             live_label = storm_decision["state"]
         elif session and soc0 > self.floor_soc + 5:
             live_label = "Saving Session Export"
@@ -2541,18 +2553,27 @@ class GridLock(hass.Hass):
                        attributes={"friendly_name": "GridLock Target SoC",
                                    "unit_of_measurement": "%"})
 
-        # --- Off-grid overrides EVERYTHING, including Storm Watch: no
-        #     grid exists to trade against, so there's nothing to plan
-        #     for beyond running the inverter's own self-consumption
-        #     logic on whatever PV/battery is actually available. Storm
-        #     Watch's "charge & hold" still assumes a grid to charge
-        #     FROM; that assumption is simply false once actually
-        #     islanded, hence this check comes first. ---
+        # --- Off-grid + Storm Watch together: Storm Watch's own "hold, no
+        #     export" behaviour already does exactly what off-grid needs,
+        #     so reuse it rather than a separate generic command — but
+        #     never its CHARGING branch, which specifically requires
+        #     drawing from the grid, impossible while actually islanded. ---
+        if off_grid and storm:
+            self.apply(self.mode_eco, storm_decision["disch_kw"], storm_decision["charge_kw"],
+                       "Storm Watch — Holding (Off-Grid)",
+                       f"Off-grid ({off_grid}) during a storm alert ({storm}): holding "
+                       "charge, exports suspended, grid-charging impossible while islanded",
+                       plan_html)
+            return
+
+        # --- Off-grid on its own (no storm signal) overrides everything:
+        #     no grid exists to trade against, so there's nothing to plan
+        #     for beyond running the inverter's own self-consumption logic
+        #     on whatever PV/battery is actually available. ---
         if off_grid:
-            cause = f" (likely cause: {storm})" if storm else ""
             self.apply(self.mode_eco, self.discharge_kw, self.charge_kw,
                        "Off-Grid — Self Consumption",
-                       f"Grid connection status: {off_grid}{cause} — no grid to trade "
+                       f"Grid connection status: {off_grid} — no grid to trade "
                        "against, running on PV/battery only until it returns",
                        plan_html)
             return
