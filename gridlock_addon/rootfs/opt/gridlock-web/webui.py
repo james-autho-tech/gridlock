@@ -135,6 +135,7 @@ def build_status():
     decision_log = get("sensor.gridlock_decision_log") or {}
     solar = get("sensor.gridlock_solar_forecast") or {}
     storm = get("sensor.gridlock_storm_status") or {}
+    grid_conn = get("sensor.gridlock_grid_connection")
     load_mgmt_raw = get("sensor.gridlock_load_management")
     carbon = get("sensor.gridlock_carbon_intensity") or {}
     ssen = get("sensor.gridlock_ssen_local_outages") or {}
@@ -237,6 +238,11 @@ def build_status():
         } if load_mgmt_raw else None),
         "storm_state": storm.get("state", "Clear"),
         "storm_reason": storm.get("attributes", {}).get("reason") or "No active alerts",
+        # None (not "On Grid") when the sensor was never discovered at
+        # all — that's how the header pill knows to hide itself rather
+        # than claim "On Grid" for an install with no way to actually know.
+        "grid_state": grid_conn.get("state") if grid_conn else None,
+        "grid_reason": (grid_conn or {}).get("attributes", {}).get("raw_state") or "",
         "ssen_count": ssen.get("state", "0"),
         "ssen_planned": denudge(ssen.get("attributes", {}).get("planned", 0)),
         "ssen_severe": bool(ssen.get("attributes", {}).get("network_severe_weather")),
@@ -725,11 +731,16 @@ function renderHeaderRight(d) {
     : `<span style="color:var(--dim)">No weather entity found</span>`;
   const solarBand = Number(d.solar_today_kwh) >= 20 ? 'High' : Number(d.solar_today_kwh) >= 8 ? 'Medium' : 'Low';
   const stormActive = d.storm_state === 'Active';
+  const offGrid = d.grid_state === 'Off Grid';
+  const gridPill = d.grid_state
+    ? `<span class="gl-storm-pill ${offGrid ? 'active' : 'clear'}" title="${esc(d.grid_reason)}">${offGrid ? '🔌 OFF GRID' : '🟢 On Grid'}</span>`
+    : '';
   document.getElementById('gl-nav-right').innerHTML = `
     <div class="gl-segmented">${seg}</div>
     <div class="gl-weather">${weatherHtml}</div>
     <span class="gl-solar-pill" style="color:var(--amber)">☀️ Solar: ${Number(d.solar_today_kwh).toFixed(1)} kWh (${solarBand})</span>
     <span class="gl-storm-pill ${stormActive ? 'active' : 'clear'}" title="${esc(d.storm_reason)}">${stormActive ? '🌩️ Storm Watch: Active' : '🟢 Storm Watch: Clear'}</span>
+    ${gridPill}
   `;
 }
 function priceClass(pence, cheapP) {

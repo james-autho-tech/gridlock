@@ -129,6 +129,18 @@ class GridLock(hass.Hass):
         self.ent_disch_limit = a["sigen_discharge_limit"]
         self.ent_charge_limit = a["sigen_charge_limit"]
         self.ent_soc = a["sigen_soc"]
+        # Same device as ent_mode (Sigenergy's own "grid connection
+        # status" sensor — reads e.g. "Off Grid (Auto)" when the inverter
+        # has islanded) — derived the same stem-matching way import/
+        # export siblings are, rather than a second hardcoded device slug.
+        # Optional: only used to force safe self-consumption during a
+        # genuine outage, degrades to "never off-grid" if not found.
+        self.ent_grid_connection_status = (
+            a.get("grid_connection_status_entity")
+            or self.overrides.get("grid_connection_status_entity_override")
+            or self.registry.find_sibling(
+                self.registry.mpan_stem(self.ent_mode, "_remote_ems_control_mode") or "",
+                "sensor", ["_grid_connection_status"]))
 
         # Inputs
         self.ent_ev = (a.get("ev_charging") or self.overrides.get("ev_charging_override")
@@ -466,6 +478,7 @@ class GridLock(hass.Hass):
         self.notify_service = a.get("notify_service")
         self._prev_storm_active = False
         self._prev_ev_protection = False
+        self._prev_off_grid = False
 
         # Failsafe / deadman switch — HA-link and Solcast-link liveness,
         # tracked every tick; see core/failsafe.py for the >15-minute
@@ -1341,6 +1354,19 @@ class GridLock(hass.Hass):
                                    "index": current["index"] if current else None,
                                    "forecast_data": curve})
 
+    def grid_connection_off(self):
+        """Sigenergy's own "grid connection status" sensor reads e.g. "Off
+        Grid (Auto)" once the inverter has actually islanded — a direct,
+        authoritative signal, unlike Storm Watch's SSEN-outage-based
+        inference, which only predicts a risk rather than confirming the
+        site is genuinely disconnected right now. Substring match rather
+        than an exact string, since "(Auto)" vs "(Manual)" variants exist
+        and neither changes what GridLock should do about it."""
+        if not self.ent_grid_connection_status:
+            return None
+        state = self.get_state(self.ent_grid_connection_status)
+        return state if state and "off grid" in str(state).lower() else None
+
     def storm_active(self):
         if self.get_state("input_boolean.gridlock_storm_watch") == "on":
             return "manual override"
@@ -2215,6 +2241,17 @@ class GridLock(hass.Hass):
                                    "safe_charge_kw": round(safe_charge_kw, 2),
                                    "load_state": load_mgmt_state or "normal"})
 
+    def publish_grid_connection_status(self):
+        if not self.ent_grid_connection_status:
+            return
+        off = self.grid_connection_off()
+        self.set_state("sensor.gridlock_grid_connection",
+                       state="Off Grid" if off else "On Grid",
+                       attributes={"friendly_name": "GridLock Grid Connection",
+                                   "icon": ("mdi:transmission-tower-off" if off
+                                            else "mdi:transmission-tower"),
+                                   "raw_state": off or "connected"})
+
     def publish_storm_status(self):
         reason = self.storm_active()
         self.set_state("sensor.gridlock_storm_status",
@@ -2414,6 +2451,7 @@ class GridLock(hass.Hass):
         self._update_savings(now)
         self.publish_solar_forecast(now)
         self.publish_storm_status()
+        self.publish_grid_connection_status()
         self._publish_thermal_forecast(now)
 
         slots = self.build_slots(now)
@@ -2441,6 +2479,24 @@ class GridLock(hass.Hass):
         ev_active = bool(self.ent_ev) and self.get_state(self.ent_ev) == "on"
         session = self.active_saving_session(now)
         storm = self.storm_active()
+        off_grid = self.grid_connection_off()
+
+        if bool(off_grid) != self._prev_off_grid:
+            # Storm Watch is a separate, prediction-based signal (SSEN
+            # outage feeds, weather alerts) that can easily be the actual
+            # cause of a real islanding event — folded into the notification
+            # as a likely-cause hint when both are true at once, rather
+            # than reporting two disconnected-sounding alerts for what's
+            # probably the same real event.
+            cause = f" Likely cause: {storm}." if storm else ""
+            if off_grid:
+                self._notify("GridLock: Off-grid detected",
+                            f"Grid connection status: {off_grid}.{cause} Forcing Maximum "
+                            "Self Consumption until grid connection returns.")
+            else:
+                self._notify("GridLock: Grid connection restored",
+                            "Back to normal cost-optimised planning.")
+        self._prev_off_grid = bool(off_grid)
 
         if bool(storm) != self._prev_storm_active:
             if storm:
@@ -2457,7 +2513,9 @@ class GridLock(hass.Hass):
                         "is charging concurrently.")
         self._prev_ev_protection = ev_protection_now
 
-        if storm:
+        if off_grid:
+            live_label = "Off-Grid — Self Consumption"
+        elif storm:
             storm_decision = core_optimizer.storm_decision(
                 soc0, storm_target_soc=self.storm_target_soc,
                 discharge_kw=self.discharge_kw, charge_kw=self.charge_kw,
@@ -2483,7 +2541,23 @@ class GridLock(hass.Hass):
                        attributes={"friendly_name": "GridLock Target SoC",
                                    "unit_of_measurement": "%"})
 
-        # --- Storm Watch overrides everything: charge & hold ---
+        # --- Off-grid overrides EVERYTHING, including Storm Watch: no
+        #     grid exists to trade against, so there's nothing to plan
+        #     for beyond running the inverter's own self-consumption
+        #     logic on whatever PV/battery is actually available. Storm
+        #     Watch's "charge & hold" still assumes a grid to charge
+        #     FROM; that assumption is simply false once actually
+        #     islanded, hence this check comes first. ---
+        if off_grid:
+            cause = f" (likely cause: {storm})" if storm else ""
+            self.apply(self.mode_eco, self.discharge_kw, self.charge_kw,
+                       "Off-Grid — Self Consumption",
+                       f"Grid connection status: {off_grid}{cause} — no grid to trade "
+                       "against, running on PV/battery only until it returns",
+                       plan_html)
+            return
+
+        # --- Storm Watch overrides everything else: charge & hold ---
         if storm:
             if storm_decision["charging"]:
                 self.apply(self.mode_charge, storm_decision["disch_kw"], storm_decision["charge_kw"],

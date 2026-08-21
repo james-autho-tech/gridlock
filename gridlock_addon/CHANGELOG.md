@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.15.0 - 2026-08-16
+
+### Improvement
+- New off-grid override: Sigenergy's own "grid connection status" sensor (auto-discovered off the same device as `sigen_mode`) forces Maximum Self Consumption the moment the inverter reports actually being islanded — takes priority over everything, including Storm Watch, since there's no grid left to plan or trade against at all. Notifies and logs on both the transition into and out of it, folding in Storm Watch's own reason as a likely-cause hint when both fire together (usually the same real event). New "OFF GRID" / "On Grid" pill in the dashboard header, shown only once the sensor is found
+
 ## 3.14.1 - 2026-08-15
 
 ### Fix

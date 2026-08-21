@@ -369,6 +369,15 @@ panel for the SoH sensors this is meant to weigh against.
   price, while an alert matching the configured severity is active.
 - `ssen_postcode` — enables SSEN Power Track outage polling directly
   (no HA sensor needed); leave commented out to disable it.
+- `grid_connection_status_entity` — Sigenergy's own "grid connection
+  status" sensor (auto-discovered off the same device as `sigen_mode` if
+  not set). Overrides EVERYTHING else, including Storm Watch, the moment
+  the inverter reports actually being off-grid: forces Maximum Self
+  Consumption and stops planning against a grid that isn't there. Storm
+  Watch is a prediction (SSEN outage feeds, weather alerts); this is a
+  direct hardware confirmation, so it takes priority when both fire for
+  what's probably the same real event. Shown as its own pill in the
+  dashboard header once discovered.
 
 See the fully-commented `apps.yaml.example` shipped in the add-on
 image for every option, including hardware entity overrides and the
