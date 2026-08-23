@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.18.2 - 2026-08-16
+
+### Fix
+- Agile tariff comparison required the polled rate data to cover the *entire* 48h comparison horizon before showing up at all — Agile only ever publishes ~1 day ahead (tomorrow's rates land around 4pm), so this silently failed almost all day, every day, confirmed live. Now compares over whatever prefix of the horizon actually has published rates, labelled with how many hours that covers, instead of requiring full coverage that's rarely possible
+
 ## 3.18.1 - 2026-08-16
 
 ### Docs

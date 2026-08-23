@@ -1850,25 +1850,39 @@ class GridLock(hass.Hass):
         # export tariff): real, live half-hourly rates from Octopus's
         # public API, not a flat+windows approximation like the static
         # tariffs above — Agile's whole point is that it doesn't have a
-        # fixed daily pattern. Skipped gracefully if the polled data
-        # doesn't yet cover the full comparison horizon (e.g. tomorrow's
-        # rates not published until ~4pm today) rather than compare
-        # against a partially-missing curve.
+        # fixed daily pattern.
+        #
+        # Agile only ever publishes ~1 day ahead (tomorrow's rates land
+        # around 4pm today), so requiring the FULL 48h comparison horizon
+        # to be covered (the first version of this) meant the comparison
+        # silently failed almost all day, every day — confirmed live.
+        # Compare over whatever prefix of the horizon actually has
+        # published rates instead, labelled with how many hours that
+        # covers, rather than pretending it's the same 48h window as
+        # every other row.
         if self.agile_region and self.agile_rates:
-            agile_imp = [self._agile_rate_for(s["start"]) for s in slots]
-            if all(r is not None for r in agile_imp):
+            covered = 0
+            for s in slots:
+                if self._agile_rate_for(s["start"]) is None:
+                    break
+                covered += 1
+            if covered >= 4:  # at least 2h — anything shorter isn't a useful comparison
+                agile_slots = slots[:covered]
+                agile_imp = [self._agile_rate_for(s["start"]) for s in agile_slots]
                 cp = [dict(s, charge=0.0, export=0.0, imp=agile_imp[i], exp=s["exp"])
-                      for i, s in enumerate(slots)]
+                      for i, s in enumerate(agile_slots)]
                 result = core_optimizer.solve(cp, soc0, self.cfg, today_date=now.date())
                 if result.infeasible:
                     self.log("Agile tariff comparison reported infeasible — "
                              "skipping it this tick.", level="WARNING")
                 else:
-                    rows.append(("Octopus Agile (import)",
-                                 result.grid_cost + self.agile_standing_gbp))
+                    hours = covered * SLOT_MIN / 60.0
+                    standing = self.agile_standing_gbp * hours / 24.0
+                    rows.append((f"Octopus Agile (import, next {hours:.0f}h)",
+                                 result.grid_cost + standing))
             else:
-                self.log("Agile comparison skipped — rate data doesn't yet "
-                         "cover the full plan horizon.", level="DEBUG")
+                self.log("Agile comparison skipped — no published rate data "
+                         "yet for the upcoming slots.", level="DEBUG")
 
         rows.sort(key=lambda r: r[1])
         best = rows[0][1]
