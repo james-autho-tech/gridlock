@@ -607,6 +607,44 @@ def test_reserve_margin_holds_back_more_than_the_bare_forecast():
     assert result_b.trace[-2] > result_a.trace[-2]
 
 
+def test_reserve_credits_a_midday_pv_surplus_against_a_later_deficit():
+    """Real bug, confirmed against a live plan: a stretch with a big
+    midday PV surplus followed by an evening deficit pinned SoC at 100%
+    for the whole afternoon, refusing an obviously cheaper self-
+    consumption trade — annotate_reserve() was flooring each slot's
+    (load - pv) at zero *before* summing, so a surplus slot contributed
+    exactly zero instead of a negative number that should offset a
+    deficit slot later in the same stretch. Fixed by summing the net
+    figure and only flooring the final total. Degradation forced to 0
+    here specifically to isolate the reserve mechanism from the separate,
+    legitimate "is cycling the battery worth it" trade-off degradation
+    introduces (covered by other tests) -- this one is purely checking
+    the reserve requirement itself isn't inflated by a modelling bug."""
+    rows = [
+        {"imp": CHEAP, "exp": 0.05, "pv": 0.0, "load": 0.0},
+        {"imp": 0.30, "exp": 0.05, "pv": 0.0, "load": 1.0},
+        {"imp": 0.30, "exp": 0.05, "pv": 10.0, "load": 1.0},
+        {"imp": 0.30, "exp": 0.05, "pv": 0.0, "load": 5.0},
+        {"imp": CHEAP, "exp": 0.05, "pv": 0.0, "load": 0.0},
+    ]
+    slots = make_slots(rows, CHEAP)
+    cfg = base_cfg(battery_kwh=5.0, floor_soc=0.0, efficiency=1.0,
+                    charge_kw=40.0, discharge_kw=40.0, export_rate_kw=40.0,
+                    mode=Mode.BALANCED, degradation=0.0, reserve_margin_pct=0.0)
+
+    result = optimizer.solve(slots, soc0_pct=100.0, cfg=cfg)
+    assert not result.infeasible
+    assert result.cost_trace[1]["reserve_shortfall_kwh"] == 0.0, (
+        "the midday surplus at slot 2 should fully offset the evening "
+        "deficit at slot 3, leaving no real shortfall to report at slot 1"
+    )
+    assert result.cost_trace[1]["battery_kwh"] > 0.5, (
+        "with the reserve correctly satisfied and zero degradation cost, "
+        "the battery should cover slot 1's own load instead of sitting "
+        "at 100% for no reason"
+    )
+
+
 def test_pv_fills_battery_to_full_before_any_direct_export():
     """Real hardware fact, not an economic choice: in self-consumption
     mode the inverter's own firmware always routes surplus PV into the

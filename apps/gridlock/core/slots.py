@@ -111,13 +111,31 @@ def annotate_reserve(slots, cheap_rate):
     """For each slot, the index of the next slot (at or after it) whose
     import rate has dropped to "cheap" — the next off-peak window, as
     far as this horizon can see — plus that slot's share of the whole
-    peak stretch's total unmet load (load minus PV), accumulated
-    backwards from the next cheap slot. Used by the optimizer's on-peak
-    reserve constraint to guarantee enough SoC survives to cover the
-    rest of an on-peak stretch, not just this instant. Mutates `slots`
-    in place (adds next_cheap_idx/remaining_deficit) and returns them,
-    so fixtures built without build_slots() (e.g. in tests) can still
-    get correct reserve annotations rather than duplicating this loop."""
+    peak stretch's NET unmet load (load minus PV, summed WITHOUT
+    flooring each slot at zero first), accumulated backwards from the
+    next cheap slot. Used by the optimizer's on-peak reserve constraint
+    to guarantee enough SoC survives to cover the rest of an on-peak
+    stretch, not just this instant.
+
+    Deliberately not floored per-slot before summing (confirmed as a
+    real bug against live data: a stretch with a big midday PV surplus
+    followed by an evening deficit pinned SoC at 100% for the entire
+    afternoon, refusing an obviously-profitable self-consumption trade,
+    because each surplus slot's negative (load-pv) was being discarded
+    to zero instead of offsetting the evening's real deficit — so the
+    required reserve stayed inflated by the full surplus amount even
+    though that surplus will genuinely recharge the battery for free
+    before the deficit arrives). A slot with surplus PV should reduce
+    how much reserve is needed NOW for a deficit later in the same
+    stretch, same as it will physically recharge the battery later —
+    only the FINAL total gets floored at zero (see optimizer.py's
+    future_deficit), since a net-surplus stretch needs no reserve at
+    all, not a negative one.
+
+    Mutates `slots` in place (adds next_cheap_idx/remaining_deficit) and
+    returns them, so fixtures built without build_slots() (e.g. in
+    tests) can still get correct reserve annotations rather than
+    duplicating this loop."""
     next_cheap_idx = None
     deficit_acc = 0.0
     for i in range(len(slots) - 1, -1, -1):
@@ -125,7 +143,7 @@ def annotate_reserve(slots, cheap_rate):
             next_cheap_idx = i
             deficit_acc = 0.0
         else:
-            deficit_acc += max(0.0, slots[i]["load"] - slots[i]["pv"])
+            deficit_acc += slots[i]["load"] - slots[i]["pv"]
         slots[i]["next_cheap_idx"] = next_cheap_idx
         slots[i]["remaining_deficit"] = deficit_acc
     return slots

@@ -294,7 +294,15 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
         # is truly no other option.
         next_cheap = s.get("next_cheap_idx")
         if next_cheap is not None and next_cheap > i:
-            future_deficit = s.get("remaining_deficit", 0.0) - max(0.0, load - pv)
+            # remaining_deficit is now a NET figure (can be negative —
+            # see annotate_reserve) — floored here, once, on the final
+            # total, not per-slot before summing. A stretch with a big
+            # midday surplus ahead of an evening deficit should let that
+            # surplus reduce how much reserve is needed now, since it'll
+            # genuinely recharge the battery for free before the deficit
+            # arrives — flooring each slot first (the old bug) discarded
+            # that surplus instead of crediting it.
+            future_deficit = max(0.0, s.get("remaining_deficit", 0.0) - (load - pv))
             future_deficit *= (1.0 + cfg.reserve_margin_pct)
             shortfall = pulp.LpVariable(f"reserve_shortfall_{i}", 0)
             prob += soc[i] + shortfall >= floor_kwh + future_deficit / eff

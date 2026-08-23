@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.16.2 - 2026-08-16
+
+### Fix
+- On-peak reserve calculation discarded credit for midday solar surplus when deciding how much charge to protect for later — summing each slot's own `max(0, load - pv)` before adding them up meant a surplus slot contributed exactly zero instead of a negative figure that should offset a deficit slot later in the same stretch. Confirmed against a real plan: this inflated the required reserve past what the battery can physically hold, forcing a phantom shortfall that pinned SoC at 100% for an entire afternoon. Now sums the net figure across the whole stretch and only floors the final total
+
 ## 3.16.1 - 2026-08-16
 
 ### Fix
