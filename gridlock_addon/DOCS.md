@@ -334,26 +334,63 @@ helper above if anything looks wrong.
 ## Modes (`battery_risk_profile` in `apps.yaml`)
 
 The planning engine is a linear program, not a greedy heuristic — it
-solves the whole 48h horizon jointly, so mode changes how it *values*
-a slot, not a separate code path per mode:
+solves the whole 48h horizon jointly. **Mode only changes one thing:
+how much it costs, in the maths, to cycle the battery.** Everything
+else described below (self-consumption, the on-peak reserve, Storm
+Watch, off-grid) works exactly the same regardless of which mode is
+active.
 
-| Mode | Behaviour |
-|---|---|
-| `eco` | The battery never sells — only direct solar surplus can export once the battery is full. Optimises purely for minimal import cost. |
-| `balanced` (default) | Exports are allowed, but only where `export_rate − import_rate/efficiency` actually clears the degradation cost below — i.e. it only sells when doing so is a genuine net gain, not just non-negative. |
-| `max_profit` | Degradation cost forced to 0. Sells any margin above round-trip cost, keeping only enough SoC for forecasted load until the next off-peak slot. |
+That one thing — the **degradation cost** (£/kWh) — is actually two
+separate figures per mode, because using the battery for your own load
+and selling it to the grid are different decisions with different
+real-world stakes:
 
-`battery_degradation_cost` (£/kWh) overrides the mode's default
-degradation figure if set — check the Forecast tab's battery health
-panel for the SoH sensors this is meant to weigh against.
+```
+selling is worth it when:  export_rate  >  (import_rate ÷ efficiency)  +  export_degradation
+                            ^ what you'd earn      ^ what re-buying that       ^ battery wear
+                              selling it now          energy back would cost     cost per kWh
+```
 
-Degradation only governs *export* and *charging* decisions, though —
-covering on-peak load from the battery instead of importing is not a
-degradation-vs-price trade-off in any mode. Whenever import is above
-the cheap-rate threshold, self-consumption from the battery always
-wins over importing as long as there's charge above the floor to give,
-regardless of degradation cost. Grid import only steps back in when
-the battery is genuinely too depleted to cover the slot on its own.
+| Mode | Self-consumption cost | Export cost | What that means in practice |
+|---|---|---|---|
+| `eco` | `0.09` £/kWh | `0.25` £/kWh | The *lowest* self-consumption cost of the three — no hesitation to use the battery for your own load. But the export bar is deliberately steep: at typical Octopus Agile/IOG spreads it sits above nearly everything, so in practice the battery almost never sells — not because it's hard-blocked, just because the price rarely clears a genuinely exceptional bar. |
+| `balanced` (default) | `0.15` £/kWh | `0.15` £/kWh (same figure) | Self-consumption and export share one moderate bar. Exports happen on the routine good days (the better end of a normal Agile/IOG spread), not just rare outliers, but plenty of marginal days still don't clear it. |
+| `max_profit` | `0` | `0.03` £/kWh | No hesitation to self-consume at any spread. The export bar is a small floor — just enough to stop pointless fractional-penny cycling — so almost any genuine arbitrage gets taken. |
+
+Override either figure directly with `battery_degradation_cost`
+(self-consumption) and/or `export_degradation_cost` (£/kWh) in
+`apps.yaml` if you want numbers in between, or ones based on your own
+battery's real replacement cost — check the Forecast tab's battery
+health panel for the SoH trend these are meant to be weighed against.
+
+**Degradation only ever governs export and grid-charging decisions —
+never whether to use the battery to cover your own load.** That's a
+separate, mode-independent standing rule:
+
+> **Whenever the import price is above the cheap-rate threshold, the
+> battery always covers your load instead of importing, if it has
+> charge above the floor to give — full stop, in every mode, even
+> `eco`.** Grid import only steps in when the battery is genuinely too
+> depleted to help. This isn't a trade-off the mode dial affects; a
+> cheaper-to-import-than-degrade slot still self-consumes rather than
+> pull from the grid, because the alternative — importing while a
+> charged battery sits idle — was found to make no sense to a real user
+> watching it happen.
+
+### How everything stacks together
+
+Several independent mechanisms can all have an opinion about what the
+battery should do right now. Highest priority wins; each one either
+takes over completely or leaves the decision to the level below it:
+
+| Priority | Mechanism | Overrides mode entirely? |
+|---|---|---|
+| 1 (highest) | **Off-grid**, confirmed by the inverter's own grid-connection sensor | Yes — no grid exists to trade against, so price/mode stop mattering: self-consumption only, never charging or exporting. If Storm Watch is *also* active, its own "Holding" label and reasoning are kept (more informative — it usually explains *why* you're off-grid), but the outcome is identical: hold only. |
+| 2 | **Storm Watch**, while active *and* the battery doesn't already have enough banked for the estimated outage | Yes — charges to target and holds, no exports, regardless of price or mode. Stands down (falls through to normal planning) once the reserve genuinely covers the estimated outage. |
+| 3 | **Saving Session** (a joined Octopus event) | Yes, for that slot — forces export regardless of mode, since the session reward is the whole point. |
+| 4 | **EV Protection**, while your EV is charging concurrently | Partially — blocks battery discharge to the house (so it doesn't fight the EV for the shared circuit) and switches to "Command Charging (PV First)" so any solar still reaches the house; doesn't touch export decisions elsewhere in the plan. |
+| 5 | **On-peak reserve** | Not an override as such — a standing constraint the mode-driven plan always has to satisfy: enough SoC must survive to reach the next cheap slot without hitting the floor, crediting any solar surplus expected before then. |
+| 6 (baseline) | **Mode-driven plan** (the table above) | This is what runs when nothing above is active — CHARGE in cheap slots, self-consume on-peak (always, per the standing rule), export when the mode's own degradation maths says it's worth it. |
 
 ## Other config knobs worth knowing about (`apps.yaml`)
 

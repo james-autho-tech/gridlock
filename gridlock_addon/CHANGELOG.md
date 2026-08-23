@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.18.1 - 2026-08-16
+
+### Docs
+- Rewrote the Modes section in DOCS.md — real self-consumption/export degradation figures per mode (not the same number for both, and eco isn't a hard export block, just a steep bar), plus a new priority table showing exactly how off-grid, Storm Watch, Saving Sessions, EV Protection, the on-peak reserve, and the mode-driven plan all stack together
+
 ## 3.18.0 - 2026-08-16
 
 ### Improvement
