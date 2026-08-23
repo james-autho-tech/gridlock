@@ -207,6 +207,18 @@ gridlock:
   # day to day and has no fixed clock-time window to encode in a static
   # comparison, so this understates how cheap a real IOG day can get
   # whenever extra dispatch hours are actually granted.
+  # Octopus Agile comparison — separate from compare_tariffs below since
+  # Agile has no fixed daily rate pattern to encode statically; real
+  # half-hourly rates are pulled live from Octopus's own public API
+  # instead (no auth needed). Off unless set explicitly: Agile rates are
+  # region-specific (14 DNO regions, letters A-P), and this add-on is
+  # shared across installs, so there's no safe default to silently
+  # assume. Find yours via your own Octopus rate sensor's tariff_code
+  # attribute (the last letter, e.g. "E-1R-VAR-22-11-01-H" -> H), or
+  # https://energy-stats.uk/dno-region-codes-explained/ by postcode.
+  # Only the import side is compared — export stays whatever's actually
+  # configured, not also swapped to Agile's own export tariff.
+  agile_region: "H"
   compare_tariffs:
     - name: "Intelligent Octopus Go"
       import_default: 0.274

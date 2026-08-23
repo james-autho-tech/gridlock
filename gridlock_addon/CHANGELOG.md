@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.18.0 - 2026-08-16
+
+### Improvement
+- Octopus Agile can now be added to the Tariffs comparison (`agile_region` in `apps.yaml`) — real half-hourly rates pulled live from Octopus's own public API, not a flat-rate approximation. Import only, since export stays whatever's actually configured. Off by default: Agile rates are region-specific and this add-on is shared across installs, so there's no safe default to silently assume
+
+### Fix
+- Learned house-load forecasting had a real, persistent bias: each 5-minute sample was extrapolated as if that power level were sustained for the *entire* 30-minute slot, then blended into the learned average up to six separate times per slot — a brief appliance spike (kettle, oven) during just one of those six ticks got recorded as if it ran for the whole half hour, repeated every time something briefly spikes around the same time of day. This doesn't self-correct with more data, since the observations fed into the average were themselves wrong, not just noisy. Now accumulates each tick's real contribution across the full slot and blends the true total once the slot actually completes
+
 ## 3.17.0 - 2026-08-16
 
 ### Improvement

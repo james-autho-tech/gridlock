@@ -85,7 +85,11 @@ shortcut once enabled. Tabs:
   below); predicted temperature and heating cost per zone, plus COP.
 - **Tariffs** — how today's plan compares against other Octopus
   products (see `compare_tariffs` in `apps.yaml`) at the rates you
-  actually saw today.
+  actually saw today. Octopus Agile can be included too (`agile_region`
+  in `apps.yaml`) — real half-hourly rates pulled live from Octopus's
+  own public API rather than a flat+windows approximation, since Agile
+  has no fixed daily pattern to encode statically. Import only; export
+  stays whatever's actually configured.
 - **Entities** — every entity GridLock discovered or was told about,
   grouped by category, with current state — the same data as the
   sidebar's Discovered Entities card, in more detail.

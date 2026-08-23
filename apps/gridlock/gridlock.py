@@ -505,6 +505,17 @@ class GridLock(hass.Hass):
 
         self.compare_tariffs = a.get("compare_tariffs", [])
 
+        # Octopus Agile comparison — engine polls the open API directly
+        # (public, no auth needed), same "poll periodically, cache the
+        # result" pattern as SSEN Power Track above. Off unless
+        # agile_region is explicitly set: Agile rates are region-specific
+        # (14 DNO regions, letters A-P) and this add-on is shared across
+        # installs — silently defaulting to one region would be actively
+        # wrong for anyone outside it, not a harmless guess.
+        self.agile_region = a.get("agile_region")
+        self.agile_rates = {}
+        self.agile_standing_gbp = 0.0
+
         self.ent_daily_import_cost = a.get("daily_import_cost_entity") or self.registry.find_sibling(
             import_stem, "sensor", ["_current_accumulative_cost"])
         self.ent_daily_export_value = (a.get("daily_export_value_entity")
@@ -591,6 +602,9 @@ class GridLock(hass.Hass):
 
         if self.ssen_postcode:
             self.run_every(self.poll_ssen, "now", 300)
+
+        if self.agile_region:
+            self.run_every(self.poll_agile_rates, "now", 3600)
 
         self.run_every(self.poll_carbon_intensity, "now", 1800)
         self.run_every(self.tick, "now", 300)
@@ -1337,6 +1351,63 @@ class GridLock(hass.Hass):
         if bool(self.ssen_state["local"]) != bool(prev["local"]):
             self.tick({})
 
+    def _agile_slot_key(self, dt):
+        dt = dt.astimezone(timezone.utc)
+        minute = 30 if dt.minute >= 30 else 0
+        return dt.replace(minute=minute, second=0, microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _agile_rate_for(self, dt):
+        return self.agile_rates.get(self._agile_slot_key(dt))
+
+    def poll_agile_rates(self, kwargs):
+        """Octopus's public Agile API — no auth needed, but genuinely
+        two real facts that can't be hardcoded: which product code is
+        Agile right now (Octopus renews it every 6-12 months, e.g.
+        AGILE-24-10-01 -> a new one), and the region-specific tariff
+        code built from it. Both looked up live every poll rather than
+        assumed, same "don't guess at something checkable" discipline as
+        everywhere else real money is on the line in this codebase."""
+        try:
+            req = urllib.request.Request(
+                "https://api.octopus.energy/v1/products/?is_variable=true&brand=OCTOPUS_ENERGY",
+                headers={"User-Agent": "GridLock/3"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                products = json.load(resp).get("results", [])
+            now = self.get_now()
+            agile = next(
+                (p for p in products
+                 if "Agile Octopus" in (p.get("full_name") or "")
+                 and self._iso(p["available_from"]) <= now
+                 and (not p.get("available_to") or self._iso(p["available_to"]) > now)),
+                None)
+            if not agile:
+                self.log("Agile poll: no currently-active Agile product found", level="WARNING")
+                return
+            code = agile["code"]
+            tariff_code = f"E-1R-{code}-{self.agile_region}"
+            period_from = (now - timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
+            period_to = (now + timedelta(days=2)).strftime("%Y-%m-%dT00:00:00Z")
+            base = f"https://api.octopus.energy/v1/products/{code}/electricity-tariffs/{tariff_code}"
+            rates_req = urllib.request.Request(
+                f"{base}/standard-unit-rates/?period_from={period_from}&period_to={period_to}",
+                headers={"User-Agent": "GridLock/3"})
+            with urllib.request.urlopen(rates_req, timeout=15) as resp:
+                rates = json.load(resp).get("results", [])
+            standing_req = urllib.request.Request(
+                f"{base}/standing-charges/?period_from={period_from}&period_to={period_to}",
+                headers={"User-Agent": "GridLock/3"})
+            with urllib.request.urlopen(standing_req, timeout=15) as resp:
+                standing = json.load(resp).get("results", [])
+        except Exception as exc:  # noqa: BLE001 — network is best-effort
+            self.log(f"Agile rate poll failed: {exc!r}", level="WARNING")
+            return
+        self.agile_rates = {
+            self._agile_slot_key(self._iso(r["valid_from"])): r["value_inc_vat"] / 100.0
+            for r in rates if r.get("valid_from") and r.get("value_inc_vat") is not None
+        }
+        if standing and standing[0].get("value_inc_vat") is not None:
+            self.agile_standing_gbp = standing[0]["value_inc_vat"] / 100.0
+
     def poll_carbon_intensity(self, kwargs):
         try:
             now_iso = self.get_now().astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
@@ -1773,6 +1844,31 @@ class GridLock(hass.Hass):
                 continue
             c = result.grid_cost + float(t.get("standing", 0.0))
             rows.append((t.get("name", "tariff"), c))
+
+        # Agile import only (per the user's own ask — export stays as
+        # whatever's actually configured, not also swapped to Agile's own
+        # export tariff): real, live half-hourly rates from Octopus's
+        # public API, not a flat+windows approximation like the static
+        # tariffs above — Agile's whole point is that it doesn't have a
+        # fixed daily pattern. Skipped gracefully if the polled data
+        # doesn't yet cover the full comparison horizon (e.g. tomorrow's
+        # rates not published until ~4pm today) rather than compare
+        # against a partially-missing curve.
+        if self.agile_region and self.agile_rates:
+            agile_imp = [self._agile_rate_for(s["start"]) for s in slots]
+            if all(r is not None for r in agile_imp):
+                cp = [dict(s, charge=0.0, export=0.0, imp=agile_imp[i], exp=s["exp"])
+                      for i, s in enumerate(slots)]
+                result = core_optimizer.solve(cp, soc0, self.cfg, today_date=now.date())
+                if result.infeasible:
+                    self.log("Agile tariff comparison reported infeasible — "
+                             "skipping it this tick.", level="WARNING")
+                else:
+                    rows.append(("Octopus Agile (import)",
+                                 result.grid_cost + self.agile_standing_gbp))
+            else:
+                self.log("Agile comparison skipped — rate data doesn't yet "
+                         "cover the full plan horizon.", level="DEBUG")
 
         rows.sort(key=lambda r: r[1])
         best = rows[0][1]
