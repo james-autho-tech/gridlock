@@ -343,6 +343,14 @@ a slot, not a separate code path per mode:
 degradation figure if set — check the Forecast tab's battery health
 panel for the SoH sensors this is meant to weigh against.
 
+Degradation only governs *export* and *charging* decisions, though —
+covering on-peak load from the battery instead of importing is not a
+degradation-vs-price trade-off in any mode. Whenever import is above
+the cheap-rate threshold, self-consumption from the battery always
+wins over importing as long as there's charge above the floor to give,
+regardless of degradation cost. Grid import only steps back in when
+the battery is genuinely too depleted to cover the slot on its own.
+
 ## Other config knobs worth knowing about (`apps.yaml`)
 
 - `reserve_margin_pct` (default `0.15`) — extra slack the on-peak

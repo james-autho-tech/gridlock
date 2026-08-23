@@ -235,6 +235,26 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
         # a hard rule (upper bound 0), not just a cost discouragement.
         if imp > cfg.cheap_rate:
             prob += charge[i] == 0
+            # User's explicit policy: on-peak import must never be a
+            # choice when the battery has charge to give instead —
+            # self-consumption from the battery has to win over
+            # importing, full stop, not just "usually win" via the
+            # degradation-vs-price trade-off the objective otherwise
+            # applies. Soft (a slack absorbs the gap), same RESERVE_
+            # PENALTY weight as the on-peak reserve shortfall below, and
+            # for the same reason: a hard >= bound here risks the exact
+            # infeasibility failure mode already ruled out for that
+            # constraint (soc[i]'s own floor bound can make batt_to_load
+            # cover the full deficit physically impossible if the
+            # battery's genuinely depleted) — the slack lets grid import
+            # step in only when the battery truly can't, never as a
+            # preference the objective is free to weigh against price.
+            required_self_consumption = min(max_d, max(0.0, load - pv) / eff)
+            if required_self_consumption > 0:
+                import_over_battery = pulp.LpVariable(
+                    f"import_over_battery_{i}", 0, required_self_consumption)
+                prob += batt_to_load[i] + import_over_battery >= required_self_consumption
+                reserve_penalty_terms.append(import_over_battery)
         else:
             # Off-peak, symmetric case: don't drain the battery for THIS
             # slot's own load either. Battery self-consumption only costs

@@ -179,34 +179,33 @@ def test_battery_never_drains_for_load_during_a_cheap_slot():
     assert all(c["battery_kwh"] == 0.0 for c in result.cost_trace[:3])
 
 
-def test_power_down_reward_incentivizes_reducing_below_baseline():
+def test_power_down_reward_reports_correctly_once_self_consumption_already_wins():
     """Octoplus Power Down (formerly Saving Sessions) pays octopoints for
-    importing LESS than a predicted per-slot baseline. Set up a slot
-    where, WITHOUT the reward, self-consuming from the battery instead
-    of importing is a net loss (degradation costs more than the import
-    it avoids) — so the LP should import normally. WITH a large enough
-    reward (500 pts/kWh here, well within real session ranges), the
-    reward per kWh reduced (500/800=0.625) comfortably beats that net
-    loss (0.40-0.30=0.10/kWh), so the LP should drain the battery
-    instead specifically to beat the baseline and claim it."""
-    degradation = 0.40  # deliberately more than the 0.30 import rate
+    importing LESS than a predicted per-slot baseline. This used to be
+    tested by contrasting a high-degradation slot with and without the
+    reward (without it, importing was cheaper than the net degradation
+    cost, so the LP imported; with it, the reward tipped the balance).
+    That contrast no longer exists: the on-peak hard self-consumption
+    rule (see test_on_peak_self_consumption_always_wins_over_import_*)
+    now forces the battery to cover on-peak load regardless of
+    degradation or any reward, so grid_in is already near its practical
+    minimum either way. What's still worth checking is that the reward
+    figure itself is reported accurately — and still never leaks into
+    the real £ delta — once that (now baseline-driven) self-consumption
+    happens to clear the baseline."""
     baseline = 1.0
     points_per_kwh = 500  # 500/800 = 0.625 £/kWh reward
     rows_with = [{"imp": 0.30, "exp": 0.05, "load": 1.0,
                   "power_down_baseline_kwh": baseline,
                   "power_down_points_per_kwh": points_per_kwh}]
-    rows_without = [{"imp": 0.30, "exp": 0.05, "load": 1.0}]
     cfg = base_cfg(battery_kwh=10.0, floor_soc=0.0, discharge_kw=20.0,
-                    mode=Mode.BALANCED, degradation=degradation)
+                    mode=Mode.BALANCED, degradation=0.40)  # > the 0.30 import rate
 
-    result_without = optimizer.solve(make_slots(rows_without, CHEAP), soc0_pct=100.0, cfg=cfg)
     result_with = optimizer.solve(make_slots(rows_with, CHEAP), soc0_pct=100.0, cfg=cfg)
-    assert not result_without.infeasible and not result_with.infeasible
+    assert not result_with.infeasible
 
-    assert result_without.cost_trace[0]["grid_in"] > 0.99, \
-        "without the reward, importing is cheaper than draining the battery — should just import"
     assert result_with.cost_trace[0]["grid_in"] < 0.5, \
-        "with a reward that clears the net cost of discharging instead, should drain the battery below baseline"
+        "the hard self-consumption rule should already clear the baseline on its own"
     assert result_with.cost_trace[0]["session_reward_gbp"] > 0.5, \
         "should report real, non-trivial reward credit for beating the baseline"
     # The reward must NEVER leak into the real £ figures — those track
@@ -214,6 +213,48 @@ def test_power_down_reward_incentivizes_reducing_below_baseline():
     real_delta = 0.30 * result_with.cost_trace[0]["grid_in"] - 0.05 * 0.0
     assert abs(result_with.cost_trace[0]["delta"] - real_delta) < 1e-3, \
         "delta must reflect only the real import/export cost, not the session reward"
+
+
+def test_on_peak_self_consumption_always_wins_over_import_even_at_high_degradation():
+    """Explicit user policy: on-peak import should never be a choice when
+    the battery has charge to give instead — self-consumption from the
+    battery must win over importing, full stop, even when degradation
+    alone would have made importing the "cheaper" choice under the old
+    pure economic trade-off (degradation here is deliberately set above
+    the import rate — previously that alone was enough to make the LP
+    import instead, see the now-updated power-down reward test above)."""
+    rows = [{"imp": 0.30, "exp": 0.05, "load": 1.0}]
+    slots = make_slots(rows, CHEAP)
+    cfg = base_cfg(battery_kwh=10.0, floor_soc=0.0, discharge_kw=20.0,
+                    mode=Mode.BALANCED, degradation=0.40)
+
+    result = optimizer.solve(slots, soc0_pct=100.0, cfg=cfg)
+    assert not result.infeasible
+    assert result.cost_trace[0]["grid_in"] < 0.05, (
+        "the battery has charge above the floor — it must fully cover this "
+        "slot's load instead of importing, even though degradation alone "
+        "costs more than the avoided import"
+    )
+
+
+def test_on_peak_self_consumption_preference_falls_back_to_import_when_battery_empty():
+    """The hard self-consumption preference is soft-enforced (a heavily
+    penalised slack), not a hard >= bound on batt_to_load, specifically
+    so a genuinely depleted battery can't make the whole 48h LP
+    infeasible — grid import must still be able to step in as a last
+    resort, exactly the same infeasibility risk already ruled out for
+    the on-peak reserve constraint."""
+    rows = [{"imp": 0.30, "exp": 0.05, "load": 1.0}]
+    slots = make_slots(rows, CHEAP)
+    cfg = base_cfg(battery_kwh=10.0, floor_soc=0.0, discharge_kw=20.0,
+                    mode=Mode.BALANCED, degradation=0.40)
+
+    result = optimizer.solve(slots, soc0_pct=0.0, cfg=cfg)
+    assert not result.infeasible, (
+        "an empty battery must never make the whole plan infeasible — "
+        "grid import has to be allowed to cover this slot's load"
+    )
+    assert result.cost_trace[0]["grid_in"] > 0.95
 
 
 def test_power_down_reward_stays_feasible_when_forced_above_baseline():

@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.17.0 - 2026-08-16
+
+### Improvement
+- On-peak import is no longer a pure economic trade-off against battery degradation cost — user's explicit policy: self-consumption from the battery must win over importing whenever there's charge above the floor to give, full stop, even in the rare case where the degradation cost alone would have been higher than the avoided import under the old model. Soft-enforced (a heavily-penalised slack, same mechanism as the on-peak reserve constraint) so a genuinely depleted battery still falls back to grid import rather than making the whole 48h plan infeasible
+
 ## 3.16.2 - 2026-08-16
 
 ### Fix
