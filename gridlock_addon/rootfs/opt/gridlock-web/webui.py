@@ -222,7 +222,8 @@ def build_status():
         # knows to hide the card entirely rather than show an empty one.
         "heatpump_diagnostics": ({
             "watched_entities": (heatpump_diag or {}).get("attributes", {}).get("watched_entities") or [],
-            "recent_cycles": (heatpump_diag or {}).get("attributes", {}).get("recent_cycles") or {},
+            "live_status": (heatpump_diag or {}).get("attributes", {}).get("live_status") or {},
+            "sessions": (heatpump_diag or {}).get("attributes", {}).get("sessions") or {},
             "external_events": (heatpump_diag or {}).get("attributes", {}).get("external_events") or [],
         } if heatpump_diag else None),
         # Live and direct, same as mode_override above -- not sourced
@@ -525,6 +526,8 @@ PAGE = r"""<!doctype html>
   /* ---- forecast: 3 stacked synced charts ---- */
   .gl-triad { position:relative; }
   .gl-triad-chart { display:block; width:100%; height:120px; margin-bottom:2px; cursor:crosshair; }
+  .gl-timeline-chart { display:block; width:100%; height:20px; background:#0b1220;
+                        border:1px solid var(--line); border-radius:4px; }
   .gl-triad-guide { stroke:var(--ink); stroke-width:1; opacity:0; pointer-events:none; }
   .gl-triad-label { position:absolute; left:0; top:0; font-size:10px; letter-spacing:1px;
                      text-transform:uppercase; color:var(--dim); pointer-events:none; }
@@ -1303,8 +1306,44 @@ function renderThermalZones(zones) {
     ${tanks.length ? `<div style="margin-top:14px"><div class="lbl" style="margin-bottom:6px">Hot water</div>${renderThermalCombinedChart(tanks)}</div>` : ''}
     <div style="color:var(--dim);font-size:12px;margin-top:10px">Recommended schedule only — not applied automatically. Never controls your heating.</div>`;
 }
+function heatpumpStateColor(state) {
+  const s = String(state).toLowerCase();
+  if (['on', 'heating', 'running', 'true', 'active'].includes(s)) return 'var(--green)';
+  if (['off', 'idle', 'standby', 'false'].includes(s)) return 'var(--dim)';
+  return 'var(--cyan)';
+}
+function renderHeatpumpSessionTimeline(name, segs) {
+  const parseTs = t => new Date(t).getTime();
+  const now = Date.now();
+  const start = parseTs(segs[0].start);
+  const span = Math.max(now - start, 60000);
+  const x = t => ((t - start) / span) * VB_W;
+  const rects = segs.map(s => {
+    const segStart = parseTs(s.start);
+    const segEnd = s.end ? parseTs(s.end) : now;
+    const x0 = x(segStart), x1 = Math.max(x(segEnd), x0 + 1);
+    return `<rect x="${x0.toFixed(1)}" y="2" width="${(x1 - x0).toFixed(1)}" height="16" fill="${heatpumpStateColor(s.state)}" opacity="0.85"><title>${esc(String(s.state))}: ${esc(fmtDate(s.start))} — ${s.end ? esc(fmtDate(s.end)) : 'now'}</title></rect>`;
+  }).join('');
+  return `
+    <div style="margin-bottom:12px">
+      <div style="color:var(--dim);font-size:12px;margin-bottom:4px">${esc(name)}</div>
+      <svg class="gl-timeline-chart" viewBox="0 0 ${VB_W} 20" preserveAspectRatio="none">${rects}</svg>
+    </div>`;
+}
 function renderHeatpumpDiagnostics(diag) {
   if (!diag) return '';
+  const live = diag.live_status || {};
+  const liveHtml = Object.values(live).length
+    ? `<div class="gl-grid">${Object.values(live).map(v => `
+        <div class="gl-tile">
+          <div class="lbl">${esc(v.name)}</div>
+          <div class="val" style="font-size:16px"><span class="gl-legend-dot" style="background:${heatpumpStateColor(v.state)}"></span>${esc(String(v.state))}${v.unit ? ' ' + esc(v.unit) : ''}</div>
+        </div>`).join('')}</div>`
+    : '<div style="color:var(--dim)">No data yet — builds up after the first poll.</div>';
+  const sessions = diag.sessions || {};
+  const sessionsHtml = Object.keys(sessions).length
+    ? Object.entries(sessions).map(([eid, segs]) => renderHeatpumpSessionTimeline((live[eid] || {}).name || eid, segs)).join('')
+    : '<div style="color:var(--dim)">Nothing changed state in the last 24h.</div>';
   const events = diag.external_events || [];
   const eventsHtml = events.length
     ? events.slice().reverse().map(e => `
@@ -1314,26 +1353,16 @@ function renderHeatpumpDiagnostics(diag) {
           <span><b style="color:var(--ink)">${esc(e.entity_id)}</b> — ${esc(e.domain)}.${esc(e.service)}${e.value !== null && e.value !== undefined ? ` (value: ${esc(String(e.value))})` : ''}</span>
         </div>`).join('')
     : '<div style="color:var(--dim)">None detected — every watched entity has only ever reported its own state, never been externally commanded.</div>';
-  const cycles = diag.recent_cycles || {};
-  const cyclesHtml = Object.keys(cycles).length
-    ? Object.entries(cycles).map(([eid, changes]) => `
-        <div style="margin-bottom:10px">
-          <div style="color:var(--dim);font-size:12px;margin-bottom:4px">${esc(eid)}</div>
-          <div style="display:flex;flex-wrap:wrap;gap:6px">
-            ${changes.slice().reverse().slice(0, 8).map(c =>
-              `<span class="gl-solar-pill" style="font-size:11px" title="${esc(fmtDate(c.ts))}">${esc(String(c.state))}</span>`
-            ).join('')}
-          </div>
-        </div>`).join('')
-    : '<div style="color:var(--dim)">No history yet — builds up after the first poll.</div>';
   return `
     <div class="gl-wrap">
       <div class="gl-h">Heat pump activity</div>
-      <div class="gl-sub">Watching ${diag.watched_entities.length} entit${diag.watched_entities.length === 1 ? 'y' : 'ies'} for external commands (a real service call from something other than GridLock — GridWarm only ever calls switch.turn_on/off on a zone's own configured control_entity) and recent state changes, so "why did my heat pump just do that" doesn't need a manually-exported log.</div>
-      <div class="lbl" style="margin:12px 0 6px">External commands detected</div>
+      <div class="gl-sub">Watching ${diag.watched_entities.length} entit${diag.watched_entities.length === 1 ? 'y' : 'ies'} — live status below, plus when each one turned on/off today and any external command (a real service call from something other than GridLock — GridWarm only ever calls switch.turn_on/off on a zone's own configured control_entity), so "why did my heat pump just do that" doesn't need a manually-exported log.</div>
+      <div class="lbl" style="margin:12px 0 6px">Live status</div>
+      ${liveHtml}
+      <div class="lbl" style="margin:16px 0 6px">Today's activity (when it turned on/off)</div>
+      ${sessionsHtml}
+      <div class="lbl" style="margin:16px 0 6px">External commands detected</div>
       ${eventsHtml}
-      <div class="lbl" style="margin:16px 0 6px">Recent state changes (last 24h)</div>
-      ${cyclesHtml}
     </div>`;
 }
 // Shared tick-label row for the flex `.gl-bars` charts — one column per

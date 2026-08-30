@@ -24,6 +24,7 @@ from core.inverter import SigenergyAdapter
 from core.tariff import OctopusTariffProvider
 from core.forecast import SolcastForecastProvider, LearnedLoadForecastProvider
 from core import thermal as core_thermal
+from core import diagnostics as core_diagnostics
 
 STATE_FILES = ("load_profile.json", "savings_state.json", "savings_history.json",
                "cost_tracking_state.json", "decision_log.json",
@@ -2371,8 +2372,14 @@ class GridLock(hass.Hass):
         self._refresh_diagnostic_entities()
         if not self.gridwarm_diagnostic_entities:
             return
-        cycles = {}
+        live_status = {}
+        sessions = {}
         for eid in self.gridwarm_diagnostic_entities:
+            full = self.get_state(eid, attribute="all") or {}
+            attrs = full.get("attributes") or {}
+            live_status[eid] = {"name": attrs.get("friendly_name", eid),
+                                 "state": full.get("state"),
+                                 "unit": attrs.get("unit_of_measurement")}
             try:
                 hist = self.get_history(entity_id=eid, days=1)
             except Exception as exc:  # noqa: BLE001 — best-effort, one bad entity shouldn't drop the rest
@@ -2381,14 +2388,23 @@ class GridLock(hass.Hass):
                 continue
             if not hist or not hist[0]:
                 continue
-            cycles[eid] = [{"ts": s.get("last_changed"), "state": s.get("state")}
-                           for s in hist[0] if s.get("last_changed")][-20:]
+            changes = [{"ts": s.get("last_changed"), "state": s.get("state")}
+                       for s in hist[0] if s.get("last_changed")]
+            segs = core_diagnostics.compute_state_sessions(changes)
+            # Only entities that actually changed state in the window are
+            # worth a timeline row -- most of a raw Modbus register dump
+            # (capability flags, reserved bits) never changes at all, and
+            # a one-session "always been this since forever" row would
+            # just be noise next to the ones that genuinely did something.
+            if len(segs) > 1:
+                sessions[eid] = segs[-20:]
         self.set_state("sensor.gridlock_heatpump_diagnostics",
                        state=str(len(self.heatpump_events)),
                        attributes={"friendly_name": "GridLock Heat Pump Diagnostics",
                                    "icon": "mdi:heat-pump-outline",
+                                   "live_status": live_status,
+                                   "sessions": sessions,
                                    "watched_entities": self.gridwarm_diagnostic_entities,
-                                   "recent_cycles": cycles,
                                    "external_events": self.heatpump_events[-20:]})
 
     def _load_circuit_state(self):

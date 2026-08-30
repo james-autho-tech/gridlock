@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.20.0 - 2026-08-30
+
+### Improvement
+- Heat pump activity card (GridWarm tab) is now a full status view, not just an external-command log: a live-status grid showing the current value of every watched entity, plus a per-entity timeline of exactly when it turned on/off (or changed state) over the last 24h — answers "when did it heat, when did DHW come on" directly, instead of just "here are its last 8 raw states"
+- New `core/diagnostics.py` (`compute_state_sessions`) turns raw history into on/off/state runs with start/end times — pure function, unit tested
+
 ## 3.19.1 - 2026-08-30
 
 ### Fix

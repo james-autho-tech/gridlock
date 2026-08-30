@@ -333,16 +333,26 @@ helper above if anything looks wrong.
 
 ### Heat pump diagnostics (`gridwarm.diagnostics`)
 
-Off unless configured. For every watched entity, GridLock watches HA's own
-event bus live for any real service call touching it — a genuine external
-command, from an automation, a script, or someone in the UI, with the
-actual service and value — and separately pulls its last 24h of state
-history every 30 minutes for a plain timeline. Both show up on the
-GridWarm tab under "Heat pump activity". The point is telling "something
-externally commanded this" apart from "the device is just reporting its
-own state" without having to manually export and read through a raw HA
-logbook CSV — confirmed useful against a real mystery `number.set_value`
-call this way, on an entity GridLock had never touched.
+Off unless configured. GridWarm tab, "Heat pump activity" card shows
+three things for every watched entity:
+
+- **Live status** — its current value right now, at a glance.
+- **Today's activity** — a timeline of exactly when it turned on/off (or
+  changed between any other states) over the last 24h, built from history
+  pulled every 30 minutes. Answers "when did it heat", "when did DHW come
+  on" directly, rather than a flat list of raw states with no sense of
+  duration. Entities that never changed in the window (most of a raw
+  Modbus dump — capability flags, reserved bits) don't get a timeline row,
+  to keep the noisy ones from drowning out the ones that actually did
+  something; their current value still shows in Live status above.
+- **External commands detected** — a live HA event-bus listener catching
+  any real service call touching a watched entity — a genuine external
+  command, from an automation, a script, or someone in the UI, with the
+  actual service and value. The point is telling "something externally
+  commanded this" apart from "the device is just reporting its own state"
+  without manually exporting and reading a raw HA logbook CSV — confirmed
+  useful against a real mystery `number.set_value` call this way, on an
+  entity GridLock had never touched.
 
 Two ways to choose which entities to watch, and they combine if both are
 set:
