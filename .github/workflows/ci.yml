@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Run core test suite (pytest, both CBC and GLPK solvers)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install pulp pytest
+      - name: Run tests (default/CBC solver)
+        run: python3 -m pytest tests/ -q
+      - name: Install GLPK
+        run: sudo apt-get update && sudo apt-get install -y glpk-utils
+      - name: Run tests (GLPK solver — matches the add-on's Alpine image)
+        run: python3 -m pytest tests/ -q
+
+  lint-addon:
+    name: Validate gridlock_addon/config.yaml against HA's add-on schema
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Home Assistant Add-on Linter
+        uses: frenck/action-addon-linter@v2
+        with:
+          path: "./gridlock_addon"
+
+  syntax-check:
+    name: Python/shell syntax check on every shipped file
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python syntax (ast.parse)
+        run: |
+          for f in apps/gridlock/gridlock.py apps/gridlock/core/*.py \
+                   gridlock_addon/rootfs/opt/appdaemon/apps/gridlock/gridlock.py \
+                   gridlock_addon/rootfs/opt/appdaemon/apps/gridlock/core/*.py \
+                   gridlock_addon/rootfs/opt/gridlock-web/webui.py; do
+            python3 -c "import ast; ast.parse(open('$f').read())" || exit 1
+          done
+      - name: Shell syntax (bash -n)
+        run: bash -n gridlock_addon/rootfs/etc/services.d/gridlock/run
+      - name: YAML syntax on shipped config/support files
+        run: |
+          pip install pyyaml
+          for f in gridlock_addon/config.yaml apps/gridlock/apps.yaml \
+                   gridlock_addon/rootfs/opt/appdaemon/apps/gridlock/apps.yaml.example \
+                   ha_support.yaml gridlock_addon/rootfs/opt/appdaemon/apps/gridlock/ha_support.yaml; do
+            python3 -c "import yaml; yaml.safe_load(open('$f'))" || exit 1
+          done
+
+  mirror-sync-check:
+    name: Confirm core/ and gridlock.py mirrors haven't drifted
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Diff apps/gridlock against its addon mirror
+        run: |
+          diff apps/gridlock/gridlock.py gridlock_addon/rootfs/opt/appdaemon/apps/gridlock/gridlock.py
+          diff -rq apps/gridlock/core gridlock_addon/rootfs/opt/appdaemon/apps/gridlock/core --exclude=__pycache__
+          diff apps/gridlock/apps.yaml gridlock_addon/rootfs/opt/appdaemon/apps/gridlock/apps.yaml.example
+          diff ha_support.yaml gridlock_addon/rootfs/opt/appdaemon/apps/gridlock/ha_support.yaml
