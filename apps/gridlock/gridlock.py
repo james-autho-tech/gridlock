@@ -481,20 +481,33 @@ class GridLock(hass.Hass):
                          "toggle won't be controllable until you do.", level="WARNING")
                 self.set_state(pause_helper, state="on")
 
-        # GridWarm heat pump diagnostics — off unless entities are listed
-        # explicitly (heat pump entity naming is hardware-specific, same
-        # "no guessing at someone else's device" reasoning as zones/
-        # control_entity above). Two independent mechanisms: a live
+        # GridWarm heat pump diagnostics — off unless configured. Two ways
+        # to select entities: an explicit "entities:" list, or a simpler
+        # "entity_prefix:" (e.g. "loft_heatpump_controller") that pulls in
+        # every entity across every domain containing that substring —
+        # most controller integrations (ESPHome, Modbus bridges, etc.)
+        # give every entity on a device the same name prefix, so this
+        # covers "give me everything for this device" without hand-typing
+        # each entity_id (and re-editing apps.yaml every time the
+        # controller's firmware exposes a new one). Both forms combine if
+        # both are set. Re-resolved on every poll (not just at startup)
+        # so a newly-appeared entity on the device shows up on its own.
+        #
+        # Two independent tracking mechanisms once resolved: a live
         # call_service event listener (catches an external command the
         # instant it happens, with full fidelity — domain, service, the
         # actual value set — since reconstructing that after the fact
         # from plain history loses exactly that detail), and a periodic
         # history pull for the plain state-change timeline (self-
         # reported values, not commands).
-        self.gridwarm_diagnostic_entities = list(dict.fromkeys(
-            gridwarm_cfg.get("diagnostics", {}).get("entities", []) or []))
+        diag_cfg = gridwarm_cfg.get("diagnostics", {}) or {}
+        self.gridwarm_diagnostic_static_entities = list(dict.fromkeys(diag_cfg.get("entities", []) or []))
+        self.gridwarm_diagnostic_prefix = diag_cfg.get("entity_prefix")
         self.heatpump_events = self._load_json("heatpump_events.json", [])
-        if self.gridwarm_diagnostic_entities:
+        self._refresh_diagnostic_entities()
+        if self.gridwarm_diagnostic_static_entities or self.gridwarm_diagnostic_prefix:
+            self.log(f"GridWarm diagnostics: watching {len(self.gridwarm_diagnostic_entities)} "
+                     f"entities: {self.gridwarm_diagnostic_entities}")
             self.listen_event(self._on_heatpump_service_call, "call_service")
 
         self.notify_service = a.get("notify_service")
@@ -622,7 +635,7 @@ class GridLock(hass.Hass):
         if self.agile_region:
             self.run_every(self.poll_agile_rates, "now", 3600)
 
-        if self.gridwarm_diagnostic_entities:
+        if self.gridwarm_diagnostic_static_entities or self.gridwarm_diagnostic_prefix:
             self.run_every(self.poll_heatpump_diagnostics, "now", 1800)
 
         self.run_every(self.poll_carbon_intensity, "now", 1800)
@@ -2300,6 +2313,24 @@ class GridLock(hass.Hass):
                                    "control_mode": self.get_state(self.ent_gridwarm_mode) or "read_only",
                                    "zones": zones_out})
 
+    def _refresh_diagnostic_entities(self):
+        """Re-resolve the watched entity list from the static "entities:"
+        config plus a live substring scan for "entity_prefix:" — run at
+        startup and again on every diagnostics poll so an entity that
+        appears on the device later (a firmware update exposing a new
+        sensor, say) gets picked up without an add-on restart. AppDaemon
+        has no access to HA's device/entity registry (only entity_ids
+        and their live state), so "everything for this device" has to be
+        done as an entity_id substring match rather than a real registry
+        lookup — the assumption is the same naming convention this
+        controller already uses throughout ("loft_heatpump_controller_*"
+        etc.), not a guess specific to any one device."""
+        entities = list(self.gridwarm_diagnostic_static_entities)
+        if self.gridwarm_diagnostic_prefix:
+            matched = self.registry.find_all(contains=self.gridwarm_diagnostic_prefix)
+            entities = list(dict.fromkeys(entities + matched))
+        self.gridwarm_diagnostic_entities = entities
+
     def _on_heatpump_service_call(self, event_name, data, kwargs):
         """Fires on EVERY service call anywhere in HA — filtered down to
         just the watched heat pump entities. Deliberately a live event
@@ -2337,6 +2368,7 @@ class GridLock(hass.Hass):
             "Not from GridLock — GridWarm never calls this service on this entity.")
 
     def poll_heatpump_diagnostics(self, kwargs):
+        self._refresh_diagnostic_entities()
         if not self.gridwarm_diagnostic_entities:
             return
         cycles = {}

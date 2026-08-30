@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.19.1 - 2026-08-30
+
+### Fix
+- Heat pump diagnostics: swap the hand-typed `entities:` list for a much simpler `entity_prefix:` option that auto-watches every entity (any domain) sharing a device's name prefix — no more one-off typos in a long list of exact entity_ids silently leaving the feature dark with no visible error. `entities:` is still supported and combines with `entity_prefix:` for narrowing a noisy device
+- GridLock now logs exactly how many diagnostic entities it resolved (and their full list) on startup — "GridWarm diagnostics: watching N entities" — so a misconfiguration shows up in the add-on log immediately instead of only as a silently-empty dashboard card
+- New `HASensorRegistry.find_all()` (all matches, not just the best one) backs the prefix scan, reusing the same domain-nested-vs-flat `get_state()` normalisation the rest of entity discovery already relies on
+
 ## 3.19.0 - 2026-08-30
 
 ### Improvement

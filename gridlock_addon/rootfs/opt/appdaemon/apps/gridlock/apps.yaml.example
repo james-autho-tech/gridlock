@@ -401,25 +401,35 @@ gridlock:
   #       # is auto-created as a pause switch -- flip it off any time to
   #       # instantly stop GridWarm touching this switch and hand control
   #       # back to the heat pump's own normal logic.
-  #   # Heat pump diagnostics -- off unless entities are listed explicitly
-  #   # (same "hardware-specific, no guessing" reasoning as zones above).
-  #   # Two things happen for every listed entity: GridLock watches HA's
-  #   # own event bus live for any real service call touching it (a
-  #   # genuine external command -- an automation, a script, someone in
-  #   # the UI -- with full detail: which service, what value), and pulls
-  #   # its last 24h of state changes every 30 minutes for a plain
-  #   # timeline. Shown on the GridWarm tab. List whichever entities you'd
-  #   # actually want flagged if something external touched them --
-  #   # typically the compressor/DHW/mode sensors plus any writable
-  #   # switch/number/select on the same controller.
+  #   # Heat pump diagnostics -- off unless configured. Two things happen
+  #   # for every watched entity: GridLock watches HA's own event bus
+  #   # live for any real service call touching it (a genuine external
+  #   # command -- an automation, a script, someone in the UI -- with
+  #   # full detail: which service, what value), and pulls its last 24h
+  #   # of state changes every 30 minutes for a plain timeline. Shown on
+  #   # the GridWarm tab.
+  #   #
+  #   # Easiest option -- entity_prefix: watches EVERY entity (any
+  #   # domain) whose entity_id contains this substring, re-checked every
+  #   # poll so a newly-appeared entity on the device shows up on its own
+  #   # without an add-on restart. Most controller integrations (ESPHome,
+  #   # Modbus bridges, etc.) give every entity on a device the same name
+  #   # prefix, so this is usually "the device's own name" and nothing
+  #   # more -- check Developer Tools > States for what your controller's
+  #   # entities actually share as a prefix, don't just copy this one.
   #   diagnostics:
-  #     entities:
-  #       - binary_sensor.loft_heatpump_controller_compressor_running
-  #       - sensor.loft_heatpump_controller_active_state
-  #       - sensor.loft_heatpump_controller_operating_mode
-  #       - switch.loft_heatpump_controller_power_dhw_t5s
-  #       - switch.loft_heatpump_controller_forced_water_tank_heating
-  #       - switch.loft_heatpump_controller_weather_compensation_zone_1
+  #     entity_prefix: "loft_heatpump_controller"
+  #
+  #     # Alternative/addition -- entities: an explicit list, for a
+  #     # device with no clean shared prefix, or to narrow a noisy device
+  #     # down to just the handful you actually care about (most of a raw
+  #     # Modbus register dump is manufacturer diagnostics you'll never
+  #     # want flagged -- reserved bits, capability flags, internal pump
+  #     # outputs). Combines with entity_prefix above if both are set.
+  #     # entities:
+  #     #   - binary_sensor.loft_heatpump_controller_compressor_running
+  #     #   - sensor.loft_heatpump_controller_active_state
+  #     #   - switch.loft_heatpump_controller_power_dhw_t5s
 
   # SSEN Power Track — polled directly by the engine, no HA sensors needed.
   # Postcode prefix (outward code + first digit of inward code, e.g.

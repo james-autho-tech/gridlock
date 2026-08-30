@@ -73,6 +73,17 @@ class HASensorRegistry:
                        "explicitly to disambiguate.")
         return pool[0]
 
+    def find_all(self, *, contains=None, domain=None):
+        """Every entity_id matching a substring/domain, not just the best
+        one — for "everything on this device" cases (e.g. GridWarm's heat
+        pump diagnostics), where find()'s single-best-match-plus-warning
+        shape doesn't apply: many real matches are expected and wanted,
+        not a sign of ambiguity to warn about."""
+        flat = self._flat()
+        return sorted(eid for eid in flat
+                      if (not domain or eid.startswith(f"{domain}."))
+                      and (not contains or contains in eid))
+
     def find_sibling(self, stem, domain, suffixes):
         """Sibling entity sharing `stem` (same account/MPAN) in `domain`,
         trying each suffix in turn — Octopus's naming has changed

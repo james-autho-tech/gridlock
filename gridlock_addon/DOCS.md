@@ -331,20 +331,40 @@ device at all, watch it closely for the first day or two** — confirm hot
 water is actually available when needed, and pause it immediately via the
 helper above if anything looks wrong.
 
-### Heat pump diagnostics (`gridwarm.diagnostics.entities`)
+### Heat pump diagnostics (`gridwarm.diagnostics`)
 
-Off unless entities are listed explicitly (heat pump entity naming is
-hardware-specific, same reasoning as zones/`control_entity` above). For
-every entity listed, GridLock watches HA's own event bus live for any real
-service call touching it — a genuine external command, from an automation,
-a script, or someone in the UI, with the actual service and value — and
-separately pulls its last 24h of state history every 30 minutes for a
-plain timeline. Both show up on the GridWarm tab under "Heat pump
-activity". The point is telling "something externally commanded this"
-apart from "the device is just reporting its own state" without having to
-manually export and read through a raw HA logbook CSV — confirmed useful
-against a real mystery `number.set_value` call this way, on an entity
-GridLock had never touched.
+Off unless configured. For every watched entity, GridLock watches HA's own
+event bus live for any real service call touching it — a genuine external
+command, from an automation, a script, or someone in the UI, with the
+actual service and value — and separately pulls its last 24h of state
+history every 30 minutes for a plain timeline. Both show up on the
+GridWarm tab under "Heat pump activity". The point is telling "something
+externally commanded this" apart from "the device is just reporting its
+own state" without having to manually export and read through a raw HA
+logbook CSV — confirmed useful against a real mystery `number.set_value`
+call this way, on an entity GridLock had never touched.
+
+Two ways to choose which entities to watch, and they combine if both are
+set:
+
+- **`entity_prefix`** (easiest) — watches every entity, in any domain,
+  whose entity_id contains this substring, re-checked on every 30-minute
+  poll so an entity that appears on the device later (a firmware update
+  exposing a new sensor) is picked up on its own, no restart needed. Most
+  controller integrations (ESPHome, Modbus bridges, etc.) give every
+  entity a shared device-name prefix, so this is usually "the device's own
+  name" and nothing more — check Developer Tools > States for what your
+  own controller's entities actually share.
+- **`entities`** — an explicit list, for a device with no clean shared
+  prefix, or to narrow a noisy device (a raw Modbus register dump is
+  mostly manufacturer diagnostics — reserved bits, capability flags,
+  internal pump outputs — you'll never want flagged) down to just the
+  handful you actually care about.
+
+On startup (and after every config reload), GridLock logs exactly how many
+entities it resolved and their full list — check the add-on log for a line
+starting "GridWarm diagnostics: watching N entities" to confirm your
+config actually took effect before checking the dashboard.
 
 ## Modes (`battery_risk_profile` in `apps.yaml`)
 
