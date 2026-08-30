@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.20.2 - 2026-08-30
+
+### Fix
+- Heat pump diagnostics history fetch was firing one `get_history()` call per watched entity — 264 sequential round trips with a wide `entity_prefix` match, run synchronously on GridLock's single worker thread. Confirmed live this was slow enough to back up the real planning `tick()` behind it ("Excessive time spent in callback GridLock.tick" every 5 minutes) and likely why the diagnostics card never finished updating. Batched into one `get_history()` call for every watched entity, since it natively accepts a list
+- Weather forecast lookup for GridWarm's anticipation feature (`weather/get_forecasts`) was retrying every single tick forever once a weather integration is confirmed not to support it, each attempt a real (failing) round trip. Now tried once per entity and never retried again after a confirmed failure
+
 ## 3.20.1 - 2026-08-30
 
 ### Improvement

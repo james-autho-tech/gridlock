@@ -2081,17 +2081,24 @@ class GridLock(hass.Hass):
             raw = self.get_state(weather_entity, attribute="forecast")
             if isinstance(raw, list) and raw:
                 points = raw
-            else:
+            elif weather_entity not in self._thermal_forecast_warned:
+                # Only tried once per entity, ever (not once per tick) --
+                # confirmed live that a weather integration not supporting
+                # this service call still costs a real round trip before
+                # the error comes back, and every tick calling it again
+                # forever was slow enough to back up this app's single
+                # worker thread (see poll_heatpump_diagnostics for the
+                # same lesson learned the hard way on a bigger scale).
                 try:
                     resp = self.call_service("weather/get_forecasts", entity_id=weather_entity,
                                              type="hourly", return_response=True) or {}
                     points = (resp.get(weather_entity, {}) or {}).get("forecast", []) or []
                 except Exception as exc:  # noqa: BLE001 — best-effort only
-                    if weather_entity not in self._thermal_forecast_warned:
-                        self.log(f"Couldn't get a weather forecast from {weather_entity} for "
-                                 f"the thermal model ({exc!r}) — holding the current external "
-                                 "temperature flat across the horizon instead.", level="WARNING")
-                        self._thermal_forecast_warned.add(weather_entity)
+                    self.log(f"Couldn't get a weather forecast from {weather_entity} for "
+                             f"the thermal model ({exc!r}) — holding the current external "
+                             "temperature flat across the horizon instead. Not retrying this "
+                             "entity again this run.", level="WARNING")
+                    self._thermal_forecast_warned.add(weather_entity)
         parsed = []
         for p in points:
             try:
@@ -2370,26 +2377,42 @@ class GridLock(hass.Hass):
 
     def poll_heatpump_diagnostics(self, kwargs):
         self._refresh_diagnostic_entities()
-        if not self.gridwarm_diagnostic_entities:
+        entities = self.gridwarm_diagnostic_entities
+        if not entities:
             return
         live_status = {}
-        sessions = {}
-        for eid in self.gridwarm_diagnostic_entities:
+        for eid in entities:
             full = self.get_state(eid, attribute="all") or {}
             attrs = full.get("attributes") or {}
             live_status[eid] = {"name": attrs.get("friendly_name", eid),
                                  "state": full.get("state"),
                                  "unit": attrs.get("unit_of_measurement")}
-            try:
-                hist = self.get_history(entity_id=eid, days=1)
-            except Exception as exc:  # noqa: BLE001 — best-effort, one bad entity shouldn't drop the rest
-                self.log(f"Heat pump diagnostics history fetch failed for {eid!r}: {exc!r}",
-                         level="WARNING")
-                continue
-            if not hist or not hist[0]:
-                continue
-            changes = [{"ts": s.get("last_changed"), "state": s.get("state")}
-                       for s in hist[0] if s.get("last_changed")]
+        # One batched history call for every watched entity, not one
+        # request per entity -- get_history() accepts a list and fetches
+        # them all in a single /api/history/period round trip. With
+        # entity_prefix matching everything on a device (a raw controller
+        # dump can easily be 100+ entities), doing this one-at-a-time was
+        # slow enough, run synchronously on this app's single worker
+        # thread, to back up the real planning tick() behind it.
+        sessions = {}
+        try:
+            hist = self.get_history(entity_id=entities, days=1, no_attributes=True) or []
+        except Exception as exc:  # noqa: BLE001 — best-effort, a bad fetch shouldn't crash the poll
+            self.log(f"Heat pump diagnostics history fetch failed: {exc!r}", level="WARNING")
+            hist = []
+        changes_by_entity = {}
+        for entity_hist in hist:
+            for s in (entity_hist or []):
+                eid = s.get("entity_id")
+                ts = s.get("last_changed")
+                if not eid or ts is None:
+                    continue
+                # get_history() returns last_changed as a real datetime,
+                # not a string -- convert before this ends up in a JSON
+                # sensor attribute.
+                ts = ts.isoformat() if hasattr(ts, "isoformat") else ts
+                changes_by_entity.setdefault(eid, []).append({"ts": ts, "state": s.get("state")})
+        for eid, changes in changes_by_entity.items():
             segs = core_diagnostics.compute_state_sessions(changes)
             # Only entities that actually changed state in the window are
             # worth a timeline row -- most of a raw Modbus register dump
@@ -2404,7 +2427,7 @@ class GridLock(hass.Hass):
                                    "icon": "mdi:heat-pump-outline",
                                    "live_status": live_status,
                                    "sessions": sessions,
-                                   "watched_entities": self.gridwarm_diagnostic_entities,
+                                   "watched_entities": entities,
                                    "external_events": self.heatpump_events[-20:]})
 
     def _load_circuit_state(self):
