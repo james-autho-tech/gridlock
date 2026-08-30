@@ -141,6 +141,7 @@ def build_status():
     ssen = get("sensor.gridlock_ssen_local_outages") or {}
     circuits = get("sensor.gridlock_circuits") or {}
     thermal = get("sensor.gridlock_gridwarm") or {}
+    heatpump_diag = get("sensor.gridlock_heatpump_diagnostics")
     saving_raw = get(status_attrs.get("saving_events_entity")) or {}
     saving_attrs = saving_raw.get("attributes", {})
 
@@ -217,6 +218,13 @@ def build_status():
         "circuit_history": circuits.get("attributes", {}).get("history") or [],
         "thermal_zones": thermal.get("attributes", {}).get("zones") or [],
         "thermal_plan_summary": thermal.get("attributes", {}).get("plan_summary") or "",
+        # None (not empty lists) when never configured, so the dashboard
+        # knows to hide the card entirely rather than show an empty one.
+        "heatpump_diagnostics": ({
+            "watched_entities": (heatpump_diag or {}).get("attributes", {}).get("watched_entities") or [],
+            "recent_cycles": (heatpump_diag or {}).get("attributes", {}).get("recent_cycles") or {},
+            "external_events": (heatpump_diag or {}).get("attributes", {}).get("external_events") or [],
+        } if heatpump_diag else None),
         # Live and direct, same as mode_override above -- not sourced
         # from sensor.gridlock_gridwarm's own attributes, which only
         # get republished once per 5-min tick (and not at all if no
@@ -1295,6 +1303,39 @@ function renderThermalZones(zones) {
     ${tanks.length ? `<div style="margin-top:14px"><div class="lbl" style="margin-bottom:6px">Hot water</div>${renderThermalCombinedChart(tanks)}</div>` : ''}
     <div style="color:var(--dim);font-size:12px;margin-top:10px">Recommended schedule only — not applied automatically. Never controls your heating.</div>`;
 }
+function renderHeatpumpDiagnostics(diag) {
+  if (!diag) return '';
+  const events = diag.external_events || [];
+  const eventsHtml = events.length
+    ? events.slice().reverse().map(e => `
+        <div class="gl-log-row is-warn">
+          <span class="gl-log-dot" style="background:var(--amber)"></span>
+          <span class="gl-log-ts num">${esc(fmtTs(e.ts))}</span>
+          <span><b style="color:var(--ink)">${esc(e.entity_id)}</b> — ${esc(e.domain)}.${esc(e.service)}${e.value !== null && e.value !== undefined ? ` (value: ${esc(String(e.value))})` : ''}</span>
+        </div>`).join('')
+    : '<div style="color:var(--dim)">None detected — every watched entity has only ever reported its own state, never been externally commanded.</div>';
+  const cycles = diag.recent_cycles || {};
+  const cyclesHtml = Object.keys(cycles).length
+    ? Object.entries(cycles).map(([eid, changes]) => `
+        <div style="margin-bottom:10px">
+          <div style="color:var(--dim);font-size:12px;margin-bottom:4px">${esc(eid)}</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+            ${changes.slice().reverse().slice(0, 8).map(c =>
+              `<span class="gl-solar-pill" style="font-size:11px" title="${esc(fmtDate(c.ts))}">${esc(String(c.state))}</span>`
+            ).join('')}
+          </div>
+        </div>`).join('')
+    : '<div style="color:var(--dim)">No history yet — builds up after the first poll.</div>';
+  return `
+    <div class="gl-wrap">
+      <div class="gl-h">Heat pump activity</div>
+      <div class="gl-sub">Watching ${diag.watched_entities.length} entit${diag.watched_entities.length === 1 ? 'y' : 'ies'} for external commands (a real service call from something other than GridLock — GridWarm only ever calls switch.turn_on/off on a zone's own configured control_entity) and recent state changes, so "why did my heat pump just do that" doesn't need a manually-exported log.</div>
+      <div class="lbl" style="margin:12px 0 6px">External commands detected</div>
+      ${eventsHtml}
+      <div class="lbl" style="margin:16px 0 6px">Recent state changes (last 24h)</div>
+      ${cyclesHtml}
+    </div>`;
+}
 // Shared tick-label row for the flex `.gl-bars` charts — one column per
 // bar so labels line up with renderLoadProfileChart/renderCarbonChart's
 // own `.gl-bar-col` grid exactly, but only every Nth column gets text so
@@ -1733,6 +1774,7 @@ async function refresh() {
         ${d.thermal_plan_summary ? `<div class="gl-sub" style="color:var(--ink)">${esc(d.thermal_plan_summary)}</div>` : ''}
         ${renderThermalZones(d.thermal_zones)}
       </div>
+      ${renderHeatpumpDiagnostics(d.heatpump_diagnostics)}
     </div>
     <div class="tab-page" data-tab="tariffs">
       <div class="gl-wrap">

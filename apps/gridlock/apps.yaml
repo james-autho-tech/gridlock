@@ -401,6 +401,25 @@ gridlock:
   #       # is auto-created as a pause switch -- flip it off any time to
   #       # instantly stop GridWarm touching this switch and hand control
   #       # back to the heat pump's own normal logic.
+  #   # Heat pump diagnostics -- off unless entities are listed explicitly
+  #   # (same "hardware-specific, no guessing" reasoning as zones above).
+  #   # Two things happen for every listed entity: GridLock watches HA's
+  #   # own event bus live for any real service call touching it (a
+  #   # genuine external command -- an automation, a script, someone in
+  #   # the UI -- with full detail: which service, what value), and pulls
+  #   # its last 24h of state changes every 30 minutes for a plain
+  #   # timeline. Shown on the GridWarm tab. List whichever entities you'd
+  #   # actually want flagged if something external touched them --
+  #   # typically the compressor/DHW/mode sensors plus any writable
+  #   # switch/number/select on the same controller.
+  #   diagnostics:
+  #     entities:
+  #       - binary_sensor.loft_heatpump_controller_compressor_running
+  #       - sensor.loft_heatpump_controller_active_state
+  #       - sensor.loft_heatpump_controller_operating_mode
+  #       - switch.loft_heatpump_controller_power_dhw_t5s
+  #       - switch.loft_heatpump_controller_forced_water_tank_heating
+  #       - switch.loft_heatpump_controller_weather_compensation_zone_1
 
   # SSEN Power Track — polled directly by the engine, no HA sensors needed.
   # Postcode prefix (outward code + first digit of inward code, e.g.

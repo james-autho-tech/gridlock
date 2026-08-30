@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.19.0 - 2026-08-30
+
+### Improvement
+- New GridWarm heat pump diagnostics (`gridwarm.diagnostics.entities` in `apps.yaml`, off by default) — GridLock watches HA's event bus live for any real external command (service call) touching a listed entity, with the actual service and value, plus a 24h state-change timeline pulled every 30 minutes. Shown on the GridWarm tab as "Heat pump activity". Built specifically to answer "did GridWarm just do that" without manually exporting a raw HA logbook CSV
+
 ## 3.18.2 - 2026-08-16
 
 ### Fix

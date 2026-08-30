@@ -481,6 +481,22 @@ class GridLock(hass.Hass):
                          "toggle won't be controllable until you do.", level="WARNING")
                 self.set_state(pause_helper, state="on")
 
+        # GridWarm heat pump diagnostics — off unless entities are listed
+        # explicitly (heat pump entity naming is hardware-specific, same
+        # "no guessing at someone else's device" reasoning as zones/
+        # control_entity above). Two independent mechanisms: a live
+        # call_service event listener (catches an external command the
+        # instant it happens, with full fidelity — domain, service, the
+        # actual value set — since reconstructing that after the fact
+        # from plain history loses exactly that detail), and a periodic
+        # history pull for the plain state-change timeline (self-
+        # reported values, not commands).
+        self.gridwarm_diagnostic_entities = list(dict.fromkeys(
+            gridwarm_cfg.get("diagnostics", {}).get("entities", []) or []))
+        self.heatpump_events = self._load_json("heatpump_events.json", [])
+        if self.gridwarm_diagnostic_entities:
+            self.listen_event(self._on_heatpump_service_call, "call_service")
+
         self.notify_service = a.get("notify_service")
         self._prev_storm_active = False
         self._prev_ev_protection = False
@@ -605,6 +621,9 @@ class GridLock(hass.Hass):
 
         if self.agile_region:
             self.run_every(self.poll_agile_rates, "now", 3600)
+
+        if self.gridwarm_diagnostic_entities:
+            self.run_every(self.poll_heatpump_diagnostics, "now", 1800)
 
         self.run_every(self.poll_carbon_intensity, "now", 1800)
         self.run_every(self.tick, "now", 300)
@@ -2280,6 +2299,65 @@ class GridLock(hass.Hass):
                                    "predicted_cost_today_baseline_total": round(baseline_cost, 2),
                                    "control_mode": self.get_state(self.ent_gridwarm_mode) or "read_only",
                                    "zones": zones_out})
+
+    def _on_heatpump_service_call(self, event_name, data, kwargs):
+        """Fires on EVERY service call anywhere in HA — filtered down to
+        just the watched heat pump entities. Deliberately a live event
+        listener rather than reconstructing this after the fact from
+        history: the history API only has the resulting state, not which
+        service/domain/value actually caused it, which is exactly the
+        detail that distinguishes "something external commanded this"
+        from "the device reported its own state" (confirmed against a
+        real mystery write this session — a number.set_value call on an
+        entity GridLock has never touched)."""
+        entity_ids = (data.get("service_data") or {}).get("entity_id")
+        if entity_ids is None:
+            entity_ids = (data.get("target") or {}).get("entity_id")
+        if isinstance(entity_ids, str):
+            entity_ids = [entity_ids]
+        watched = [e for e in (entity_ids or []) if e in self.gridwarm_diagnostic_entities]
+        if not watched:
+            return
+        now = self.get_now()
+        service_data = data.get("service_data") or {}
+        value = service_data.get("value")
+        if value is None:
+            value = service_data.get("option")
+        for eid in watched:
+            self.heatpump_events.append({
+                "ts": now.isoformat(), "entity_id": eid,
+                "domain": data.get("domain"), "service": data.get("service"),
+                "value": value})
+        self.heatpump_events = self.heatpump_events[-100:]
+        self._save_json("heatpump_events.json", self.heatpump_events)
+        self._notify(
+            "GridLock: external command on a watched heat pump entity",
+            f"{', '.join(watched)} — {data.get('domain')}.{data.get('service')}"
+            f"{f' (value: {value})' if value is not None else ''}. "
+            "Not from GridLock — GridWarm never calls this service on this entity.")
+
+    def poll_heatpump_diagnostics(self, kwargs):
+        if not self.gridwarm_diagnostic_entities:
+            return
+        cycles = {}
+        for eid in self.gridwarm_diagnostic_entities:
+            try:
+                hist = self.get_history(entity_id=eid, days=1)
+            except Exception as exc:  # noqa: BLE001 — best-effort, one bad entity shouldn't drop the rest
+                self.log(f"Heat pump diagnostics history fetch failed for {eid!r}: {exc!r}",
+                         level="WARNING")
+                continue
+            if not hist or not hist[0]:
+                continue
+            cycles[eid] = [{"ts": s.get("last_changed"), "state": s.get("state")}
+                           for s in hist[0] if s.get("last_changed")][-20:]
+        self.set_state("sensor.gridlock_heatpump_diagnostics",
+                       state=str(len(self.heatpump_events)),
+                       attributes={"friendly_name": "GridLock Heat Pump Diagnostics",
+                                   "icon": "mdi:heat-pump-outline",
+                                   "watched_entities": self.gridwarm_diagnostic_entities,
+                                   "recent_cycles": cycles,
+                                   "external_events": self.heatpump_events[-20:]})
 
     def _load_circuit_state(self):
         state = self._load_json("circuit_state.json", {})

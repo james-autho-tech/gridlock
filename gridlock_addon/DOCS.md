@@ -331,6 +331,21 @@ device at all, watch it closely for the first day or two** — confirm hot
 water is actually available when needed, and pause it immediately via the
 helper above if anything looks wrong.
 
+### Heat pump diagnostics (`gridwarm.diagnostics.entities`)
+
+Off unless entities are listed explicitly (heat pump entity naming is
+hardware-specific, same reasoning as zones/`control_entity` above). For
+every entity listed, GridLock watches HA's own event bus live for any real
+service call touching it — a genuine external command, from an automation,
+a script, or someone in the UI, with the actual service and value — and
+separately pulls its last 24h of state history every 30 minutes for a
+plain timeline. Both show up on the GridWarm tab under "Heat pump
+activity". The point is telling "something externally commanded this"
+apart from "the device is just reporting its own state" without having to
+manually export and read through a raw HA logbook CSV — confirmed useful
+against a real mystery `number.set_value` call this way, on an entity
+GridLock had never touched.
+
 ## Modes (`battery_risk_profile` in `apps.yaml`)
 
 The planning engine is a linear program, not a greedy heuristic — it
