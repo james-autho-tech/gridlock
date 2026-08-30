@@ -414,9 +414,9 @@ PAGE = r"""<!doctype html>
   .gl-nav-tabs { display:flex; gap:4px; flex-wrap:wrap; }
   .gl-nav-right { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
   .gl-segmented { display:flex; background:#0b1220; border:1px solid var(--line);
-                  border-radius:10px; padding:3px; gap:2px; }
+                  border-radius:6px; padding:3px; gap:2px; }
   .gl-seg-btn { background:none; border:none; color:var(--dim); font-size:11px;
-                font-weight:700; letter-spacing:.6px; padding:7px 12px; border-radius:8px;
+                font-weight:700; letter-spacing:.6px; padding:7px 12px; border-radius:4px;
                 cursor:pointer; font-family:inherit; transition:background .15s,color .15s; }
   .gl-seg-btn:hover { color:var(--ink); }
   .gl-seg-btn.active[data-mode="eco"] { background:rgba(52,211,153,.18); color:var(--green); }
@@ -433,15 +433,18 @@ PAGE = r"""<!doctype html>
   .gl-weather .temp { font-size:15px; font-weight:700; color:var(--ink); }
   .gl-weather-icon { font-size:18px; }
   .gl-solar-pill, .gl-storm-pill { display:inline-flex; align-items:center; gap:5px;
-                 padding:4px 10px; border-radius:999px; font-size:11px; font-weight:700;
-                 letter-spacing:.3px; background:rgba(255,255,255,.05); }
+                 padding:4px 10px; border-radius:4px; font-size:11px; font-weight:700;
+                 letter-spacing:.3px; background:rgba(255,255,255,.05);
+                 border:1px solid var(--line); }
   .gl-storm-pill.clear { color:var(--green); }
   .gl-storm-pill.active { color:var(--red); background:rgba(248,113,113,.15); animation:glpulse 1.6s infinite; }
 
-  /* ---- action pill badges ---- */
-  .gl-pill { display:inline-flex; align-items:center; gap:4px; padding:3px 10px;
-             border-radius:999px; font-size:11px; font-weight:700; letter-spacing:.4px;
-             white-space:nowrap; }
+  /* ---- action tag badges (flat rectangular, not capsule -- matches the
+     yArr dashboard's tag style: small radius, solid left accent, no pill
+     shape) ---- */
+  .gl-pill { display:inline-flex; align-items:center; gap:4px; padding:3px 10px 3px 8px;
+             border-radius:4px; font-size:11px; font-weight:700; letter-spacing:.4px;
+             white-space:nowrap; border-left:3px solid currentColor; }
   .gl-pill-charge { background:rgba(52,211,153,.18); color:var(--green); }
   .gl-pill-export { background:rgba(56,189,248,.18); color:var(--cyan); }
   .gl-pill-eco    { background:rgba(251,191,36,.14); color:#d6a94f; }

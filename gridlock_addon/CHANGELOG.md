@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.20.1 - 2026-08-30
+
+### Improvement
+- Replaced every capsule-shaped ("pill") badge — header status indicators (Storm Watch/On Grid/Solar), plan-table action tags (CHARGE/EXPORT/BYPASS/etc.), and the zone control cell — with a flat rectangular tag (small border-radius, solid left accent bar) instead. Same colours and theme, just a flatter shape. Mode toggle and GridWarm control toggle tightened to match
+
 ## 3.20.0 - 2026-08-30
 
 ### Improvement
