@@ -3,7 +3,7 @@ from core.thermal import (ThermalParams, simulate, thermal_mass_from_volume,
                            WATER_WH_PER_LITRE_PER_C, anticipatory_target_curve,
                            decide_dhw_command, usable_hot_water_litres,
                            showers_available, implied_heat_loss_degrees,
-                           blend_learned_value)
+                           blend_learned_value, fit_heat_loss_params)
 
 
 def _room_params(**overrides):
@@ -259,3 +259,33 @@ def test_blend_learned_value_converges_gradually_not_instantly():
     # move it meaningfully closer, but a single stray reading earlier
     # couldn't have swung it anywhere near 0.05 on its own.
     assert 0.035 < current < 0.05
+
+
+def test_fit_heat_loss_params_recovers_true_values_from_clean_observations():
+    true_degrees = 0.035
+    true_watts = 170.0
+    thermal_mass = 500.0
+    diffs = [2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0]
+    observations = [
+        {"diff": d, "rate": true_degrees * d + true_watts / thermal_mass}
+        for d in diffs
+    ]
+    result = fit_heat_loss_params(observations, thermal_mass)
+    assert result is not None
+    degrees, watts = result
+    assert abs(degrees - true_degrees) < 1e-9
+    assert abs(watts - true_watts) < 1e-6
+
+
+def test_fit_heat_loss_params_returns_none_below_eight_observations():
+    observations = [{"diff": d, "rate": 0.035 * d} for d in [2, 4, 6, 8, 10, 12, 14]]
+    assert fit_heat_loss_params(observations, 500.0) is None
+
+
+def test_fit_heat_loss_params_returns_none_when_diffs_are_too_clustered():
+    # All observations from very similar conditions -- a fit is
+    # mathematically possible but not meaningfully constrained without a
+    # real spread of conditions to fit against (every night happened to
+    # be about the same temperature difference).
+    observations = [{"diff": 5.0 + i * 0.01, "rate": 0.035 * (5.0 + i * 0.01)} for i in range(10)]
+    assert fit_heat_loss_params(observations, 500.0) is None

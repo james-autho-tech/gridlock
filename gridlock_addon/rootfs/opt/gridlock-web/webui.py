@@ -1264,7 +1264,7 @@ function renderThermalZoneTable(zones) {
   const anyShowers = zones.some(z => z.showers_available != null);
   const rows = zones.map(z => `
     <tr>
-      <td><span class="gl-legend-dot" style="background:${z._color}"></span>${esc(z.name)}${z.heating_on ? ' 🔥' : ''}${z.learned_heat_loss_degrees != null ? ` <span style="color:var(--dim);cursor:help" title="Heat-loss rate learned from real cooling periods: ${Number(z.learned_heat_loss_degrees).toFixed(4)} (started at ${Number(z.config_heat_loss_degrees).toFixed(4)} from apps.yaml). Refines gradually as more data comes in — a single reading can't swing it.">🧠</span>` : ''}</td>
+      <td><span class="gl-legend-dot" style="background:${z._color}"></span>${esc(z.name)}${z.heating_on ? ' 🔥' : ''}${z.learned_heat_loss_degrees != null ? ` <span style="color:var(--dim);cursor:help" title="Learned from ${z.thermal_learning_observations || 0} real cooling-period observation${z.thermal_learning_observations === 1 ? '' : 's'}:&#10;heat_loss_degrees ${Number(z.learned_heat_loss_degrees).toFixed(4)} (started ${Number(z.config_heat_loss_degrees).toFixed(4)})&#10;heat_loss_watts ${Number(z.learned_heat_loss_watts).toFixed(1)} (started ${Number(z.config_heat_loss_watts).toFixed(1)})&#10;Refines gradually — a single observation can't swing it. Needs 8+ observations spanning a real spread of conditions before both figures are fitted independently; below that, only heat_loss_degrees refines.">🧠</span>` : ''}</td>
       <td class="num">${Number(z.current_temp).toFixed(1)}°C</td>
       <td class="num">${Number(z.target_temp).toFixed(1)}°C</td>
       <td class="num">${Number(z.cop).toFixed(2)}</td>

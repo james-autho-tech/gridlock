@@ -226,17 +226,28 @@ little more now if cold is coming. Heat output itself stays "low and slow"
 (gentle and continuous) unless a zone is genuinely far behind, rather than
 cycling to full power like a boiler.
 
-**Learning**: the model's heat-loss rate (`heat_loss_degrees` in
-`apps.yaml`) refines itself against real cooling periods over time —
-whenever a zone is genuinely cooling with heating off at both ends of a
-tick, GridLock compares the real observed cooling rate against what the
-current figure would have predicted, and nudges it a little closer (same
-gradual EMA blend the learned house-load profile already uses elsewhere —
-one reading can't swing it, but a real, consistent difference between your
-house and the number you originally typed in shows up within a couple of
-weeks). Hover the 🧠 next to a zone's name for its current learned figure
-against what it started at. This only refines the *prediction* — it's
-still advisory-only, nothing about active control changes.
+**Learning**: the model's two loss terms — `heat_loss_degrees` (the
+dominant one, scales with the internal/external temperature difference)
+and `heat_loss_watts` (a smaller, fixed background loss) — both refine
+themselves against real cooling periods over time, whenever a zone is
+genuinely cooling with heating off at both ends of a tick. Each
+observation is added to a rolling buffer (last 500); once there are
+enough of them spanning a real spread of conditions (8+, with at least
+~2°C of variation in the internal/external difference — not every
+observation from a similar mild night), a proper line fit separates the
+two terms properly, rather than solving one from a single reading while
+assuming the other is already correct. Below that threshold, only
+`heat_loss_degrees` refines (the simpler single-point method, holding
+`heat_loss_watts` at its current value) so something still improves
+during early data collection rather than nothing at all. Either way,
+the actual numbers only ever move via the same gradual EMA blend the
+learned house-load profile already uses — a single fit, even a good
+one, can't swing them on its own; a real, consistent gap between your
+house and the numbers you originally typed in shows up within a couple
+of weeks. Hover the 🧠 next to a zone's name for both current learned
+figures against what they started at, and how many observations they're
+based on. This only refines the *prediction* — it's still advisory-only,
+nothing about active control changes.
 
 A "zone" is either a room (heated by a shared heat pump whose output varies
 with outdoor temperature) or a hot water tank (heated by the same heat

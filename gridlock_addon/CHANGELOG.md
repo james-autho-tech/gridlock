@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.24.0 - 2026-08-31
+
+### Improvement
+- GridWarm's learning now separates its two loss terms properly instead of only touching one: `heat_loss_watts` (the fixed background loss) now refines alongside `heat_loss_degrees`, via a proper least-squares fit over a rolling buffer of real cooling-period observations once there are enough of them (8+, spanning a real spread of conditions) — rather than solving one term per single reading while silently assuming the other was already correct. Falls back to the simpler single-point method below that threshold, so something still improves during early data collection
+- 🧠 tooltip on the GridWarm tab now shows both learned figures against their starting values, and how many real observations they're based on — a confidence signal that wasn't there before (no way to tell "well-calibrated" from "still on 3 data points")
+- New `core/thermal.py` (`fit_heat_loss_params`) — pure ordinary-least-squares line fit, unit tested
+
 ## 3.23.0 - 2026-08-31
 
 ### Improvement

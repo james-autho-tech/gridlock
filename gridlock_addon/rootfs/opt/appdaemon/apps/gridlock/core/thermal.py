@@ -211,6 +211,42 @@ def blend_learned_value(current, observed, alpha=0.05):
     return current * (1 - alpha) + observed * alpha
 
 
+def fit_heat_loss_params(observations, thermal_mass_wh_per_c):
+    """Separates heat_loss_degrees and heat_loss_watts properly, unlike
+    implied_heat_loss_degrees above (which solves one equation per point
+    with the other term assumed fixed, silently absorbing any error in
+    that "fixed" term into the one being solved for). Ordinary least-
+    squares line fit over many real cooling-period observations:
+    rate = heat_loss_degrees * diff + (heat_loss_watts / thermal_mass)
+    -- slope is heat_loss_degrees, intercept converts to heat_loss_watts.
+
+    observations: list of {"diff", "rate"} pairs (see
+    implied_heat_loss_degrees for what these mean) accumulated over
+    many real cooling periods.
+
+    Returns None below 8 observations (too few to fit two parameters
+    reliably) or when the diffs are too clustered together (under 2C of
+    spread) -- a fit is mathematically possible but not meaningfully
+    constrained without genuinely different conditions to fit against,
+    e.g. every observation happening to come from similar mild nights.
+    Returns (heat_loss_degrees, heat_loss_watts) otherwise."""
+    n = len(observations)
+    if n < 8:
+        return None
+    xs = [o["diff"] for o in observations]
+    ys = [o["rate"] for o in observations]
+    mean_x = sum(xs) / n
+    mean_y = sum(ys) / n
+    variance_x = sum((x - mean_x) ** 2 for x in xs) / n
+    if variance_x < 4.0:  # std dev < 2C of spread across observations
+        return None
+    covariance_xy = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys)) / n
+    heat_loss_degrees = covariance_xy / variance_x
+    intercept = mean_y - heat_loss_degrees * mean_x
+    heat_loss_watts = intercept * thermal_mass_wh_per_c
+    return heat_loss_degrees, heat_loss_watts
+
+
 def decide_dhw_command(desired_on, current_temp, safety_min_temp, off_duration_hours,
                         max_off_hours):
     """The actual on/off command to send to real hardware, layering two
