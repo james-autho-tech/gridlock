@@ -11,6 +11,31 @@ import urllib.request
 
 SUPERVISOR_TOKEN = os.environ["SUPERVISOR_TOKEN"]
 PORT = 8099
+# GridWarm zone display-name overrides -- purely cosmetic (what's SHOWN
+# on the dashboard), stored locally by this web server itself rather
+# than round-tripping through apps.yaml + an add-on restart for a
+# rename. Deliberately not gridlock.py's concern: the zone's real name
+# (used as the stable key for its learned-thermal-parameters state, its
+# pause helper's entity_id, etc.) never changes, only what's displayed.
+ZONE_NAMES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "zone_display_names.json")
+
+
+def load_zone_names():
+    try:
+        with open(ZONE_NAMES_PATH) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_zone_name(zone_key, display_name):
+    names = load_zone_names()
+    if display_name:
+        names[zone_key] = display_name
+    else:
+        names.pop(zone_key, None)  # empty input resets back to the real name
+    with open(ZONE_NAMES_PATH, "w") as f:
+        json.dump(names, f)
 
 
 def ha_get_all_states():
@@ -141,6 +166,15 @@ def build_status():
     ssen = get("sensor.gridlock_ssen_local_outages") or {}
     circuits = get("sensor.gridlock_circuits") or {}
     thermal = get("sensor.gridlock_gridwarm") or {}
+    zone_names = load_zone_names()
+    thermal_zones = thermal.get("attributes", {}).get("zones") or []
+    # real_name is gridlock.py's own stable zone identity (used as the
+    # key for its learned-thermal-parameters state, its pause helper's
+    # entity_id) -- kept alongside "name" so a rename can always POST
+    # back the right key, even after "name" itself has been overridden.
+    thermal_zones = [dict(z, real_name=z["name"],
+                          name=zone_names.get(z["name"], z["name"]))
+                     for z in thermal_zones]
     heatpump_diag = get("sensor.gridlock_heatpump_diagnostics")
     saving_raw = get(status_attrs.get("saving_events_entity")) or {}
     saving_attrs = saving_raw.get("attributes", {})
@@ -216,7 +250,7 @@ def build_status():
         "learned_load_profile": forecast.get("attributes", {}).get("learned_load_profile") or [],
         "circuits": circuits.get("attributes", {}).get("circuits") or [],
         "circuit_history": circuits.get("attributes", {}).get("history") or [],
-        "thermal_zones": thermal.get("attributes", {}).get("zones") or [],
+        "thermal_zones": thermal_zones,
         "thermal_plan_summary": thermal.get("attributes", {}).get("plan_summary") or "",
         # None (not empty lists) when never configured, so the dashboard
         # knows to hide the card entirely rather than show an empty one.
@@ -726,6 +760,27 @@ async function setGridwarmMode(mode) {
     });
   } catch (e) { /* surfaced on next refresh() if the engine never picks it up */ }
   setTimeout(() => { gridwarmModeBusy = false; refresh(); }, 1500);
+}
+let zoneRenameBusy = false;
+async function renameZone(realName, currentDisplayName) {
+  if (zoneRenameBusy) return;
+  const next = window.prompt('Rename this zone (leave blank to reset):', currentDisplayName);
+  if (next === null) return;  // cancelled
+  zoneRenameBusy = true;
+  try {
+    await fetch('api/gridwarm-rename-zone', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ zone: realName, display_name: next.trim() }),
+    });
+  } catch (e) { /* surfaced on next refresh() if the engine never picks it up */ }
+  zoneRenameBusy = false;
+  refresh();
+}
+// Reads the real/display name back out via data attributes (encodeURIComponent'd
+// in the template) rather than inlining them into the onclick string directly --
+// a zone name containing a quote character would otherwise break the attribute.
+function renameZoneFromEl(el) {
+  renameZone(decodeURIComponent(el.dataset.realName), decodeURIComponent(el.dataset.displayName));
 }
 function renderGridwarmModeToggle(mode) {
   const opts = [['read_only', 'READ-ONLY'], ['active', 'ACTIVE']];
@@ -1264,7 +1319,7 @@ function renderThermalZoneTable(zones) {
   const anyShowers = zones.some(z => z.showers_available != null);
   const rows = zones.map(z => `
     <tr>
-      <td><span class="gl-legend-dot" style="background:${z._color}"></span>${esc(z.name)}${z.heating_on ? ' 🔥' : ''}${z.learned_heat_loss_degrees != null ? ` <span style="color:var(--dim);cursor:help" title="Learned from ${z.thermal_learning_observations || 0} real cooling-period observation${z.thermal_learning_observations === 1 ? '' : 's'}:&#10;heat_loss_degrees ${Number(z.learned_heat_loss_degrees).toFixed(4)} (started ${Number(z.config_heat_loss_degrees).toFixed(4)})&#10;heat_loss_watts ${Number(z.learned_heat_loss_watts).toFixed(1)} (started ${Number(z.config_heat_loss_watts).toFixed(1)})&#10;Refines gradually — a single observation can't swing it. Needs 8+ observations spanning a real spread of conditions before both figures are fitted independently; below that, only heat_loss_degrees refines.">🧠</span>` : ''}</td>
+      <td><span class="gl-legend-dot" style="background:${z._color}"></span>${esc(z.name)}${z.heating_on ? ' 🔥' : ''}${z.learned_heat_loss_degrees != null ? ` <span style="color:var(--dim);cursor:help" title="Learned from ${z.thermal_learning_observations || 0} real cooling-period observation${z.thermal_learning_observations === 1 ? '' : 's'}:&#10;heat_loss_degrees ${Number(z.learned_heat_loss_degrees).toFixed(4)} (started ${Number(z.config_heat_loss_degrees).toFixed(4)})&#10;heat_loss_watts ${Number(z.learned_heat_loss_watts).toFixed(1)} (started ${Number(z.config_heat_loss_watts).toFixed(1)})&#10;Refines gradually — a single observation can't swing it. Needs 8+ observations spanning a real spread of conditions before both figures are fitted independently; below that, only heat_loss_degrees refines.">🧠</span>` : ''} <span style="color:var(--dim);cursor:pointer" title="Rename zone" onclick="renameZoneFromEl(this)" data-real-name="${encodeURIComponent(z.real_name)}" data-display-name="${encodeURIComponent(z.name)}">✏️</span></td>
       <td class="num">${Number(z.current_temp).toFixed(1)}°C</td>
       <td class="num">${Number(z.target_temp).toFixed(1)}°C</td>
       <td class="num">${Number(z.cop).toFixed(2)}</td>
@@ -1948,6 +2003,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_gridwarm_pause()
         elif path.endswith("/api/gridwarm-mode"):
             self._handle_gridwarm_mode()
+        elif path.endswith("/api/gridwarm-rename-zone"):
+            self._handle_gridwarm_rename_zone()
         else:
             self._send(404, b"not found", "text/plain")
 
@@ -1998,6 +2055,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
             ha_call_service("input_select/select_option",
                             "input_select.gridlock_gridwarm_mode", option=mode)
             self._send(200, json.dumps({"ok": True, "mode": mode}).encode(), "application/json")
+        except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
+            self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
+
+    def _handle_gridwarm_rename_zone(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+            zone_key = str(body.get("zone", ""))
+            display_name = str(body.get("display_name", "")).strip()[:60]
+            # zone_key must be one of gridlock.py's OWN real zone names --
+            # this only ever stores a cosmetic override, never an
+            # arbitrary key, so a garbage/stale name can't linger forever
+            # pointing at nothing.
+            states = ha_get_all_states()
+            thermal = states.get("sensor.gridlock_gridwarm") or {}
+            real_names = {z["name"] for z in thermal.get("attributes", {}).get("zones") or []}
+            if zone_key not in real_names:
+                self._send(400, json.dumps({"error": "unknown zone"}).encode(), "application/json")
+                return
+            save_zone_name(zone_key, display_name)
+            self._send(200, json.dumps({"ok": True, "zone": zone_key,
+                                        "display_name": display_name}).encode(),
+                       "application/json")
         except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
             self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
 

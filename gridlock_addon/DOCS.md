@@ -249,6 +249,13 @@ figures against what they started at, and how many observations they're
 based on. This only refines the *prediction* — it's still advisory-only,
 nothing about active control changes.
 
+**Renaming a zone**: click the ✏️ next to its name on the GridWarm tab
+and type a new one (blank resets it) — no `apps.yaml` edit or add-on
+restart needed. This is purely cosmetic and stored by the web UI itself;
+the zone's real underlying name (used internally for its learned
+parameters and pause helper) never changes, so renaming can't disturb
+anything already learned.
+
 A "zone" is either a room (heated by a shared heat pump whose output varies
 with outdoor temperature) or a hot water tank (heated by the same heat
 pump's separate DHW circuit, losing heat to indoor ambient rather than the

@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.24.1 - 2026-08-31
+
+### Improvement
+- GridWarm zone names are now renameable straight from the dashboard (✏️ next to the name) — no `apps.yaml` edit or add-on restart needed. Purely cosmetic, stored by the web UI itself; the zone's real internal name (used for its learned thermal parameters and pause helper) is untouched, so renaming can't disturb anything already learned
+
 ## 3.24.0 - 2026-08-31
 
 ### Improvement
