@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.23.0 - 2026-08-31
+
+### Improvement
+- GridWarm's thermal model now learns: `heat_loss_degrees` refines itself against real cooling periods (heating off at both ends of a tick) instead of staying fixed at whatever figure was typed into `apps.yaml`. Same gradual EMA blend the learned house-load profile already uses — one reading can't swing it, a real consistent difference shows up over a couple of weeks. Hover the 🧠 next to a zone's name on the GridWarm tab for its current learned figure vs where it started. Prediction only — still advisory-only, no change to active control
+- New `core/thermal.py` (`implied_heat_loss_degrees`, `blend_learned_value`) backs this — pure functions, unit tested
+
 ## 3.22.0 - 2026-08-31
 
 ### Improvement

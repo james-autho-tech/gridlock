@@ -471,6 +471,18 @@ class GridLock(hass.Hass):
                               if gridwarm_cfg.get("active", True) else [])
         self._thermal_forecast_warned = set()
         self._thermal_control_state = {}
+        # heat_loss_degrees learning -- refines the config's own starting
+        # figure against real cooling periods (heating off) over time,
+        # same EMA-blend pattern as the load forecast's learned profile.
+        # Restored from disk and re-applied to each zone's params
+        # immediately, so a restart doesn't silently reset progress back
+        # to the config default until the next learning tick happens to
+        # fire.
+        self.thermal_learning_state = self._load_json("thermal_learning_state.json", {})
+        for zone in self.thermal_zones:
+            learned = self.thermal_learning_state.get(zone["name"], {}).get("heat_loss_degrees")
+            if learned is not None:
+                zone["params"].heat_loss_degrees = learned
         for zone in self.thermal_zones:
             if not zone["control_entity"]:
                 continue
@@ -2030,6 +2042,10 @@ class GridLock(hass.Hass):
                 "shower_temp_c": float(z.get("shower_temp_c", 40.0)),
                 "cold_mains_temp_c": float(z.get("cold_mains_temp_c", 10.0)),
                 "litres_per_shower": float(z.get("litres_per_shower", 40.0)),
+                # The apps.yaml starting figure, kept separate from
+                # params.heat_loss_degrees (which drifts as it learns) so
+                # the dashboard can show "learned vs where it started".
+                "config_heat_loss_degrees": params.heat_loss_degrees,
                 "params": params}
 
     def _thermal_internal_temp(self, zone):
@@ -2144,6 +2160,50 @@ class GridLock(hass.Hass):
             rate_curve.extend([rate_curve[-1] if rate_curve else self.default_import] * pad_n)
         return rate_curve[:THERMAL_HORIZON_STEPS]
 
+    def _update_thermal_learning(self, zone, now, internal_temp, external_temp, heating_on):
+        """Refines zone['params'].heat_loss_degrees against a real
+        cooling period (heating off at both ends of the interval since
+        the last tick) -- the same "time an actual cooldown" method
+        core/thermal.py's own docstring describes as how the original
+        figure was derived, run continuously against real data instead
+        of once by hand. Every tick's reading is recorded as the new
+        baseline regardless (so the next tick always compares against
+        "one tick ago"); only some of them are also usable as a learning
+        observation."""
+        name = zone["name"]
+        prior = self.thermal_learning_state.get(name)
+        self.thermal_learning_state[name] = {
+            "heat_loss_degrees": zone["params"].heat_loss_degrees,
+            "temp": internal_temp, "ext": external_temp,
+            "heating_on": heating_on, "ts": now.isoformat()}
+        usable = prior and not prior.get("heating_on") and not heating_on
+        if usable:
+            try:
+                elapsed_hours = (now - self._iso(prior["ts"])).total_seconds() / 3600.0
+            except (ValueError, TypeError):  # noqa: BLE001 — a bad timestamp just skips this one
+                elapsed_hours = None
+            # Roughly one real tick apart (5 min), with slack either way
+            # -- too short and noise dominates the maths, too long and
+            # something else (a missed tick, a restart) likely happened
+            # in between that this simple two-point method can't see.
+            if elapsed_hours is not None and 0.05 <= elapsed_hours <= 0.3:
+                observed_loss_c_per_hr = (prior["temp"] - internal_temp) / elapsed_hours
+                diff = ((prior["temp"] + internal_temp) / 2.0
+                        - (prior["ext"] + external_temp) / 2.0)
+                implied = core_thermal.implied_heat_loss_degrees(
+                    observed_loss_c_per_hr, diff, zone["params"].heat_loss_watts,
+                    zone["params"].thermal_mass_wh_per_c)
+                # Sanity clamp -- a real building's heat_loss_degrees is a
+                # small positive figure; anything wildly outside this is
+                # a sensor glitch or a bad reading, not a real value
+                # worth blending in.
+                if implied is not None and 0.0 < implied < 0.5:
+                    new_value = core_thermal.blend_learned_value(
+                        zone["params"].heat_loss_degrees, implied)
+                    zone["params"].heat_loss_degrees = new_value
+                    self.thermal_learning_state[name]["heat_loss_degrees"] = new_value
+        self._save_json("thermal_learning_state.json", self.thermal_learning_state)
+
     def _run_thermal_forecast(self, zone, now, rate_curve):
         internal_temp = self._thermal_internal_temp(zone)
         if internal_temp is None:
@@ -2153,6 +2213,7 @@ class GridLock(hass.Hass):
             target_temp = internal_temp
         external_now = self._thermal_external_temp(zone)
         heating_on = bool(zone["heating_entity"]) and self.get_state(zone["heating_entity"]) == "on"
+        self._update_thermal_learning(zone, now, internal_temp, external_now, heating_on)
 
         external_curve = (self._thermal_weather_curve(
             zone["weather_entity"], now, THERMAL_HORIZON_STEPS, THERMAL_STEP_MIN, external_now)
@@ -2226,6 +2287,8 @@ class GridLock(hass.Hass):
                 "predicted_cost_today_baseline": round(baseline_cost_today, 2),
                 "usable_hot_water_litres": round(usable_litres, 1) if usable_litres is not None else None,
                 "showers_available": round(showers, 1) if showers is not None else None,
+                "learned_heat_loss_degrees": round(zone["params"].heat_loss_degrees, 4),
+                "config_heat_loss_degrees": round(zone["config_heat_loss_degrees"], 4),
                 "forecast_data": forecast_data}
 
     def _thermal_pause_helper(self, zone_name):

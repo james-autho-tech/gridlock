@@ -1264,7 +1264,7 @@ function renderThermalZoneTable(zones) {
   const anyShowers = zones.some(z => z.showers_available != null);
   const rows = zones.map(z => `
     <tr>
-      <td><span class="gl-legend-dot" style="background:${z._color}"></span>${esc(z.name)}${z.heating_on ? ' 🔥' : ''}</td>
+      <td><span class="gl-legend-dot" style="background:${z._color}"></span>${esc(z.name)}${z.heating_on ? ' 🔥' : ''}${z.learned_heat_loss_degrees != null ? ` <span style="color:var(--dim);cursor:help" title="Heat-loss rate learned from real cooling periods: ${Number(z.learned_heat_loss_degrees).toFixed(4)} (started at ${Number(z.config_heat_loss_degrees).toFixed(4)} from apps.yaml). Refines gradually as more data comes in — a single reading can't swing it.">🧠</span>` : ''}</td>
       <td class="num">${Number(z.current_temp).toFixed(1)}°C</td>
       <td class="num">${Number(z.target_temp).toFixed(1)}°C</td>
       <td class="num">${Number(z.cop).toFixed(2)}</td>

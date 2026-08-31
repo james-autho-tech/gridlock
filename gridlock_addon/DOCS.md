@@ -226,6 +226,18 @@ little more now if cold is coming. Heat output itself stays "low and slow"
 (gentle and continuous) unless a zone is genuinely far behind, rather than
 cycling to full power like a boiler.
 
+**Learning**: the model's heat-loss rate (`heat_loss_degrees` in
+`apps.yaml`) refines itself against real cooling periods over time —
+whenever a zone is genuinely cooling with heating off at both ends of a
+tick, GridLock compares the real observed cooling rate against what the
+current figure would have predicted, and nudges it a little closer (same
+gradual EMA blend the learned house-load profile already uses elsewhere —
+one reading can't swing it, but a real, consistent difference between your
+house and the number you originally typed in shows up within a couple of
+weeks). Hover the 🧠 next to a zone's name for its current learned figure
+against what it started at. This only refines the *prediction* — it's
+still advisory-only, nothing about active control changes.
+
 A "zone" is either a room (heated by a shared heat pump whose output varies
 with outdoor temperature) or a hot water tank (heated by the same heat
 pump's separate DHW circuit, losing heat to indoor ambient rather than the

@@ -2,7 +2,8 @@ from core.thermal import (ThermalParams, simulate, thermal_mass_from_volume,
                            thermal_mass_from_litres, AIR_WH_PER_M3_PER_C,
                            WATER_WH_PER_LITRE_PER_C, anticipatory_target_curve,
                            decide_dhw_command, usable_hot_water_litres,
-                           showers_available)
+                           showers_available, implied_heat_loss_degrees,
+                           blend_learned_value)
 
 
 def _room_params(**overrides):
@@ -223,3 +224,38 @@ def test_usable_hot_water_scales_down_as_tank_cools_toward_target():
 def test_showers_available_is_a_plain_unit_conversion():
     assert showers_available(400.0, litres_per_shower=40.0) == 10.0
     assert showers_available(0.0, litres_per_shower=40.0) == 0.0
+
+
+def test_implied_heat_loss_degrees_recovers_the_true_value_from_a_clean_observation():
+    # Pure cooling, heating off: loss_c_per_hr = heat_loss_degrees * diff
+    # + heat_loss_watts / thermal_mass. Construct an observation from
+    # exactly those known numbers and confirm the algebra inverts cleanly.
+    true_heat_loss_degrees = 0.035
+    heat_loss_watts = 170.0
+    thermal_mass = 500.0
+    diff = 10.0
+    observed_loss_c_per_hr = true_heat_loss_degrees * diff + heat_loss_watts / thermal_mass
+    implied = implied_heat_loss_degrees(observed_loss_c_per_hr, diff, heat_loss_watts, thermal_mass)
+    assert implied == true_heat_loss_degrees
+
+
+def test_implied_heat_loss_degrees_returns_none_for_too_small_a_difference():
+    # Near-zero internal/external difference: almost any heat_loss_degrees
+    # value fits the observation, so it's not a useful data point.
+    assert implied_heat_loss_degrees(0.5, 0.5, 170.0, 500.0) is None
+    assert implied_heat_loss_degrees(0.5, -0.9, 170.0, 500.0) is None
+
+
+def test_blend_learned_value_moves_toward_observed_by_alpha():
+    result = blend_learned_value(0.035, 0.05, alpha=0.05)
+    assert result == 0.035 * 0.95 + 0.05 * 0.05
+
+
+def test_blend_learned_value_converges_gradually_not_instantly():
+    current = 0.035
+    for _ in range(10):
+        current = blend_learned_value(current, 0.05, alpha=0.05)
+    # Ten observations of a consistently different true value should
+    # move it meaningfully closer, but a single stray reading earlier
+    # couldn't have swung it anywhere near 0.05 on its own.
+    assert 0.035 < current < 0.05

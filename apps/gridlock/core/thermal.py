@@ -181,6 +181,36 @@ def simulate(internal_temp0, external_temp_curve, target_temp_curve, params,
     return out
 
 
+def implied_heat_loss_degrees(observed_loss_c_per_hr, diff, heat_loss_watts,
+                               thermal_mass_wh_per_c):
+    """Solve heat_loss_degrees from one real observation of an actual
+    cooling period (heating off the whole interval): the realised
+    cooling rate, and the actual internal-minus-external temperature
+    difference over it, with the OTHER loss term (heat_loss_watts, a
+    fixed figure not being learned here) held constant. Same algebra as
+    simulate()'s own loss formula, solved in reverse -- this is exactly
+    the "time an actual heating-off cooldown" calibration method
+    described at the top of this module, run continuously against real
+    data instead of once by hand.
+
+    Returns None when diff is too small to solve reliably -- a near-zero
+    internal/external difference makes almost any heat_loss_degrees
+    value fit the observation equally well, so it's not a useful data
+    point to learn from (not an error, just not informative)."""
+    if abs(diff) < 1.0:
+        return None
+    return (observed_loss_c_per_hr - heat_loss_watts / thermal_mass_wh_per_c) / diff
+
+
+def blend_learned_value(current, observed, alpha=0.05):
+    """EMA blend toward one newly observed value -- same 95%/5% per-
+    observation blend as the load forecast's own learned profile
+    (core/forecast.py), so a single noisy reading can't swing a learned
+    parameter on its own, but a real, consistent drift in reality shows
+    up within a couple of weeks rather than never at all."""
+    return current * (1 - alpha) + observed * alpha
+
+
 def decide_dhw_command(desired_on, current_temp, safety_min_temp, off_duration_hours,
                         max_off_hours):
     """The actual on/off command to send to real hardware, layering two
