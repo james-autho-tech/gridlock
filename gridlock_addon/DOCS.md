@@ -90,6 +90,19 @@ shortcut once enabled. Tabs:
   own public API rather than a flat+windows approximation, since Agile
   has no fixed daily pattern to encode statically. Import only; export
   stays whatever's actually configured.
+
+  **Reading the numbers**: negative = credit (you'd end the period in
+  profit), positive = cost — lower is always better regardless of sign.
+  Bar length shows how much *extra* each option would cost you compared
+  with your best/current one, not its own raw size, so a barely-worse
+  option draws a barely-longer bar. `Current (live rates)` and the Agile
+  row use real, live rate data; every `compare_tariffs` entry is marked
+  `(est.)` because it's a fixed rate + time-window approximation of that
+  tariff's published structure (typed into `apps.yaml`), not that
+  product's real live dispatch — if you're actually on one of the listed
+  tariffs, a small gap between it and "Current" is expected, not a bug
+  (Intelligent Octopus Go's real dispatch window shifts night to night;
+  the static entry can only approximate it as a fixed window).
 - **Entities** — every entity GridLock discovered or was told about,
   grouped by category, with current state — the same data as the
   sidebar's Discovered Entities card, in more detail.

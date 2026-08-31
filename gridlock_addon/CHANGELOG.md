@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.21.1 - 2026-08-30
+
+### Fix
+- Tariff comparison bar length used the raw magnitude of each cost (`Math.abs(cost)`), throwing away the sign — a big credit (great) and an equally-big cost (bad) drew identical bars, and a barely-worse option could draw a wildly different bar length than the one right next to it. Now measures how much *extra* each option costs versus your best/current one, so bar length and the £ value's own ranking always agree
+- Cost values were shown as bare `£1.98`/`£-1.98`, leaving which sign is good genuinely ambiguous. Now labelled explicitly — `£X credit` (green) or `£X cost` (amber)
+
+### Improvement
+- Every `compare_tariffs` entry is now marked `(est.)` — a fixed rate + time-window approximation typed into `apps.yaml`, not that product's real live dispatch. Addresses confusion when you're actually on one of the compared tariffs and its estimate doesn't exactly match `Current (live rates)` (expected — e.g. Intelligent Octopus Go's real dispatch window shifts night to night; the static entry can only approximate it as a fixed window)
+- Hover tooltip (ⓘ) on tariff types most people won't recognise by name — E7/Economy 7, Agile, Cosy, Go, GoElectric, Next Drive — explaining what each actually is
+
 ## 3.21.0 - 2026-08-30
 
 ### Improvement

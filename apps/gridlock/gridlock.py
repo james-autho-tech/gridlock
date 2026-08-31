@@ -1853,7 +1853,14 @@ class GridLock(hass.Hass):
         return html
 
     def publish_compare(self, slots, soc0, live_cost, now):
-        rows = [("Current (live rates)", live_cost)]
+        # is_live distinguishes "we actually queried this tariff's real
+        # rates" (Current, Agile) from "a fixed rate + time windows typed
+        # into apps.yaml as an approximation of this tariff's published
+        # structure" (every static compare_tariffs entry) -- shown on the
+        # dashboard so a close-but-not-identical number between "Current"
+        # and a static row for the SAME product you're actually on reads
+        # as "estimate vs your real dispatch", not as a discrepancy/bug.
+        rows = [("Current (live rates)", live_cost, True)]
         for t in self.compare_tariffs:
             imp, exp = [], []
             for s in slots:
@@ -1876,7 +1883,7 @@ class GridLock(hass.Hass):
                          "reported infeasible — skipping it this tick.", level="WARNING")
                 continue
             c = result.grid_cost + float(t.get("standing", 0.0))
-            rows.append((t.get("name", "tariff"), c))
+            rows.append((t.get("name", "tariff"), c, False))
 
         # Agile import only (per the user's own ask — export stays as
         # whatever's actually configured, not also swapped to Agile's own
@@ -1912,7 +1919,7 @@ class GridLock(hass.Hass):
                     hours = covered * SLOT_MIN / 60.0
                     standing = self.agile_standing_gbp * hours / 24.0
                     rows.append((f"Octopus Agile (import, next {hours:.0f}h)",
-                                 result.grid_cost + standing))
+                                 result.grid_cost + standing, True))
             else:
                 self.log("Agile comparison skipped — no published rate data "
                          "yet for the upcoming slots.", level="DEBUG")
@@ -1922,15 +1929,15 @@ class GridLock(hass.Hass):
         html_rows = "".join(
             f"<tr><td>{n}</td><td>£{c:.2f}</td>"
             f"<td>{'—' if c == best else f'+£{c-best:.2f}'}</td></tr>"
-            for n, c in rows)
+            for n, c, _ in rows)
         html = ("<table class='gridlock-plan'><tr><th>Tariff</th>"
                 "<th>24h cost</th><th>vs best</th></tr>" + html_rows +
                 "</table>")
         self.set_state("sensor.gridlock_tariff_compare", state=rows[0][0],
                        attributes={"friendly_name": "GridLock Tariff Compare",
                                    "compare_html": html,
-                                   "results": [{"name": n, "cost": c}
-                                               for n, c in rows]})
+                                   "results": [{"name": n, "cost": c, "is_live": is_live}
+                                               for n, c, is_live in rows]})
 
     def publish_solar_forecast(self, now):
         curve = self.forecast_provider.pv_curve()

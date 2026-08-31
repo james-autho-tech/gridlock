@@ -1042,25 +1042,58 @@ function renderEntityCards(entities, weather) {
   });
   return `<div class="gl-ent-cards">${cards.join('')}</div>`;
 }
+// Substring-matched, case-insensitive -- these are generic UK tariff
+// *types* (not Octopus-specific), shown as a hover tooltip next to a
+// row's name so "what is E7" doesn't need a web search. Falls back to
+// no tooltip for a name that matches nothing here rather than guessing.
+const TARIFF_TYPE_INFO = [
+  ['intelligent octopus go', 'Smart EV tariff: cheap overnight rate, but the actual dispatch window shifts night to night based on grid conditions. Approximated here as a fixed 23:30–05:30 window, so a small gap from "Current (live rates)" is expected, not a bug.'],
+  ['octopus go', 'EV tariff: a fixed cheap overnight window every night (no smart shifting).'],
+  ['agile', 'Real half-hourly wholesale-linked rates — no fixed daily pattern, so this row uses actually-published live rates rather than an approximation.'],
+  ['cosy', 'Cheap rates timed around typical heat-pump usage (morning/afternoon/evening), not just overnight.'],
+  ['flexible', "Octopus's standard single-rate tariff — no time-of-use discount at all."],
+  ['goelectric', "EDF's EV tariff: a fixed cheap overnight window."],
+  ['next drive', "E.ON's EV tariff: a fixed cheap overnight window."],
+  ['e7', 'Economy 7 — a legacy tariff *type* offered by many suppliers (not Octopus-specific): a fixed ~7-hour cheap overnight window on a special two-rate meter, standard rate the rest of the day.'],
+  ['economy 7', 'A legacy tariff type offered by many suppliers: a fixed ~7-hour cheap overnight window on a special two-rate meter, standard rate the rest of the day.'],
+];
+function tariffTypeInfo(name) {
+  const key = String(name).toLowerCase();
+  const hit = TARIFF_TYPE_INFO.find(([k]) => key.includes(k));
+  return hit ? hit[1] : null;
+}
 function renderTariffCompare(results, activeTariffName) {
   if (!results || !results.length) {
     return '<div style="color:var(--dim)">Waiting for first comparison run.</div>';
   }
   const sorted = [...results].sort((a, b) => Number(a.cost) - Number(b.cost));
   const best = Number(sorted[0].cost);
-  const maxCost = Math.max(...sorted.map(r => Math.abs(Number(r.cost))), 0.01);
+  // Bar length = how much MORE this would cost you than your best/
+  // current option over the same horizon -- not the raw cost's own
+  // magnitude, which made a big negative (great, a credit) draw the same
+  // size bar as a big positive (bad, a real cost) and put barely-worse
+  // options right next to the winner at wildly different bar lengths.
+  // This way length and the number always move together.
+  const maxExtra = Math.max(...sorted.map(r => Number(r.cost) - best), 0.01);
   const rows = sorted.map(r => {
     const cost = Number(r.cost);
-    const pct = Math.max(3, (Math.abs(cost) / maxCost) * 100);
-    const isBest = Math.abs(cost - best) < 0.005;
+    const extra = cost - best;
+    const pct = Math.max(2, (extra / maxExtra) * 100);
+    const isBest = Math.abs(extra) < 0.005;
     const isActive = r.name === activeTariffName;
+    const info = tariffTypeInfo(r.name);
+    const valueLabel = cost < 0
+      ? `<span style="color:var(--green)">£${Math.abs(cost).toFixed(2)} credit</span>`
+      : `<span style="color:var(--amber)">£${cost.toFixed(2)} cost</span>`;
     return `<div class="gl-tariff-row${isBest ? ' is-best' : ''}${isActive ? ' is-active' : ''}">
-      <span class="gl-name">${esc(r.name)}${isBest ? ' 🏆' : ''}</span>
+      <span class="gl-name">${esc(r.name)}${r.is_live === false ? ' <span style="color:var(--dim);font-weight:400;font-size:11px">(est.)</span>' : ''}${isBest ? ' 🏆' : ''}${info ? ` <span style="color:var(--dim);cursor:help" title="${esc(info)}">ⓘ</span>` : ''}</span>
       <div class="gl-tariff-track"><div class="gl-tariff-fill" style="width:${pct.toFixed(0)}%"></div></div>
-      <span class="num" style="text-align:right">£${cost.toFixed(2)}</span>
+      <span class="num" style="text-align:right">${valueLabel}</span>
     </div>`;
   }).join('');
-  return rows;
+  return `
+    <div style="color:var(--dim);font-size:12px;margin-bottom:10px">Lower is better. <span style="color:var(--green)">Credit</span> means you'd end the period in profit; <span style="color:var(--amber)">cost</span> means it's a net expense. Bar length shows how much extra each option would cost you compared with your best one — not its own raw size.</div>
+    ${rows}`;
 }
 function fmtTs(iso) {
   try {
