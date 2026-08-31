@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.21.0 - 2026-08-30
+
+### Improvement
+- Heat pump activity card now plots a real temperature-vs-activity chart: every watched temperature entity (outdoor ambient, room, tank) as a line over the last 24h, with every on/off activity timeline (compressor, DHW, etc.) aligned underneath on the exact same time axis — so "did it get cold, then did the compressor kick in" is a single glance instead of separate disconnected views
+- A numeric sensor with no temperature unit (voltage, frequency, wifi signal, an ever-changing counter) is no longer forced into a noisy on/off-style timeline of every distinct reading — it's dropped from both views (its current value still shows in Live status), since neither treatment fit it
+- New `core/diagnostics.py` (`classify_entity_history`) decides curve vs sessions vs drop per entity — pure function, unit tested
+
 ## 3.20.2 - 2026-08-30
 
 ### Fix

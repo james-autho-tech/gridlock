@@ -2412,8 +2412,18 @@ class GridLock(hass.Hass):
                 # sensor attribute.
                 ts = ts.isoformat() if hasattr(ts, "isoformat") else ts
                 changes_by_entity.setdefault(eid, []).append({"ts": ts, "state": s.get("state")})
+        temperature_series = {}
         for eid, changes in changes_by_entity.items():
-            segs = core_diagnostics.compute_state_sessions(changes)
+            unit = (live_status.get(eid) or {}).get("unit")
+            # A temperature reading becomes a real-valued curve (to chart
+            # alongside what the heat pump was actually doing); a
+            # discrete/binary entity becomes on/off-style sessions; a
+            # numeric-but-not-temperature sensor (voltage, frequency,
+            # wifi signal, an ever-changing counter) is neither -- a
+            # session log of every distinct reading is just noise, and
+            # it isn't a temperature worth charting either, so it's
+            # dropped (its current value still shows in Live status).
+            segs, series = core_diagnostics.classify_entity_history(changes, unit)
             # Only entities that actually changed state in the window are
             # worth a timeline row -- most of a raw Modbus register dump
             # (capability flags, reserved bits) never changes at all, and
@@ -2421,12 +2431,15 @@ class GridLock(hass.Hass):
             # just be noise next to the ones that genuinely did something.
             if len(segs) > 1:
                 sessions[eid] = segs[-20:]
+            if series:
+                temperature_series[eid] = series[-200:]
         self.set_state("sensor.gridlock_heatpump_diagnostics",
                        state=str(len(self.heatpump_events)),
                        attributes={"friendly_name": "GridLock Heat Pump Diagnostics",
                                    "icon": "mdi:heat-pump-outline",
                                    "live_status": live_status,
                                    "sessions": sessions,
+                                   "temperature_series": temperature_series,
                                    "watched_entities": entities,
                                    "external_events": self.heatpump_events[-20:]})
 

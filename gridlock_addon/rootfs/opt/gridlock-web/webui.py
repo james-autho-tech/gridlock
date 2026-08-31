@@ -224,6 +224,7 @@ def build_status():
             "watched_entities": (heatpump_diag or {}).get("attributes", {}).get("watched_entities") or [],
             "live_status": (heatpump_diag or {}).get("attributes", {}).get("live_status") or {},
             "sessions": (heatpump_diag or {}).get("attributes", {}).get("sessions") or {},
+            "temperature_series": (heatpump_diag or {}).get("attributes", {}).get("temperature_series") or {},
             "external_events": (heatpump_diag or {}).get("attributes", {}).get("external_events") or [],
         } if heatpump_diag else None),
         # Live and direct, same as mode_override above -- not sourced
@@ -1315,10 +1316,14 @@ function heatpumpStateColor(state) {
   if (['off', 'idle', 'standby', 'false'].includes(s)) return 'var(--dim)';
   return 'var(--cyan)';
 }
-function renderHeatpumpSessionTimeline(name, segs) {
+function renderHeatpumpSessionTimeline(name, segs, windowStart, windowEnd) {
+  // windowStart/windowEnd shared across every timeline (and the
+  // temperature chart above them, if there is one) so they read as one
+  // aligned time axis, not each on its own independent window -- the
+  // whole point of pairing them is to see "temp dropped, then this
+  // turned on" at a glance.
   const parseTs = t => new Date(t).getTime();
-  const now = Date.now();
-  const start = parseTs(segs[0].start);
+  const start = windowStart, now = windowEnd;
   const span = Math.max(now - start, 60000);
   const x = t => ((t - start) / span) * VB_W;
   const rects = segs.map(s => {
@@ -1333,6 +1338,27 @@ function renderHeatpumpSessionTimeline(name, segs) {
       <svg class="gl-timeline-chart" viewBox="0 0 ${VB_W} 20" preserveAspectRatio="none">${rects}</svg>
     </div>`;
 }
+function renderHeatpumpTemperatureChart(temperatureSeries, live, windowStart, windowEnd) {
+  const entries = Object.entries(temperatureSeries || {});
+  if (!entries.length) return '';
+  const parseTs = t => new Date(t).getTime();
+  const allVals = entries.flatMap(([, pts]) => pts.map(p => p.value));
+  const span = Math.max(windowEnd - windowStart, 60000);
+  const vLo = Math.min(...allVals) - 1, vHi = Math.max(...allVals) + 1;
+  const H = 130;
+  const x = t => ((t - windowStart) / span) * VB_W;
+  const y = v => H - 6 - ((v - vLo) / ((vHi - vLo) || 1)) * (H - 16);
+  const colored = entries.map(([eid, pts], i) => ({ eid, pts, color: GRIDWARM_COLORS[i % GRIDWARM_COLORS.length] }));
+  const lines = colored.map(({ pts, color }) => {
+    const points = pts.map(p => `${x(parseTs(p.ts)).toFixed(1)},${y(p.value).toFixed(1)}`).join(' ');
+    return `<polyline points="${points}" fill="none" stroke="${color}" stroke-width="2" />`;
+  }).join('');
+  const legend = colored.map(({ eid, color }) =>
+    `<span><span class="gl-legend-dot" style="background:${color}"></span>${esc((live[eid] || {}).name || eid)}</span>`).join('');
+  return `
+    <div class="gl-combo-legend" style="margin-bottom:4px">${legend}</div>
+    <svg class="gl-triad-chart" viewBox="0 0 ${VB_W} ${H}" preserveAspectRatio="none">${lines}</svg>`;
+}
 function renderHeatpumpDiagnostics(diag) {
   if (!diag) return '';
   const live = diag.live_status || {};
@@ -1343,9 +1369,23 @@ function renderHeatpumpDiagnostics(diag) {
           <div class="val" style="font-size:16px"><span class="gl-legend-dot" style="background:${heatpumpStateColor(v.state)}"></span>${esc(String(v.state))}${v.unit ? ' ' + esc(v.unit) : ''}</div>
         </div>`).join('')}</div>`
     : '<div style="color:var(--dim)">No data yet — builds up after the first poll.</div>';
+  // One shared time window across the temperature chart and every
+  // activity timeline below it, so they read as a single aligned axis
+  // ("temp dropped, then this turned on") rather than each independently
+  // scaled to its own first data point.
+  const temperatureSeries = diag.temperature_series || {};
   const sessions = diag.sessions || {};
+  const parseTs = t => new Date(t).getTime();
+  const windowEnd = Date.now();
+  const starts = [
+    ...Object.values(temperatureSeries).flatMap(pts => pts.map(p => parseTs(p.ts))),
+    ...Object.values(sessions).map(segs => parseTs(segs[0].start)),
+  ];
+  const windowStart = starts.length ? Math.min(...starts) : windowEnd - 24 * 3600 * 1000;
+  const tempChart = renderHeatpumpTemperatureChart(temperatureSeries, live, windowStart, windowEnd);
   const sessionsHtml = Object.keys(sessions).length
-    ? Object.entries(sessions).map(([eid, segs]) => renderHeatpumpSessionTimeline((live[eid] || {}).name || eid, segs)).join('')
+    ? Object.entries(sessions).map(([eid, segs]) =>
+        renderHeatpumpSessionTimeline((live[eid] || {}).name || eid, segs, windowStart, windowEnd)).join('')
     : '<div style="color:var(--dim)">Nothing changed state in the last 24h.</div>';
   const events = diag.external_events || [];
   const eventsHtml = events.length
@@ -1359,11 +1399,12 @@ function renderHeatpumpDiagnostics(diag) {
   return `
     <div class="gl-wrap">
       <div class="gl-h">Heat pump activity</div>
-      <div class="gl-sub">Watching ${diag.watched_entities.length} entit${diag.watched_entities.length === 1 ? 'y' : 'ies'} — live status below, plus when each one turned on/off today and any external command (a real service call from something other than GridLock — GridWarm only ever calls switch.turn_on/off on a zone's own configured control_entity), so "why did my heat pump just do that" doesn't need a manually-exported log.</div>
-      <div class="lbl" style="margin:12px 0 6px">Live status</div>
-      ${liveHtml}
-      <div class="lbl" style="margin:16px 0 6px">Today's activity (when it turned on/off)</div>
+      <div class="gl-sub">Watching ${diag.watched_entities.length} entit${diag.watched_entities.length === 1 ? 'y' : 'ies'} — temperature vs what it was doing below, live status, and any external command (a real service call from something other than GridLock — GridWarm only ever calls switch.turn_on/off on a zone's own configured control_entity), so "why did my heat pump just do that" doesn't need a manually-exported log.</div>
+      ${tempChart ? `<div class="lbl" style="margin:12px 0 6px">Temperature vs activity (last 24h)</div>${tempChart}` : ''}
+      <div class="lbl" style="margin:16px 0 6px">${tempChart ? 'Activity' : "Today's activity (when it turned on/off)"}</div>
       ${sessionsHtml}
+      <div class="lbl" style="margin:16px 0 6px">Live status</div>
+      ${liveHtml}
       <div class="lbl" style="margin:16px 0 6px">External commands detected</div>
       ${eventsHtml}
     </div>`;

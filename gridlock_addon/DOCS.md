@@ -334,17 +334,26 @@ helper above if anything looks wrong.
 ### Heat pump diagnostics (`gridwarm.diagnostics`)
 
 Off unless configured. GridWarm tab, "Heat pump activity" card shows
-three things for every watched entity:
+four things for every watched entity:
 
+- **Temperature vs activity** — every temperature entity (outdoor
+  ambient, room, tank) charted as a line over the last 24h, with every
+  on/off activity timeline (below) aligned on the exact same time axis,
+  so "it got cold, then the compressor kicked in" reads as one glance
+  instead of separate disconnected views.
 - **Live status** — its current value right now, at a glance.
-- **Today's activity** — a timeline of exactly when it turned on/off (or
-  changed between any other states) over the last 24h, built from history
-  pulled every 30 minutes. Answers "when did it heat", "when did DHW come
-  on" directly, rather than a flat list of raw states with no sense of
-  duration. Entities that never changed in the window (most of a raw
-  Modbus dump — capability flags, reserved bits) don't get a timeline row,
-  to keep the noisy ones from drowning out the ones that actually did
-  something; their current value still shows in Live status above.
+- **Activity** — a timeline of exactly when it turned on/off (or changed
+  between any other states) over the last 24h, built from history pulled
+  every 30 minutes. Answers "when did it heat", "when did DHW come on"
+  directly, rather than a flat list of raw states with no sense of
+  duration. An entity that never changed in the window (most of a raw
+  Modbus dump — capability flags, reserved bits) doesn't get a timeline
+  row, to keep the noisy ones from drowning out the ones that actually
+  did something; a numeric sensor with no temperature unit (voltage,
+  frequency, wifi signal) is dropped from both this and the temperature
+  chart, since a session log of every distinct reading is just noise and
+  it isn't a temperature either — its current value still shows in Live
+  status above.
 - **External commands detected** — a live HA event-bus listener catching
   any real service call touching a watched entity — a genuine external
   command, from an automation, a script, or someone in the UI, with the
