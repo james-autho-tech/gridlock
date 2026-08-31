@@ -83,13 +83,15 @@ shortcut once enabled. Tabs:
   circuit.
 - **GridWarm** — only shown once a heat pump zone is configured (see
   below); predicted temperature and heating cost per zone, plus COP.
-- **Tariffs** — how today's plan compares against other Octopus
-  products (see `compare_tariffs` in `apps.yaml`) at the rates you
-  actually saw today. Octopus Agile can be included too (`agile_region`
-  in `apps.yaml`) — real half-hourly rates pulled live from Octopus's
-  own public API rather than a flat+windows approximation, since Agile
-  has no fixed daily pattern to encode statically. Import only; export
-  stays whatever's actually configured.
+- **Tariffs** — how today's plan compares against other EV/off-peak
+  products from Octopus, EDF, E.ON, Utility Warehouse, Ecotricity,
+  Outfox Energy, ScottishPower, and Good Energy (see `compare_tariffs`
+  in `apps.yaml` — add/edit entries there for anything else, published
+  rates only, never guessed). Octopus Agile can be included too
+  (`agile_region` in `apps.yaml`) — real half-hourly rates pulled live
+  from Octopus's own public API rather than a flat+windows
+  approximation, since Agile has no fixed daily pattern to encode
+  statically. Import only; export stays whatever's actually configured.
 
   **Reading the numbers**: negative = credit (you'd end the period in
   profit), positive = cost — lower is always better regardless of sign.

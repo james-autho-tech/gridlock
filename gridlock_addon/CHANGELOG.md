@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.22.0 - 2026-08-31
+
+### Improvement
+- Five more EV/off-peak tariffs added to the default `compare_tariffs` template — Utility Warehouse EV Double Gold, Ecotricity Smart EV, Outfox Energy My EV, ScottishPower EV Saver, and Good Energy EV Charge — real published rates researched and sourced (Aug 2026), same "illustrative, check your own region" caveat as the existing EDF/E.ON entries
+- Investigated uSwitch's API as a way to pull a live tariff database automatically instead of hand-maintaining entries: not viable for a self-hosted add-on — it's a Partner API gated behind a business OAuth relationship, not an open API like Octopus's Agile endpoint this add-on already uses
+
 ## 3.21.2 - 2026-08-31
 
 ### Fix

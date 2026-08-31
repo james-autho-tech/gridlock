@@ -222,6 +222,9 @@ gridlock:
   compare_tariffs:
     - name: "Intelligent Octopus Go"
       import_default: 0.274
+      # 0.035 confirmed as the user's own actual real rate (regional/
+      # tariff-version variation — generic published averages found via
+      # web research do NOT override a real confirmed account rate).
       import: [{ start: "23:30", end: "05:30", rate: 0.035 }]
       export: 0.15
     - name: "Octopus Go"
@@ -256,6 +259,35 @@ gridlock:
     - name: "E.ON Next Drive"
       import_default: 0.30625
       import: [{ start: "00:00", end: "06:00", rate: 0.08 }]
+      export: 0.15
+    # Five below checked against theenergyshop.com's published EV tariff
+    # comparison (Aug 2026) — same caveat as EDF/E.ON above: illustrative,
+    # not necessarily your exact region/meter. Export rate isn't published
+    # for these specifically, so it's assumed at the same 0.15 most other
+    # entries in this list use, not independently confirmed per-supplier.
+    # Standing charges aren't included here (this list doesn't factor
+    # standing charge into the comparison for ANY entry, including the
+    # ones above — a fixed daily figure that doesn't scale with the
+    # comparison horizon isn't wired up yet).
+    - name: "Utility Warehouse EV Double Gold"
+      import_default: 0.2716
+      import: [{ start: "00:00", end: "05:00", rate: 0.069 }]
+      export: 0.15
+    - name: "Ecotricity Smart EV"
+      import_default: 0.3126
+      import: [{ start: "00:00", end: "05:00", rate: 0.0799 }]
+      export: 0.15
+    - name: "Outfox Energy My EV"
+      import_default: 0.3071
+      import: [{ start: "00:00", end: "05:30", rate: 0.0772 }]
+      export: 0.15
+    - name: "ScottishPower EV Saver"
+      import_default: 0.3144
+      import: [{ start: "00:00", end: "05:00", rate: 0.085 }]
+      export: 0.15
+    - name: "Good Energy EV Charge"
+      import_default: 0.3296
+      import: [{ start: "00:00", end: "05:00", rate: 0.09 }]
       export: 0.15
 
   # --- Storm Watch ---
