@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.21.2 - 2026-08-31
+
+### Fix
+- CI's add-on-schema validation job had been failing on every push since it was added — `boot`, `hassio_role`, `ingress_port`, and `startup` in `config.yaml` were all set explicitly to values that are already the schema default, which HA's add-on linter treats as an error. Removed all four (no behaviour change — same defaults either way, confirmed `ingress_port`'s default is 8099, which is what GridLock's web server already runs on)
+- Dropped `armv7`/`armhf`/`i386` from `arch` (`config.yaml`) and `build_from` (`build.yaml`) — Home Assistant stopped supporting these architectures in December 2025; keeping them only produced linter warnings for platforms that can no longer run this add-on anyway
+
 ## 3.21.1 - 2026-08-30
 
 ### Fix
