@@ -192,6 +192,48 @@ entirely. See `apps.yaml` for the two threshold percentages
 (`load_mgmt_warn_pct`/`load_mgmt_critical_pct`) if you want to tune how much
 margin is kept below the real trip point.
 
+## Component warranty tracking (`warranties` in `apps.yaml`)
+
+Off unless configured. A plain list — track any component with its own
+calendar warranty (an energy controller, a gateway, a heat pump, the
+battery itself, ...), shown as a "Component warranties" card on the
+Overview tab. Dates are DD-MM-YYYY (UK format) or YYYY-MM-DD — both are
+accepted, and always shown back to you as UK format regardless of which
+you typed in.
+
+Most components are a plain calendar countdown: an install date plus a
+warranty duration in years. The battery is different — Sigenergy's own
+SigenStor warranty (confirmed from published EU documentation, not a
+UK-specific source; worth checking against your own paperwork) is
+throughput-based, not a cycle count: covered for its warranty period OR
+until a fixed total energy throughput is reached, whichever comes
+first. Set `throughput_cap_mwh` on the battery's entry to opt it into
+this — everything else in the list just needs `install_date` and
+`warranty_years`.
+
+Per-module throughput caps (sum whichever you have): BAT 5.0 = 18.20
+MWh, BAT 6.0 = 20.44 MWh, BAT 8.0 = 27.30 MWh, BAT 10.0 = 30.66 MWh.
+
+Throughput tracking reads two real sensors from the Sigen inverter
+integration itself (`*_daily_battery_charge_energy` /
+`*_daily_battery_discharge_energy`, auto-discovered) — these reset
+daily, so GridLock rolls each day's final reading into its own
+persisted lifetime total (`warranty_state.json`), the same pattern
+every other daily-to-lifetime rollover in this app already uses. No
+native lifetime/"total"-class battery throughput sensor exists on this
+integration (confirmed against a real entity dump) — PV production and
+total load consumption both have one, battery charge/discharge only
+has the daily-resetting kind.
+
+Discharge energy specifically is what's tracked against the throughput
+cap (charge is shown alongside for reference) — which side of
+charge/discharge Sigenergy's own warranty wording actually counts isn't
+confirmed from published documentation; discharge is the more
+conservative choice and the more common convention for a "useful
+energy delivered" throughput warranty. "Equivalent full cycles" is
+shown too, purely as a more familiar way to picture the same number —
+the real warranty measures throughput, not cycles.
+
 ## GridWarm: heat pump thermal model + anticipatory plan
 
 If you have a heat pump, GridLock can predict each zone's temperature and

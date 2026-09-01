@@ -176,6 +176,7 @@ def build_status():
                           name=zone_names.get(z["name"], z["name"]))
                      for z in thermal_zones]
     heatpump_diag = get("sensor.gridlock_heatpump_diagnostics")
+    warranties = get("sensor.gridlock_warranties")
     saving_raw = get(status_attrs.get("saving_events_entity")) or {}
     saving_attrs = saving_raw.get("attributes", {})
 
@@ -261,6 +262,7 @@ def build_status():
             "temperature_series": (heatpump_diag or {}).get("attributes", {}).get("temperature_series") or {},
             "external_events": (heatpump_diag or {}).get("attributes", {}).get("external_events") or [],
         } if heatpump_diag else None),
+        "warranties": ((warranties or {}).get("attributes", {}).get("items") or []) if warranties else None,
         # Live and direct, same as mode_override above -- not sourced
         # from sensor.gridlock_gridwarm's own attributes, which only
         # get republished once per 5-min tick (and not at all if no
@@ -982,6 +984,52 @@ function renderLoadManagement(lm) {
         <div class="gl-target" style="left:${Math.min(100, (critical / fuse) * 100)}%"></div>
       </div>
     </div>
+  </div>`;
+}
+function fmtUkDate(dateStr) {
+  // Bare "YYYY-MM-DD" (no time component) -- built from local y/m/d
+  // components rather than `new Date(dateStr)` (which parses a
+  // date-only ISO string as UTC midnight and can silently shift a day
+  // backward for some viewer timezones), same technique fmtShortDate
+  // already uses. Locale forced to en-GB (day-month-year, not the
+  // viewer's own browser locale) since this project's own dates are
+  // always UK format.
+  try {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  } catch (e) { return dateStr; }
+}
+function renderWarranties(items) {
+  if (!items || !items.length) return '';
+  const rows = items.map(w => {
+    const pct = w.throughput_pct_used;
+    const hasCap = pct !== null && pct !== undefined;
+    const color = hasCap && pct >= 90 ? 'var(--red)' : hasCap && pct >= 75 ? 'var(--amber)' : 'var(--green)';
+    const yearsLeft = w.years_remaining;
+    const yearsText = yearsLeft === null || yearsLeft === undefined
+      ? 'no install date set'
+      : yearsLeft > 0 ? `${yearsLeft.toFixed(1)} years left` : 'past the calendar limit';
+    const endDateText = w.warranty_end_date ? ` (ends ${fmtUkDate(w.warranty_end_date)})` : '';
+    return `<div style="margin-bottom:18px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+        <b>${esc(w.name)}</b>
+        <span style="color:var(--dim);font-size:12px">${esc(yearsText)}${endDateText}</span>
+      </div>
+      ${hasCap ? `<div class="gl-bar" style="margin-top:6px">
+        <div class="lbl"><span>${pct.toFixed(1)}% of throughput used</span><span>${Number(w.throughput_cap_mwh).toFixed(2)} MWh cap</span></div>
+        <div class="gl-track"><div class="gl-fill" style="width:${pct}%;background:${color}"></div></div>
+      </div>
+      <div class="gl-grid" style="margin-top:8px">
+        <div class="gl-tile"><div class="lbl">Lifetime discharge</div><div class="val num" style="font-size:16px">${Number(w.lifetime_discharge_kwh).toFixed(0)} kWh</div></div>
+        <div class="gl-tile"><div class="lbl">Lifetime charge</div><div class="val num" style="font-size:16px">${Number(w.lifetime_charge_kwh).toFixed(0)} kWh</div></div>
+        <div class="gl-tile"><div class="lbl">Equivalent full cycles</div><div class="val num" style="font-size:16px">${w.equivalent_full_cycles != null ? Number(w.equivalent_full_cycles).toFixed(1) : '—'}</div></div>
+      </div>` : ''}
+    </div>`;
+  }).join('');
+  return `<div class="gl-wrap">
+    <div class="gl-h">Component warranties</div>
+    <div class="gl-sub">Sigenergy's SigenStor battery warranty is throughput-based, not a cycle count — covered for its own warranty period or until a fixed total energy throughput is reached, whichever comes first (figures from published EU documentation, not confirmed UK-specific — see DOCS.md). Everything else here is a plain calendar countdown. Discharge energy is what's tracked against a throughput cap; charge is shown alongside for reference.</div>
+    ${rows}
   </div>`;
 }
 function heatColor(pence, cheapP) {
@@ -1805,6 +1853,7 @@ async function refresh() {
       </div>
       ${isBypass(d.state) ? `<div class="gl-bypass-banner">⚠️ BYPASS ACTIVE — ${esc(d.reason)}</div>` : ''}
       ${renderLoadManagement(d.load_mgmt)}
+      ${renderWarranties(d.warranties)}
       <div class="gl-wrap">
         <div class="gl-h">Live power flow</div>
         ${renderFlow(d.flow, isBypass(d.state))}

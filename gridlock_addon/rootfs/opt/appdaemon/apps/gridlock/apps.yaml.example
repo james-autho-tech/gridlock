@@ -469,6 +469,39 @@ gridlock:
   # here). Leave commented out to disable SSEN polling.
   # ssen_postcode: "SW1A 1"
 
+  # --- Component warranty tracking ---
+  # Off unless configured. A plain list -- track any component that has
+  # its own calendar warranty (an energy controller, a gateway, a heat
+  # pump, ...); dates are DD-MM-YYYY (UK format) or YYYY-MM-DD, either
+  # works. Only set throughput_cap_mwh on the entry for your actual
+  # battery -- that's the one component GridLock can track real usage
+  # against (Sigenergy's own daily battery charge/discharge sensors,
+  # auto-discovered), everything else here is a plain countdown to its
+  # calendar end date.
+  #
+  # Sigenergy's SigenStor battery warranty (confirmed from published EU
+  # documentation, not a UK-specific source -- verify against your own
+  # paperwork) is throughput-based, not a cycle count: covered for
+  # warranty_years years OR until throughput_cap_mwh total energy
+  # throughput is reached, whichever comes first. Per-module caps:
+  # BAT 5.0=18.20 MWh, BAT 6.0=20.44 MWh, BAT 8.0=27.30 MWh,
+  # BAT 10.0=30.66 MWh -- sum whichever modules you actually have.
+  # warranties:
+  #   - name: "Battery"
+  #     install_date: "22-07-2026"
+  #     warranty_years: 10
+  #     throughput_cap_mwh: 115.92   # e.g. 2x BAT 8.0 + 2x BAT 10.0
+  #     capacity_retention_pct: 60   # informational only, not tracked against anything
+  #   - name: "Energy Controller"
+  #     install_date: "22-07-2026"
+  #     warranty_years: 10
+  #   - name: "Sigen Gateway"
+  #     install_date: "22-07-2026"
+  #     warranty_years: 5
+  #   - name: "Heat Pump"
+  #     install_date: "22-07-2026"
+  #     warranty_years: 8
+
   # --- Notifications ---
   # Storm Watch starting/clearing, a Saving Session being joined, and
   # EV Protection engaging always create a persistent_notification in

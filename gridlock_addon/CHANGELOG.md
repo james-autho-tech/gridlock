@@ -1,6 +1,13 @@
 # Changelog
 
-## 3.24.2 - 2026-08-31
+## 3.25.0 - 2026-09-01
+
+### Improvement
+- New component warranty tracking (`warranties` in `apps.yaml`) — track any component's calendar warranty (energy controller, gateway, heat pump, ...), plus the battery's own throughput-based SigenStor warranty specifically (confirmed from published EU documentation: covered for its warranty period OR until a fixed total energy throughput is reached, whichever comes first — not a cycle count). Battery throughput is tracked from the Sigen inverter's own real daily charge/discharge sensors, rolled into a persisted lifetime total at day rollover since no native lifetime-class sensor exists for this on the integration. Shown as a new "Component warranties" card on the Overview tab. Dates accepted as DD-MM-YYYY (UK) or YYYY-MM-DD
+- New `core/warranty.py` (`throughput_pct_used`, `equivalent_full_cycles`, `warranty_years_remaining`, `parse_install_date`) — pure functions, unit tested
+
+### Fix
+- Fixed an unrelated regression introduced partway through this session's own work: `_save_cost_tracking_state()` (persists the running daily import/export cost tracking every tick) had been accidentally left orphaned at the end of an in-progress edit instead of at the end of `_update_energy_cost_tracking` — cost-tracking state would only have been saved once a warranty feature was configured, not every tick as intended. Caught and fixed before shipping
 
 ### Fix
 - No functional change to the add-on itself. Repo cleanup: removed `apps/gridlock/` (a redundant dev-source copy of `gridlock.py`/`core/`), root `ha_support.yaml`, `hacs.json`, and `dashboard.yaml` — these only ever existed to support the HACS + separate-AppDaemon-add-on and manual-install paths, which this project no longer supports (Supervisor add-on only, going forward). `gridlock_addon/` is now the single source of truth for everything. Updated CI accordingly (dropped the now-meaningless mirror-drift check, fixed the remaining jobs' paths) and repointed `tests/conftest.py` at the one remaining copy

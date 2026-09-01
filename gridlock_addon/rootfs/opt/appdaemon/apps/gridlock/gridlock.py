@@ -25,6 +25,7 @@ from core.tariff import OctopusTariffProvider
 from core.forecast import SolcastForecastProvider, LearnedLoadForecastProvider
 from core import thermal as core_thermal
 from core import diagnostics as core_diagnostics
+from core import warranty as core_warranty
 
 STATE_FILES = ("load_profile.json", "savings_state.json", "savings_history.json",
                "cost_tracking_state.json", "decision_log.json",
@@ -559,6 +560,43 @@ class GridLock(hass.Hass):
         self.agile_region = a.get("agile_region")
         self.agile_rates = {}
         self.agile_standing_gbp = 0.0
+
+        # Component warranty tracking — off unless configured. Each entry
+        # in warranties: is independent; most (Energy Controller, Sigen
+        # Gateway, a heat pump, ...) are a plain calendar countdown, but
+        # Sigenergy's own SigenStor *battery* warranty (confirmed from
+        # published EU documentation, not a UK-specific source — see
+        # DOCS.md) is throughput-based, not a cycle count: covered for
+        # warranty_years years OR until throughput_cap_mwh total energy
+        # throughput is reached, whichever comes first -- set
+        # throughput_cap_mwh on an entry to opt it into that tracking.
+        # No native lifetime/"total"-class battery charge or discharge
+        # sensor exists on this integration (confirmed against a real
+        # entity dump — PV production and total load consumption both
+        # have one, battery charge/discharge only has the daily-
+        # resetting kind), so GridLock builds its own running lifetime
+        # total the same way every other daily-to-lifetime rollover in
+        # this app already works — see _update_warranty_tracking.
+        self.warranties_cfg = a.get("warranties") or []
+        # Only one physical battery/meter in practice, so any single
+        # entry's override (if more than one sets throughput_cap_mwh,
+        # which would be unusual) is enough — the first one found wins.
+        throughput_entry = next((w for w in self.warranties_cfg if "throughput_cap_mwh" in w), {})
+        self.ent_daily_battery_charge = (throughput_entry.get("daily_charge_entity")
+                                         or self.registry.find(domain="sensor",
+                                                                contains="daily_battery_charge_energy"))
+        self.ent_daily_battery_discharge = (throughput_entry.get("daily_discharge_entity")
+                                            or self.registry.find(domain="sensor",
+                                                                   contains="daily_battery_discharge_energy"))
+        self.warranty_state = self._load_json("warranty_state.json", {})
+        self._warranty_date_warned = set()
+        for w in self.warranties_cfg:
+            if "throughput_cap_mwh" in w and not (self.ent_daily_battery_charge
+                                                   and self.ent_daily_battery_discharge):
+                self.log(f"warranties entry {w.get('name', '?')!r} has throughput_cap_mwh set "
+                         "but the daily battery charge/discharge sensors couldn't be discovered "
+                         "— set daily_charge_entity/daily_discharge_entity explicitly on it.",
+                         level="WARNING")
 
         self.ent_daily_import_cost = a.get("daily_import_cost_entity") or self.registry.find_sibling(
             import_stem, "sensor", ["_current_accumulative_cost"])
@@ -1227,6 +1265,95 @@ class GridLock(hass.Hass):
                 self.tracked_onpeak_kwh_today += kwh
                 self.tracked_onpeak_cost_today += kwh * imp_rate
         self._save_cost_tracking_state()
+
+    def _update_warranty_tracking(self, now):
+        """Rolls the Sigen inverter's own daily battery charge/discharge
+        counters into a persisted lifetime total, at day rollover --
+        shared across every warranties: entry that opts into throughput
+        tracking (throughput_cap_mwh set); everything else in the list
+        is a plain calendar countdown needing no tracking at all.
+
+        Reads the two daily sensors on EVERY tick (not just at the tick
+        that notices the day has changed) and keeps whatever was last
+        seen -- reading them fresh exactly at the rollover tick risks
+        the sensors having already reset to the new day's ~0 by then
+        (GridLock's own tick runs every 5 minutes, not exactly at
+        midnight), silently losing that day's real total. The rollover
+        uses whatever was captured on the last tick still within the
+        old day instead."""
+        if not self.warranties_cfg:
+            return
+        t = self.warranty_state.setdefault("_throughput", {})
+        today_iso = now.date().isoformat()
+        if t.get("day") is None:
+            t["day"] = today_iso
+        elif today_iso != t["day"]:
+            last_charge = t.get("last_charge_reading")
+            last_discharge = t.get("last_discharge_reading")
+            if last_charge is not None:
+                t["lifetime_charge_kwh"] = t.get("lifetime_charge_kwh", 0.0) + last_charge
+            if last_discharge is not None:
+                t["lifetime_discharge_kwh"] = t.get("lifetime_discharge_kwh", 0.0) + last_discharge
+            t["day"] = today_iso
+        charge_now = self.get_float_state(self.ent_daily_battery_charge, None)
+        discharge_now = self.get_float_state(self.ent_daily_battery_discharge, None)
+        if charge_now is not None:
+            t["last_charge_reading"] = charge_now
+        if discharge_now is not None:
+            t["last_discharge_reading"] = discharge_now
+        self._publish_warranties(now)
+        self._save_json("warranty_state.json", self.warranty_state)
+
+    def _publish_warranties(self, now):
+        t = self.warranty_state.get("_throughput", {})
+        # today's in-progress total isn't captured into the lifetime
+        # figure until rollover (above) -- add whatever's been seen so
+        # far today so the dashboard reads as "right now", not "as of
+        # yesterday" for most of every day.
+        lifetime_charge_kwh = t.get("lifetime_charge_kwh", 0.0) + (t.get("last_charge_reading") or 0.0)
+        lifetime_discharge_kwh = t.get("lifetime_discharge_kwh", 0.0) + (t.get("last_discharge_reading") or 0.0)
+        items = []
+        for w in self.warranties_cfg:
+            warranty_years = float(w.get("warranty_years", 10.0))
+            install_date_str = w.get("install_date")
+            years_remaining = None
+            warranty_end_date = None
+            if install_date_str:
+                install_date = core_warranty.parse_install_date(install_date_str)
+                if install_date is not None:
+                    years_remaining = core_warranty.warranty_years_remaining(
+                        install_date, warranty_years, now.date())
+                    warranty_end_date = (install_date + timedelta(
+                        days=warranty_years * 365.25)).isoformat()
+                elif w.get("name", "?") not in self._warranty_date_warned:
+                    self.log(f"warranties entry {w.get('name', '?')!r} has an install_date "
+                             f"{install_date_str!r} that doesn't parse (use DD-MM-YYYY or "
+                             "YYYY-MM-DD) — years_remaining will be unavailable for it.",
+                             level="WARNING")
+                    self._warranty_date_warned.add(w.get("name", "?"))
+            entry = {"name": w.get("name", "Component"),
+                     "install_date": install_date_str,
+                     "warranty_years": warranty_years,
+                     "warranty_end_date": warranty_end_date,
+                     "years_remaining": round(years_remaining, 2) if years_remaining is not None else None}
+            if "throughput_cap_mwh" in w:
+                throughput_cap_mwh = float(w["throughput_cap_mwh"])
+                pct_used = core_warranty.throughput_pct_used(lifetime_discharge_kwh, throughput_cap_mwh)
+                cycles = core_warranty.equivalent_full_cycles(lifetime_discharge_kwh, self.battery_kwh)
+                entry.update({
+                    "lifetime_charge_kwh": round(lifetime_charge_kwh, 2),
+                    "lifetime_discharge_kwh": round(lifetime_discharge_kwh, 2),
+                    "throughput_used_mwh": round(
+                        core_warranty.throughput_used_mwh(lifetime_discharge_kwh), 3),
+                    "throughput_cap_mwh": throughput_cap_mwh,
+                    "throughput_pct_used": round(pct_used, 1) if pct_used is not None else None,
+                    "equivalent_full_cycles": round(cycles, 1) if cycles is not None else None,
+                    "capacity_retention_pct": w.get("capacity_retention_pct")})
+            items.append(entry)
+        self.set_state("sensor.gridlock_warranties", state=str(len(items)),
+                       attributes={"friendly_name": "GridLock Warranties",
+                                   "icon": "mdi:shield-check-outline",
+                                   "items": items})
 
     # ------------------------------------------------------------------
     # SAVING SESSIONS
@@ -2685,6 +2812,7 @@ class GridLock(hass.Hass):
     def update_daily_financials(self):
         now = self.get_now()
         self._update_energy_cost_tracking(now)
+        self._update_warranty_tracking(now)
         imp = self.get_float_state(self.ent_daily_import_cost, self.tracked_import_cost_today)
         exp = self.get_float_state(self.ent_daily_export_value, self.tracked_export_value_today)
         stand = self.get_float_state(self.ent_daily_standing_charge)
