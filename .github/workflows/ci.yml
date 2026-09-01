@@ -40,8 +40,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Python syntax (ast.parse)
         run: |
-          for f in apps/gridlock/gridlock.py apps/gridlock/core/*.py \
-                   gridlock_addon/rootfs/opt/appdaemon/apps/gridlock/gridlock.py \
+          for f in gridlock_addon/rootfs/opt/appdaemon/apps/gridlock/gridlock.py \
                    gridlock_addon/rootfs/opt/appdaemon/apps/gridlock/core/*.py \
                    gridlock_addon/rootfs/opt/gridlock-web/webui.py; do
             python3 -c "import ast; ast.parse(open('$f').read())" || exit 1
@@ -51,20 +50,8 @@ jobs:
       - name: YAML syntax on shipped config/support files
         run: |
           pip install pyyaml
-          for f in gridlock_addon/config.yaml apps/gridlock/apps.yaml \
+          for f in gridlock_addon/config.yaml \
                    gridlock_addon/rootfs/opt/appdaemon/apps/gridlock/apps.yaml.example \
-                   ha_support.yaml gridlock_addon/rootfs/opt/appdaemon/apps/gridlock/ha_support.yaml; do
+                   gridlock_addon/rootfs/opt/appdaemon/apps/gridlock/ha_support.yaml; do
             python3 -c "import yaml; yaml.safe_load(open('$f'))" || exit 1
           done
-
-  mirror-sync-check:
-    name: Confirm core/ and gridlock.py mirrors haven't drifted
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Diff apps/gridlock against its addon mirror
-        run: |
-          diff apps/gridlock/gridlock.py gridlock_addon/rootfs/opt/appdaemon/apps/gridlock/gridlock.py
-          diff -rq apps/gridlock/core gridlock_addon/rootfs/opt/appdaemon/apps/gridlock/core --exclude=__pycache__
-          diff apps/gridlock/apps.yaml gridlock_addon/rootfs/opt/appdaemon/apps/gridlock/apps.yaml.example
-          diff ha_support.yaml gridlock_addon/rootfs/opt/appdaemon/apps/gridlock/ha_support.yaml

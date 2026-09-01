@@ -14,7 +14,8 @@ outages, manual toggle), a 15-minute HA/Solcast failsafe deadman switch,
 tariff comparison, safe-mode fault handling, and a heartbeat for the
 HA-side watchdog.
 
-The optimiser and adapters live in `apps/gridlock/core/` as plain,
+The optimiser and adapters live in
+`gridlock_addon/rootfs/opt/appdaemon/apps/gridlock/core/` as plain,
 AppDaemon-free Python — see `tests/` for the unit-test suite
 (`pip install "pulp>=2.7,<4" pytest && pytest tests/`, no HA/AppDaemon needed).
 
@@ -23,7 +24,7 @@ AppDaemon-free Python — see `tests/` for the unit-test suite
 **Overview** — live status, cost/savings tiles, battery progress
 ![Overview](docs/screenshots/overview.png)
 
-## Install (Supervisor add-on — no AppDaemon add-on needed)
+## Install (Supervisor add-on)
 
 Bundles its own AppDaemon runtime — no separate AppDaemon add-on
 needed. Settings → Add-ons → Add-on Store → ⋮ →
@@ -35,74 +36,8 @@ picks the wrong entity for something (check the web UI's "Discovered
 entities" panel), the add-on's own **Configuration** tab has override
 fields for it — no YAML editing needed.
 
-This path is newer/less battle-tested than the HACS route below —
-if the build fails, check the add-on's Supervisor log first (likely
+If the build fails, check the add-on's Supervisor log first (likely
 a stale base-image tag in `gridlock_addon/build.yaml`).
-
-## Install (HACS + existing AppDaemon add-on)
-
-Requires the [AppDaemon](https://github.com/hassio-addons/addon-appdaemon)
-add-on and [HACS](https://hacs.xyz/) already installed.
-
-1. HACS → the three-dot menu (top right) → **Custom repositories**.
-2. Repository: `https://github.com/james-autho-tech/gridlock`,
-   category: **AppDaemon**.
-3. Find "GridLock" in HACS → Automation and install. This places
-   `gridlock.py`, `apps.yaml`, and the `core/` package (the LP optimiser
-   and its adapters — HACS mirrors the whole `apps/gridlock/` folder, not
-   just one file) in AppDaemon's `apps/gridlock/` automatically. Updates
-   then show up in HACS like any other integration.
-4. The LP optimiser needs `pulp<4` installed in the **AppDaemon add-on's
-   own** Python environment (not this repo's) — add `pulp<4` to that
-   add-on's Configuration → **Python packages** list and restart
-   AppDaemon (pinned below 4.0 — see `gridlock_addon/Dockerfile`'s
-   comment for why). No
-   GLPK/system solver needed on this path: that add-on's base image is
-   glibc-based, so PuLP's own bundled CBC solver runs fine (GLPK is only
-   needed on GridLock's own Alpine-based Supervisor add-on — see
-   `gridlock_addon/Dockerfile` — where PuLP's bundled solver doesn't run).
-5. Edit `apps/gridlock/apps.yaml`: tariff rates and battery/model
-   parameters. Octopus (import/export rate, IOG dispatch, saving
-   sessions) and Hypervolt (EV charging) entities are **auto-discovered
-   by naming pattern at startup** — nothing to set for a single
-   account/meter/charger. Check the AppDaemon log (or the add-on's
-   Ingress web UI's "Discovered entities" panel) for "Multiple
-   entities match" warnings if you have more than one Octopus
-   account/meter; only then set the affected key explicitly, as a
-   **literal value** directly in `apps.yaml`:
-
-       import_rate: sensor.octopus_energy_electricity_AAAAAAAA_1111111111111_current_rate
-
-   Don't use `!secret` here — unlike Home Assistant core, AppDaemon's
-   app-config YAML loader has no built-in secrets.yaml support. Using
-   `!secret` in this file causes AppDaemon to fail to parse it
-   entirely and the whole app silently stops publishing anything, with
-   only a terse "Failed to read file" in the log to go on. (The
-   add-on's `run` script self-heals from this now — detects the parse
-   failure, backs up the broken file, restores the template — but
-   better to just not hit it.)
-
-   Optional postcode for SSEN Power Track, same reasoning — literal
-   value: `ssen_postcode: "SW1A 1"`.
-6. Copy `ha_support.yaml` (from the HACS-managed clone, or
-   `/addon_configs/a0d7b954_appdaemon/apps/gridlock/ha_support.yaml`)
-   to `/config/packages/gridlock.yaml` (helpers + fail-safe watchdog
-   — see comments for why this bit must live in HA). Restart HA.
-7. In `dashboard.yaml`, replace the `YOURACCOUNT`/`YOURMPAN_IMPORT`/
-   `YOURMPAN_EXPORT` placeholders with the same entity IDs you used in
-   `apps.yaml` (Lovelace cards aren't templated, so this has to
-   match literally). Then paste it into a new dashboard via the raw
-   config editor. Requires HACS frontend cards: apexcharts-card,
-   power-flow-card-plus, html-template-card.
-8. Watch the AppDaemon log for the startup banner and entity warnings.
-
-## Install (manual, no HACS)
-
-1. Clone or copy `apps/gridlock/` (this repo) into your AppDaemon
-   `apps/` folder (HAOS add-on:
-   `/addon_configs/a0d7b954_appdaemon/apps/`), so you end up with
-   `apps/gridlock/gridlock.py` + `apps/gridlock/core/` + `apps.yaml`.
-2. Steps 4–8 above.
 
 ## Running more than one site
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.24.2 - 2026-08-31
+
+### Fix
+- No functional change to the add-on itself. Repo cleanup: removed `apps/gridlock/` (a redundant dev-source copy of `gridlock.py`/`core/`), root `ha_support.yaml`, `hacs.json`, and `dashboard.yaml` — these only ever existed to support the HACS + separate-AppDaemon-add-on and manual-install paths, which this project no longer supports (Supervisor add-on only, going forward). `gridlock_addon/` is now the single source of truth for everything. Updated CI accordingly (dropped the now-meaningless mirror-drift check, fixed the remaining jobs' paths) and repointed `tests/conftest.py` at the one remaining copy
+
 ## 3.24.1 - 2026-08-31
 
 ### Improvement

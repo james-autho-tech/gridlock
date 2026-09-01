@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Minimal Ingress web UI for GridLock — a live status page served
-straight out of HA state, styled to match dashboard.yaml."""
+straight out of HA state."""
 
 import http.server
 import json
