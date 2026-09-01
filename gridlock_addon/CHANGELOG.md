@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.25.1 - 2026-09-01
+
+### Fix
+- Component warranties moved off the Overview tab onto its own dedicated **Warranty** tab (only appears once at least one entry is configured, same on-demand pattern as Circuits/GridWarm) — Overview shouldn't keep accumulating unrelated cards just because there's room on the page
+
 ## 3.25.0 - 2026-09-01
 
 ### Improvement

@@ -196,10 +196,11 @@ margin is kept below the real trip point.
 
 Off unless configured. A plain list — track any component with its own
 calendar warranty (an energy controller, a gateway, a heat pump, the
-battery itself, ...), shown as a "Component warranties" card on the
-Overview tab. Dates are DD-MM-YYYY (UK format) or YYYY-MM-DD — both are
-accepted, and always shown back to you as UK format regardless of which
-you typed in.
+battery itself, ...), shown on its own **Warranty** tab (only appears
+once at least one entry is configured, same on-demand pattern as
+Circuits/GridWarm). Dates are DD-MM-YYYY (UK format) or YYYY-MM-DD —
+both are accepted, and always shown back to you as UK format regardless
+of which you typed in.
 
 Most components are a plain calendar countdown: an install date plus a
 warranty duration in years. The battery is different — Sigenergy's own

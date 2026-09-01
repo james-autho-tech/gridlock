@@ -621,6 +621,7 @@ PAGE = r"""<!doctype html>
     <button class="gl-nav-btn" data-tab="billing">Billing</button>
     <button class="gl-nav-btn" data-tab="circuits" id="gl-nav-circuits" style="display:none">Circuits</button>
     <button class="gl-nav-btn" data-tab="gridwarm" id="gl-nav-gridwarm" style="display:none">GridWarm</button>
+    <button class="gl-nav-btn" data-tab="warranty" id="gl-nav-warranty" style="display:none">Warranty</button>
     <button class="gl-nav-btn" data-tab="tariffs">Tariffs</button>
     <button class="gl-nav-btn" data-tab="entities">Entities</button>
     <button class="gl-nav-btn" data-tab="log">Log</button>
@@ -1853,7 +1854,6 @@ async function refresh() {
       </div>
       ${isBypass(d.state) ? `<div class="gl-bypass-banner">⚠️ BYPASS ACTIVE — ${esc(d.reason)}</div>` : ''}
       ${renderLoadManagement(d.load_mgmt)}
-      ${renderWarranties(d.warranties)}
       <div class="gl-wrap">
         <div class="gl-h">Live power flow</div>
         ${renderFlow(d.flow, isBypass(d.state))}
@@ -1986,6 +1986,9 @@ async function refresh() {
       </div>
       ${renderHeatpumpDiagnostics(d.heatpump_diagnostics)}
     </div>
+    <div class="tab-page" data-tab="warranty">
+      ${renderWarranties(d.warranties)}
+    </div>
     <div class="tab-page" data-tab="tariffs">
       <div class="gl-wrap">
         <div class="gl-h">Tariff comparison</div>
@@ -2023,6 +2026,14 @@ async function refresh() {
   const hasGridwarm = !!(d.thermal_zones && d.thermal_zones.length);
   document.getElementById('gl-nav-gridwarm').style.display = hasGridwarm ? '' : 'none';
   if (!hasGridwarm && currentTab === 'gridwarm') {
+    currentTab = 'overview';
+  }
+  // Warranty tab only makes sense once at least one component is
+  // actually configured — same on-demand nav visibility pattern as
+  // Circuits/GridWarm above.
+  const hasWarranties = !!(d.warranties && d.warranties.length);
+  document.getElementById('gl-nav-warranty').style.display = hasWarranties ? '' : 'none';
+  if (!hasWarranties && currentTab === 'warranty') {
     currentTab = 'overview';
   }
   selectTab(currentTab);
