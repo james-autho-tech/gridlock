@@ -6,8 +6,15 @@ import http.server
 import json
 import os
 import socketserver
+import sys
 import urllib.error
 import urllib.request
+
+# Same container as GridLock's own AppDaemon app -- reuse its date
+# parser directly instead of duplicating the UK/ISO parsing logic here,
+# so the two can never quietly drift apart.
+sys.path.insert(0, "/opt/appdaemon/apps/gridlock")
+from core.warranty import parse_install_date  # noqa: E402 — needs the path insert above first
 
 SUPERVISOR_TOKEN = os.environ["SUPERVISOR_TOKEN"]
 PORT = 8099
@@ -36,6 +43,29 @@ def save_zone_name(zone_key, display_name):
         names.pop(zone_key, None)  # empty input resets back to the real name
     with open(ZONE_NAMES_PATH, "w") as f:
         json.dump(names, f)
+
+
+# Component warranties added straight from the dashboard's own "Add
+# component" form -- no apps.yaml edit or add-on restart needed. This
+# file (not ZONE_NAMES_PATH's own directory, since it's read by
+# gridlock.py itself, not just this web server) lives next to
+# gridlock.py in its own state directory, the same place every other
+# piece of GridLock's persisted state already lives -- an absolute
+# path since this script runs from a different directory.
+WARRANTY_ENTRIES_PATH = "/opt/appdaemon/apps/gridlock/warranty_entries.json"
+
+
+def load_warranty_entries():
+    try:
+        with open(WARRANTY_ENTRIES_PATH) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return []
+
+
+def save_warranty_entries(entries):
+    with open(WARRANTY_ENTRIES_PATH, "w") as f:
+        json.dump(entries, f)
 
 
 def ha_get_all_states():
@@ -262,7 +292,7 @@ def build_status():
             "temperature_series": (heatpump_diag or {}).get("attributes", {}).get("temperature_series") or {},
             "external_events": (heatpump_diag or {}).get("attributes", {}).get("external_events") or [],
         } if heatpump_diag else None),
-        "warranties": ((warranties or {}).get("attributes", {}).get("items") or []) if warranties else None,
+        "warranties": (warranties or {}).get("attributes", {}).get("items") or [],
         # Live and direct, same as mode_override above -- not sourced
         # from sensor.gridlock_gridwarm's own attributes, which only
         # get republished once per 5-min tick (and not at all if no
@@ -621,7 +651,7 @@ PAGE = r"""<!doctype html>
     <button class="gl-nav-btn" data-tab="billing">Billing</button>
     <button class="gl-nav-btn" data-tab="circuits" id="gl-nav-circuits" style="display:none">Circuits</button>
     <button class="gl-nav-btn" data-tab="gridwarm" id="gl-nav-gridwarm" style="display:none">GridWarm</button>
-    <button class="gl-nav-btn" data-tab="warranty" id="gl-nav-warranty" style="display:none">Warranty</button>
+    <button class="gl-nav-btn" data-tab="warranty">Warranty</button>
     <button class="gl-nav-btn" data-tab="tariffs">Tariffs</button>
     <button class="gl-nav-btn" data-tab="entities">Entities</button>
     <button class="gl-nav-btn" data-tab="log">Log</button>
@@ -777,6 +807,50 @@ async function renameZone(realName, currentDisplayName) {
     });
   } catch (e) { /* surfaced on next refresh() if the engine never picks it up */ }
   zoneRenameBusy = false;
+  refresh();
+}
+let warrantyBusy = false;
+async function addWarranty() {
+  if (warrantyBusy) return;
+  const field = id => document.getElementById(id);
+  const name = field('gl-warranty-name').value.trim();
+  if (!name) { window.alert('Name is required.'); return; }
+  warrantyBusy = true;
+  try {
+    const resp = await fetch('api/warranty-add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name,
+        install_date: field('gl-warranty-install-date').value.trim(),
+        warranty_years: field('gl-warranty-years').value.trim() || 10,
+        throughput_cap_mwh: field('gl-warranty-cap').value.trim() || null,
+        capacity_retention_pct: field('gl-warranty-retention').value.trim() || null,
+      }),
+    });
+    const result = await resp.json();
+    if (!resp.ok) {
+      window.alert(result.error || 'Failed to add.');
+      warrantyBusy = false;
+      return;
+    }
+    ['gl-warranty-name', 'gl-warranty-install-date', 'gl-warranty-years',
+     'gl-warranty-cap', 'gl-warranty-retention'].forEach(id => { field(id).value = ''; });
+  } catch (e) { window.alert('Failed to add — network error.'); }
+  warrantyBusy = false;
+  refresh();
+}
+async function deleteWarrantyFromEl(el) {
+  if (warrantyBusy) return;
+  const name = decodeURIComponent(el.dataset.name);
+  if (!window.confirm(`Remove "${name}" from tracked warranties?`)) return;
+  warrantyBusy = true;
+  try {
+    await fetch('api/warranty-delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+  } catch (e) { /* surfaced on next refresh() if the engine never picks it up */ }
+  warrantyBusy = false;
   refresh();
 }
 // Reads the real/display name back out via data attributes (encodeURIComponent'd
@@ -1001,8 +1075,7 @@ function fmtUkDate(dateStr) {
   } catch (e) { return dateStr; }
 }
 function renderWarranties(items) {
-  if (!items || !items.length) return '';
-  const rows = items.map(w => {
+  const rows = (items || []).map(w => {
     const pct = w.throughput_pct_used;
     const hasCap = pct !== null && pct !== undefined;
     const color = hasCap && pct >= 90 ? 'var(--red)' : hasCap && pct >= 75 ? 'var(--amber)' : 'var(--green)';
@@ -1011,9 +1084,16 @@ function renderWarranties(items) {
       ? 'no install date set'
       : yearsLeft > 0 ? `${yearsLeft.toFixed(1)} years left` : 'past the calendar limit';
     const endDateText = w.warranty_end_date ? ` (ends ${fmtUkDate(w.warranty_end_date)})` : '';
+    // Only a dashboard-added entry can be deleted here -- an apps.yaml
+    // one lives in a file this web server doesn't own, so removing it
+    // has to happen there instead (deleting it here would just get
+    // silently re-added on the very next tick anyway).
+    const deleteBtn = w.source === 'dashboard'
+      ? `<span style="color:var(--dim);cursor:pointer" title="Remove" onclick="deleteWarrantyFromEl(this)" data-name="${encodeURIComponent(w.name)}">🗑</span>`
+      : `<span style="color:var(--dim);font-size:11px" title="Defined in apps.yaml -- edit/remove it there">from apps.yaml</span>`;
     return `<div style="margin-bottom:18px">
       <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
-        <b>${esc(w.name)}</b>
+        <span><b>${esc(w.name)}</b> ${deleteBtn}</span>
         <span style="color:var(--dim);font-size:12px">${esc(yearsText)}${endDateText}</span>
       </div>
       ${hasCap ? `<div class="gl-bar" style="margin-top:6px">
@@ -1030,7 +1110,16 @@ function renderWarranties(items) {
   return `<div class="gl-wrap">
     <div class="gl-h">Component warranties</div>
     <div class="gl-sub">Sigenergy's SigenStor battery warranty is throughput-based, not a cycle count — covered for its own warranty period or until a fixed total energy throughput is reached, whichever comes first (figures from published EU documentation, not confirmed UK-specific — see DOCS.md). Everything else here is a plain calendar countdown. Discharge energy is what's tracked against a throughput cap; charge is shown alongside for reference.</div>
-    ${rows}
+    ${rows || '<div style="color:var(--dim);font-size:12px;margin-bottom:14px">Nothing tracked yet — add one below.</div>'}
+    <div class="lbl" style="margin:6px 0 8px">Add a component</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:end">
+      <div><div class="lbl" style="font-size:10px">Name</div><input id="gl-warranty-name" type="text" placeholder="e.g. Battery" style="background:#0b1220;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:6px 8px;font-family:inherit;width:140px"></div>
+      <div><div class="lbl" style="font-size:10px">Install date (DD-MM-YYYY)</div><input id="gl-warranty-install-date" type="text" placeholder="22-07-2026" style="background:#0b1220;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:6px 8px;font-family:inherit;width:130px"></div>
+      <div><div class="lbl" style="font-size:10px">Years</div><input id="gl-warranty-years" type="number" placeholder="10" style="background:#0b1220;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:6px 8px;font-family:inherit;width:70px"></div>
+      <div><div class="lbl" style="font-size:10px">Throughput cap (MWh, battery only)</div><input id="gl-warranty-cap" type="number" step="0.01" placeholder="optional" style="background:#0b1220;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:6px 8px;font-family:inherit;width:110px"></div>
+      <div><div class="lbl" style="font-size:10px">Capacity retention %</div><input id="gl-warranty-retention" type="number" placeholder="optional" style="background:#0b1220;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:6px 8px;font-family:inherit;width:100px"></div>
+      <button class="gl-btn-sm" style="padding:7px 14px" onclick="addWarranty()">Add</button>
+    </div>
   </div>`;
 }
 function heatColor(pence, cheapP) {
@@ -2028,14 +2117,6 @@ async function refresh() {
   if (!hasGridwarm && currentTab === 'gridwarm') {
     currentTab = 'overview';
   }
-  // Warranty tab only makes sense once at least one component is
-  // actually configured — same on-demand nav visibility pattern as
-  // Circuits/GridWarm above.
-  const hasWarranties = !!(d.warranties && d.warranties.length);
-  document.getElementById('gl-nav-warranty').style.display = hasWarranties ? '' : 'none';
-  if (!hasWarranties && currentTab === 'warranty') {
-    currentTab = 'overview';
-  }
   selectTab(currentTab);
 }
 refresh();
@@ -2065,6 +2146,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_gridwarm_mode()
         elif path.endswith("/api/gridwarm-rename-zone"):
             self._handle_gridwarm_rename_zone()
+        elif path.endswith("/api/warranty-add"):
+            self._handle_warranty_add()
+        elif path.endswith("/api/warranty-delete"):
+            self._handle_warranty_delete()
         else:
             self._send(404, b"not found", "text/plain")
 
@@ -2138,6 +2223,63 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(200, json.dumps({"ok": True, "zone": zone_key,
                                         "display_name": display_name}).encode(),
                        "application/json")
+        except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
+            self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
+
+    def _handle_warranty_add(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+            name = str(body.get("name", "")).strip()[:60]
+            install_date = str(body.get("install_date", "")).strip()
+            if not name:
+                self._send(400, json.dumps({"error": "name is required"}).encode(), "application/json")
+                return
+            if install_date and parse_install_date(install_date) is None:
+                self._send(400, json.dumps(
+                    {"error": "install_date must be DD-MM-YYYY or YYYY-MM-DD"}).encode(),
+                    "application/json")
+                return
+            try:
+                warranty_years = float(body.get("warranty_years", 10))
+            except (TypeError, ValueError):
+                self._send(400, json.dumps({"error": "warranty_years must be a number"}).encode(),
+                           "application/json")
+                return
+            entry = {"name": name, "install_date": install_date or None,
+                     "warranty_years": warranty_years}
+            # Both optional -- only a genuine battery entry sets a
+            # throughput cap; leaving either blank keeps this component
+            # a plain calendar countdown.
+            if body.get("throughput_cap_mwh") not in (None, ""):
+                try:
+                    entry["throughput_cap_mwh"] = float(body["throughput_cap_mwh"])
+                except (TypeError, ValueError):
+                    self._send(400, json.dumps(
+                        {"error": "throughput_cap_mwh must be a number"}).encode(), "application/json")
+                    return
+            if body.get("capacity_retention_pct") not in (None, ""):
+                try:
+                    entry["capacity_retention_pct"] = float(body["capacity_retention_pct"])
+                except (TypeError, ValueError):
+                    self._send(400, json.dumps(
+                        {"error": "capacity_retention_pct must be a number"}).encode(), "application/json")
+                    return
+            entries = [e for e in load_warranty_entries() if e.get("name") != name]
+            entries.append(entry)
+            save_warranty_entries(entries)
+            self._send(200, json.dumps({"ok": True, "entry": entry}).encode(), "application/json")
+        except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
+            self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
+
+    def _handle_warranty_delete(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+            name = str(body.get("name", ""))
+            entries = [e for e in load_warranty_entries() if e.get("name") != name]
+            save_warranty_entries(entries)
+            self._send(200, json.dumps({"ok": True}).encode(), "application/json")
         except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
             self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
 

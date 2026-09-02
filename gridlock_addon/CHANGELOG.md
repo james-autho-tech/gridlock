@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.26.0 - 2026-09-01
+
+### Improvement
+- Component warranties are now fully editable from the dashboard — an "Add a component" form directly on the Warranty tab (name, install date, years, and a throughput cap for the battery), writing to a local file GridLock reads on its next tick. No `apps.yaml` edit or add-on restart needed for the common case. The tab is now always visible (previously hidden until something was already configured, which made it impossible to reach the form for your first entry). `apps.yaml`'s `warranties:` list still works for scripted/advanced setups — an entry defined there shows "from apps.yaml" instead of a delete button, and wins if a dashboard-added entry shares its name
+
 ## 3.25.1 - 2026-09-01
 
 ### Fix

@@ -470,13 +470,21 @@ gridlock:
   # ssen_postcode: "SW1A 1"
 
   # --- Component warranty tracking ---
-  # Off unless configured. A plain list -- track any component that has
-  # its own calendar warranty (an energy controller, a gateway, a heat
-  # pump, ...); dates are DD-MM-YYYY (UK format) or YYYY-MM-DD, either
-  # works. Only set throughput_cap_mwh on the entry for your actual
-  # battery -- that's the one component GridLock can track real usage
-  # against (Sigenergy's own daily battery charge/discharge sensors,
-  # auto-discovered), everything else here is a plain countdown to its
+  # Usually easier from the dashboard itself: the Warranty tab has its
+  # own "Add a component" form (name, install date, years, and --
+  # battery only -- a throughput cap) that writes straight to a local
+  # file, no apps.yaml edit or restart needed. This apps.yaml list is
+  # for scripted/advanced setups only -- an entry defined here can't be
+  # deleted from the dashboard (shows "from apps.yaml" instead) and
+  # wins if a dashboard-added entry ever shares its name.
+  #
+  # A plain list -- track any component that has its own calendar
+  # warranty (an energy controller, a gateway, a heat pump, ...); dates
+  # are DD-MM-YYYY (UK format) or YYYY-MM-DD, either works. Only set
+  # throughput_cap_mwh on the entry for your actual battery -- that's
+  # the one component GridLock can track real usage against
+  # (Sigenergy's own daily battery charge/discharge sensors, auto-
+  # discovered), everything else here is a plain countdown to its
   # calendar end date.
   #
   # Sigenergy's SigenStor battery warranty (confirmed from published EU

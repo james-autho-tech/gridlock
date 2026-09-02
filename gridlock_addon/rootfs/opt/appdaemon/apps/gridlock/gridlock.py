@@ -1266,6 +1266,22 @@ class GridLock(hass.Hass):
                 self.tracked_onpeak_cost_today += kwh * imp_rate
         self._save_cost_tracking_state()
 
+    def _all_warranties(self):
+        """apps.yaml's warranties: list, plus anything added straight
+        from the dashboard's own "Add component" form (stored in
+        warranty_entries.json by the web UI itself, no apps.yaml edit
+        or add-on restart needed) -- re-read fresh every call so a
+        dashboard addition shows up on the next tick, not just after a
+        restart. A dashboard entry sharing a name with an apps.yaml one
+        is dropped in favour of the apps.yaml version, on the theory
+        that anyone hand-editing apps.yaml for this meant it deliberately."""
+        config_entries = [dict(w, source="config") for w in self.warranties_cfg]
+        config_names = {w.get("name") for w in self.warranties_cfg}
+        dashboard_entries = [dict(w, source="dashboard")
+                             for w in self._load_json("warranty_entries.json", [])
+                             if w.get("name") not in config_names]
+        return config_entries + dashboard_entries
+
     def _update_warranty_tracking(self, now):
         """Rolls the Sigen inverter's own daily battery charge/discharge
         counters into a persisted lifetime total, at day rollover --
@@ -1281,7 +1297,7 @@ class GridLock(hass.Hass):
         midnight), silently losing that day's real total. The rollover
         uses whatever was captured on the last tick still within the
         old day instead."""
-        if not self.warranties_cfg:
+        if not self._all_warranties():
             return
         t = self.warranty_state.setdefault("_throughput", {})
         today_iso = now.date().isoformat()
@@ -1313,7 +1329,7 @@ class GridLock(hass.Hass):
         lifetime_charge_kwh = t.get("lifetime_charge_kwh", 0.0) + (t.get("last_charge_reading") or 0.0)
         lifetime_discharge_kwh = t.get("lifetime_discharge_kwh", 0.0) + (t.get("last_discharge_reading") or 0.0)
         items = []
-        for w in self.warranties_cfg:
+        for w in self._all_warranties():
             warranty_years = float(w.get("warranty_years", 10.0))
             install_date_str = w.get("install_date")
             years_remaining = None
@@ -1332,6 +1348,7 @@ class GridLock(hass.Hass):
                              level="WARNING")
                     self._warranty_date_warned.add(w.get("name", "?"))
             entry = {"name": w.get("name", "Component"),
+                     "source": w.get("source", "config"),
                      "install_date": install_date_str,
                      "warranty_years": warranty_years,
                      "warranty_end_date": warranty_end_date,

@@ -192,15 +192,24 @@ entirely. See `apps.yaml` for the two threshold percentages
 (`load_mgmt_warn_pct`/`load_mgmt_critical_pct`) if you want to tune how much
 margin is kept below the real trip point.
 
-## Component warranty tracking (`warranties` in `apps.yaml`)
+## Component warranty tracking
 
-Off unless configured. A plain list — track any component with its own
-calendar warranty (an energy controller, a gateway, a heat pump, the
-battery itself, ...), shown on its own **Warranty** tab (only appears
-once at least one entry is configured, same on-demand pattern as
-Circuits/GridWarm). Dates are DD-MM-YYYY (UK format) or YYYY-MM-DD —
-both are accepted, and always shown back to you as UK format regardless
-of which you typed in.
+Its own always-visible **Warranty** tab — track any component with its
+own calendar warranty (an energy controller, a gateway, a heat pump, the
+battery itself, ...). No `apps.yaml` edit or add-on restart needed: add
+a component directly from the tab's own form (name, install date,
+warranty years, and — battery only — a throughput cap). Takes up to 5
+minutes to show up after adding (GridLock only re-checks for new
+entries on its own regular tick), not instant. Dates are DD-MM-YYYY (UK
+format) or YYYY-MM-DD — both are accepted, and always shown back to you
+as UK format regardless of which you typed in. Remove one with the 🗑
+next to its name.
+
+For scripted/advanced setups, a `warranties` list can also be set
+directly in `apps.yaml`, using the exact same fields — an entry defined
+there shows "from apps.yaml" instead of a delete button (edit/remove it
+in the file instead, so the two can't silently fight each other), and
+wins if a dashboard-added entry ever shares its name.
 
 Most components are a plain calendar countdown: an install date plus a
 warranty duration in years. The battery is different — Sigenergy's own
@@ -208,9 +217,9 @@ SigenStor warranty (confirmed from published EU documentation, not a
 UK-specific source; worth checking against your own paperwork) is
 throughput-based, not a cycle count: covered for its warranty period OR
 until a fixed total energy throughput is reached, whichever comes
-first. Set `throughput_cap_mwh` on the battery's entry to opt it into
-this — everything else in the list just needs `install_date` and
-`warranty_years`.
+first. Set a throughput cap (MWh) on the battery's own entry to opt it
+into this — everything else just needs an install date and warranty
+years.
 
 Per-module throughput caps (sum whichever you have): BAT 5.0 = 18.20
 MWh, BAT 6.0 = 20.44 MWh, BAT 8.0 = 27.30 MWh, BAT 10.0 = 30.66 MWh.
