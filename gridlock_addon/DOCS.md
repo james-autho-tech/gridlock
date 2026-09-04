@@ -574,6 +574,16 @@ takes over completely or leaves the decision to the level below it:
   storm at all (still shown as "Active", it just isn't overriding
   anything for that slot). No safety margin added on top of the
   estimate: exactly enough is treated as enough, by design.
+
+  `sensor.gridlock_storm_status` publishes the actual numbers behind
+  this decision — `estimated_outage_hours`, `expected_load_kwh`,
+  `usable_reserve_kwh`, `reserve_sufficient` — since "why is it still
+  charging at 90%?" has no answer otherwise: Storm Watch charges toward
+  `storm_watch_target_soc` regardless of *current* SoC unless the
+  reserve already covers the *estimated outage*, and a high SoC doesn't
+  automatically mean it does (a long fallback window, or an
+  over-estimated learned load profile, can both push the required
+  reserve above what even 90%+ provides).
 - `ssen_postcode` — enables SSEN Power Track outage polling directly
   (no HA sensor needed); leave commented out to disable it.
 - `grid_connection_status_entity` — Sigenergy's own "grid connection

@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.26.1 - 2026-09-04
+
+### Improvement
+- `sensor.gridlock_storm_status` now publishes the actual numbers behind the charge/stand-down decision — `estimated_outage_hours`, `expected_load_kwh`, `usable_reserve_kwh`, `reserve_sufficient` — since "why is it still charging at 90%?" had no answer anywhere short of reading the code. Storm Watch charges toward `storm_watch_target_soc` regardless of *current* SoC unless the reserve already covers the *estimated outage*, and a high SoC doesn't automatically mean it does
+
 ## 3.26.0 - 2026-09-01
 
 ### Improvement

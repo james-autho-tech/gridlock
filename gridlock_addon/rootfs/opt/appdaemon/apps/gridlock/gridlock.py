@@ -2818,13 +2818,37 @@ class GridLock(hass.Hass):
                                    "raw_state": off or "connected"})
 
     def publish_storm_status(self):
+        """Surfaces the SAME reserve-sufficiency numbers storm_decision()
+        itself weighs (see _tick_inner) -- without this, "why is it
+        still charging at 90%?" has no answer short of reading the code:
+        Storm Watch charges toward storm_target_soc regardless of
+        current SoC UNLESS the estimated reserve already covers the
+        estimated outage, and that comparison isn't visible anywhere
+        else. Recomputed independently here (cheap, pure) rather than
+        threaded through from _tick_inner's own call, so this stays
+        correct regardless of when/how often it's called."""
         reason = self.storm_active()
+        outage_hours = expected_load_kwh = usable_kwh = reserve_sufficient = None
+        if reason:
+            now = self.get_now()
+            outage_hours = self._estimated_outage_hours(now)
+            expected_load_kwh = self._expected_load_kwh(now, outage_hours)
+            soc0 = self.get_float_state(self.ent_soc, 0.0)
+            usable_kwh = max(0.0, soc0 - self.floor_soc) / 100.0 * self.battery_kwh
+            reserve_sufficient = usable_kwh >= expected_load_kwh
         self.set_state("sensor.gridlock_storm_status",
                        state="Active" if reason else "Clear",
                        attributes={"friendly_name": "GridLock Storm Watch",
                                    "icon": ("mdi:weather-lightning" if reason
                                             else "mdi:weather-partly-cloudy"),
-                                   "reason": reason or "No active alerts"})
+                                   "reason": reason or "No active alerts",
+                                   "estimated_outage_hours": round(outage_hours, 1)
+                                                              if outage_hours is not None else None,
+                                   "expected_load_kwh": round(expected_load_kwh, 2)
+                                                        if expected_load_kwh is not None else None,
+                                   "usable_reserve_kwh": round(usable_kwh, 2)
+                                                          if usable_kwh is not None else None,
+                                   "reserve_sufficient": reserve_sufficient})
 
     def update_daily_financials(self):
         now = self.get_now()
