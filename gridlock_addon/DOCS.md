@@ -482,6 +482,32 @@ entities it resolved and their full list — check the add-on log for a line
 starting "GridWarm diagnostics: watching N entities" to confirm your
 config actually took effect before checking the dashboard.
 
+## Octoplus sessions (Saving/Power Down + Power Up/Free Electricity)
+
+**Saving Sessions (aka Power Down)** — GridLock auto-joins every
+available one the moment it's announced (`check_and_join_sessions`),
+since joining itself is always free — no downside to being enrolled.
+Actually **force-exporting the battery** during a joined session is a
+separate decision, and only happens when the reward is genuinely worth
+it: the event's own `octopoints_per_kwh` reward, converted to £ via
+`octopoint_value_gbp` (default 0.00125 — Octopus's own published rate
+of 800 points = £1), is compared against `export_degradation_cost` —
+the same per-kWh cost the rest of the plan already prices battery
+cycling against. A low-reward session runs the normal price-optimised
+plan instead of draining the battery for a reward worth less than the
+wear. Shown as "Saving Session — Not Worth It" in the decision log when
+this happens.
+
+**Power Up (aka Free Electricity Sessions)** — a different scheme:
+Octopus refunds *all* electricity used during the window, rather than
+paying points for reducing usage. GridLock reads and plans around these
+once you're enrolled (its baseline sensors feed straight into the plan
+the same way Saving Session windows do), but **cannot auto-join them**
+— checked directly against the integration's own source: there's no
+join service for Power Up events at all, only for Power Down/Saving
+Sessions. You have to opt in via the Octopus app each time one's
+announced.
+
 ## Modes (`battery_risk_profile` in `apps.yaml`)
 
 The planning engine is a linear program, not a greedy heuristic — it
@@ -538,7 +564,7 @@ takes over completely or leaves the decision to the level below it:
 |---|---|---|
 | 1 (highest) | **Off-grid**, confirmed by the inverter's own grid-connection sensor | Yes — no grid exists to trade against, so price/mode stop mattering: self-consumption only, never charging or exporting. If Storm Watch is *also* active, its own "Holding" label and reasoning are kept (more informative — it usually explains *why* you're off-grid), but the outcome is identical: hold only. |
 | 2 | **Storm Watch**, while active *and* the battery doesn't already have enough banked for the estimated outage | Yes — charges to target and holds, no exports, regardless of price or mode. Stands down (falls through to normal planning) once the reserve genuinely covers the estimated outage. |
-| 3 | **Saving Session** (a joined Octopus event) | Yes, for that slot — forces export regardless of mode, since the session reward is the whole point. |
+| 3 | **Saving Session** (a joined Octopus event) | Only when the reward is actually worth it — forces export regardless of mode if the session's points-to-£ value beats the export degradation cost; otherwise falls through to the normal plan (see "Octoplus sessions" above). |
 | 4 | **EV Protection**, while your EV is charging concurrently | Partially — blocks battery discharge to the house (so it doesn't fight the EV for the shared circuit) and switches to "Command Charging (PV First)" so any solar still reaches the house; doesn't touch export decisions elsewhere in the plan. |
 | 5 | **On-peak reserve** | Not an override as such — a standing constraint the mode-driven plan always has to satisfy: enough SoC must survive to reach the next cheap slot without hitting the floor, crediting any solar surplus expected before then. |
 | 6 (baseline) | **Mode-driven plan** (the table above) | This is what runs when nothing above is active — CHARGE in cheap slots, self-consume on-peak (always, per the standing rule), export when the mode's own degradation maths says it's worth it. |

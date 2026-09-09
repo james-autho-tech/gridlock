@@ -370,6 +370,16 @@ class GridLock(hass.Hass):
         self.default_import = float(a.get("default_import_rate", 0.2839))
         self.default_export = float(a.get("default_export_rate", 0.15))
         self.export_margin = float(a.get("export_margin", 0.02))
+        # Octopus's own published rate (800 points = £1) -- not
+        # guaranteed to stay fixed, and redeeming via Shoptopus instead
+        # of account credit is worth more, so configurable rather than
+        # hardcoded. Used to decide whether a Saving/Power Down
+        # session's reward is actually worth force-exporting the
+        # battery for (see _tick_inner) -- joining a session is always
+        # free (no downside, so every one gets joined unconditionally),
+        # but forcing an export is real battery throughput, priced the
+        # same as any other export-side cycling.
+        self.octopoint_value_gbp = float(a.get("octopoint_value_gbp", 1 / 800))
         self.target_daily_net_cost = (float(a["target_daily_net_cost"])
                                       if a.get("target_daily_net_cost") is not None else None)
 
@@ -531,6 +541,7 @@ class GridLock(hass.Hass):
         self._prev_ev_protection = False
         self._prev_off_grid = False
         self._prev_storm_reserve_sufficient = False
+        self._prev_session_not_worth_it = False
 
         # Failsafe / deadman switch — HA-link and Solcast-link liveness,
         # tracked every tick; see core/failsafe.py for the >15-minute
@@ -3219,8 +3230,24 @@ class GridLock(hass.Hass):
             # which logs its own decision exactly as it would with no
             # storm active at all.
 
-        # --- Saving session: force export ---
-        if session and soc0 > self.floor_soc + 5:
+        # --- Saving session: force export, but only when it's actually
+        #     worth it. Joining a session is always free (no downside
+        #     to being enrolled, so every one gets joined unconditionally
+        #     in check_and_join_sessions) -- but forcing an export is
+        #     real battery throughput, priced the same as any other
+        #     export-side cycling. A low-reward session isn't worth
+        #     draining the battery for. ---
+        session_worth_it = (bool(session) and core_optimizer.session_export_worth_it(
+            session.get("octopoints_per_kwh") if session else None,
+            self.octopoint_value_gbp, self.export_degradation))
+        if session and not session_worth_it and not self._prev_session_not_worth_it:
+            self._log_decision(
+                "Saving Session — Not Worth It",
+                f"Session {session.get('code', '')} reward ({session.get('octopoints_per_kwh', '?')} "
+                "pts/kWh) is worth less than the export-side degradation cost — running the "
+                "normal plan instead of force-exporting")
+        self._prev_session_not_worth_it = bool(session) and not session_worth_it
+        if session_worth_it and soc0 > self.floor_soc + 5:
             self.apply(self.mode_discharge, self.discharge_kw,
                        self.charge_kw, "Saving Session Export",
                        f"Exporting for session {session.get('code', '')}",

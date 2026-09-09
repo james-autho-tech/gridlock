@@ -630,3 +630,28 @@ def storm_decision(soc0_pct, *, storm_target_soc, discharge_kw, charge_kw,
     # nowhere left to put that charge — only the commanded rate limit does.
     return {"state": "Storm Watch — Holding", "disch_kw": disch,
             "charge_kw": 0.0, "charging": False, "override": True}
+
+
+def session_export_worth_it(octopoints_per_kwh, octopoint_value_gbp, export_degradation_gbp_per_kwh):
+    """A Saving/Power Down session's reward is worth force-exporting the
+    battery for only if the points earned are worth more than what
+    discharging costs -- joining a session is always free (no downside,
+    so GridLock joins every one unconditionally), but actually forcing
+    an export is not: it's real battery throughput, at the same
+    export-side degradation cost the rest of the plan already prices
+    cycling against.
+
+    octopoints_per_kwh: from the event's own data (a raw event with no
+    points field, or one that fails to parse as a number, is treated as
+    0 -- worth nothing, not "unknown, assume it's fine").
+    octopoint_value_gbp: £ per point (Octopus's own published rate is
+    800 points = £1, i.e. 0.00125 -- configurable since this isn't
+    guaranteed to stay fixed, and redeeming via Shoptopus instead of
+    account credit is worth more).
+    """
+    try:
+        points = float(octopoints_per_kwh)
+    except (TypeError, ValueError):
+        points = 0.0
+    reward_gbp_per_kwh = points * octopoint_value_gbp
+    return reward_gbp_per_kwh > export_degradation_gbp_per_kwh

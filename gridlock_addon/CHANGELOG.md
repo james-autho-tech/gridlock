@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.27.0 - 2026-09-09
+
+### Fix
+- Saving/Power Down Sessions were force-exporting the battery unconditionally whenever joined — the event's own points reward (`octopoints_per_kwh`) was shown in the join notification but never actually weighed against the cost of discharging. Now only force-exports when the reward (converted to £ via the real 800-points-£1 rate, `octopoint_value_gbp`, configurable) beats `export_degradation_cost`; otherwise runs the normal price-optimised plan instead and logs "Saving Session — Not Worth It". Joining itself stays unconditional (always free, no downside)
+- Tariff comparison's Risk Profile Comparison card was highlighting whichever mode had the lowest £ total with a trophy — max_profit winning that comparison is a foregone conclusion by construction, so the highlight never actually told you anything. Now highlights whichever mode you're actually running instead
+
+### Improvement
+- Forecast tab's PV/Load/SoC/rate charts had no scale indicator at all — merged the PV/Load and Battery SoC charts into one (they're the same "what's my energy doing" story) with a shared time axis, and added a real scale caption (max value shown) to every previously-unlabelled chart across the dashboard: Daily Cost History, Bill Reconciliation, Circuit daily energy, Carbon intensity, Learned house usage
+- Checked whether Octopus's "Free Electricity Sessions" (aka Power Up) could be auto-joined the same way Saving Sessions already are: no — confirmed directly against the integration's own source, there's no join service for Power Up events at all. GridLock already reads and plans around them once you're enrolled via the Octopus app; documented this clearly in DOCS.md rather than leaving it unexplained
+
 ## 3.26.1 - 2026-09-04
 
 ### Improvement

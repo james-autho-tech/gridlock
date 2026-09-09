@@ -163,6 +163,16 @@ gridlock:
   default_import_rate: 0.2839
   default_export_rate: 0.15
   export_margin: 0.02
+  # £ per Octoplus point -- Octopus's own published rate is 800 points
+  # = £1 (0.00125), used here as the default. Not guaranteed to stay
+  # fixed, and redeeming via Shoptopus instead of account credit is
+  # worth more -- override if your own real redemption value differs.
+  # Decides whether a Saving/Power Down session's reward is actually
+  # worth force-exporting the battery for: joining a session is always
+  # free (every available one gets joined automatically, no downside),
+  # but forcing an export is real battery throughput, only worth it
+  # when the reward beats what discharging costs (export_degradation_cost).
+  # octopoint_value_gbp: 0.00125
   # Import rate at/below which a slot counts as "off-peak" for pacing
   # self-consumption toward the next cheap window, and as the hard
   # floor for grid-charging (charging above this, arbitrage math

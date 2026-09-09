@@ -1348,13 +1348,24 @@ function renderForecastTriad(table) {
   triadRows = planRowObjects(table);
   const n = triadRows.length;
   if (!n) return '<div style="color:var(--dim)">No forecast data yet.</div>';
-  const H = 116;
+  const H = 150;
 
-  // Chart 1: PV vs load, overlaid areas
+  // PV/load (kWh, left scale) and battery SoC (%, right scale) merged
+  // into one chart -- they're the same "what's my energy actually
+  // doing right now" story, and a shared time axis makes the
+  // relationship between them (SoC climbing exactly as PV outstrips
+  // load, say) visible at a glance instead of split across two
+  // separately-scaled panels. Real min/max shown as a plain HTML
+  // caption, not <text> inside the SVG -- this SVG uses
+  // preserveAspectRatio="none" (deliberately non-uniform stretch to
+  // fill the container), which would squash or stretch actual text
+  // glyphs unevenly.
   const maxE = Math.max(...triadRows.map(r => Math.max(Number(r.pv_kwh), Number(r.load_kwh))), 0.1);
   const yE = v => H - 6 - (Math.min(v, maxE) / maxE) * (H - 16);
+  const yS = pct => H - 6 - (Math.min(100, Math.max(0, pct)) / 100) * (H - 16);
   const pvPts = triadRows.map((r, i) => `${triadX(i, n).toFixed(1)},${yE(Number(r.pv_kwh)).toFixed(1)}`).join(' ');
   const loadPts = triadRows.map((r, i) => `${triadX(i, n).toFixed(1)},${yE(Number(r.load_kwh)).toFixed(1)}`).join(' ');
+  const socPts = triadRows.map((r, i) => `${triadX(i, n).toFixed(1)},${yS(Number(r.soc_pct)).toFixed(1)}`).join(' ');
   const pvArea = `M0,${H} L${pvPts} L${VB_W},${H} Z`;
   const chart1 = `
     <svg class="gl-triad-chart" viewBox="0 0 ${VB_W} ${H}" preserveAspectRatio="none"
@@ -1362,51 +1373,56 @@ function renderForecastTriad(table) {
       <path d="${pvArea}" fill="var(--amber)" opacity="0.25" />
       <polyline points="${pvPts}" fill="none" stroke="var(--amber)" stroke-width="2" />
       <polyline points="${loadPts}" fill="none" stroke="var(--violet)" stroke-width="2" stroke-dasharray="4,3" />
-      <line class="gl-triad-guide" data-g="1" x1="0" y1="0" x2="0" y2="${H}" />
-    </svg>`;
-
-  // Chart 2: SoC curve
-  const yS = pct => H - 6 - (Math.min(100, Math.max(0, pct)) / 100) * (H - 16);
-  const socPts = triadRows.map((r, i) => `${triadX(i, n).toFixed(1)},${yS(Number(r.soc_pct)).toFixed(1)}`).join(' ');
-  const chart2 = `
-    <svg class="gl-triad-chart" viewBox="0 0 ${VB_W} ${H}" preserveAspectRatio="none"
-         onmousemove="triadHover(event,this)" onmouseleave="triadLeave()">
       <polyline points="${socPts}" fill="none" stroke="var(--cyan)" stroke-width="2.5" />
       <line class="gl-triad-guide" data-g="1" x1="0" y1="0" x2="0" y2="${H}" />
     </svg>`;
 
-  // Chart 3: import vs export rate, step-bars
+  // Import/export rate, step-bars either side of a shared midline
   const maxP = Math.max(...triadRows.map(r => Math.max(Number(r.import_p), Number(r.export_p))), 1);
   const bw = VB_W / n;
+  const rateH = 90;
   const rateBars = triadRows.map((r, i) => {
-    const impH = (Number(r.import_p) / maxP) * (H / 2 - 4);
-    const expH = (Number(r.export_p) / maxP) * (H / 2 - 4);
+    const impH = (Number(r.import_p) / maxP) * (rateH / 2 - 4);
+    const expH = (Number(r.export_p) / maxP) * (rateH / 2 - 4);
     const x = i * bw;
-    return `<rect x="${x.toFixed(1)}" y="${(H / 2 - impH).toFixed(1)}" width="${Math.max(0.5, bw - 1).toFixed(1)}" height="${impH.toFixed(1)}" fill="var(--amber)" opacity="0.7" />`
-      + `<rect x="${x.toFixed(1)}" y="${(H / 2).toFixed(1)}" width="${Math.max(0.5, bw - 1).toFixed(1)}" height="${expH.toFixed(1)}" fill="var(--cyan)" opacity="0.7" />`;
+    return `<rect x="${x.toFixed(1)}" y="${(rateH / 2 - impH).toFixed(1)}" width="${Math.max(0.5, bw - 1).toFixed(1)}" height="${impH.toFixed(1)}" fill="var(--amber)" opacity="0.7" />`
+      + `<rect x="${x.toFixed(1)}" y="${(rateH / 2).toFixed(1)}" width="${Math.max(0.5, bw - 1).toFixed(1)}" height="${expH.toFixed(1)}" fill="var(--cyan)" opacity="0.7" />`;
   }).join('');
   const chart3 = `
-    <svg class="gl-triad-chart" viewBox="0 0 ${VB_W} ${H}" preserveAspectRatio="none"
+    <svg class="gl-triad-chart" viewBox="0 0 ${VB_W} ${rateH}" preserveAspectRatio="none"
          onmousemove="triadHover(event,this)" onmouseleave="triadLeave()">
-      <line x1="0" y1="${H / 2}" x2="${VB_W}" y2="${H / 2}" stroke="var(--line)" stroke-width="1" />
+      <line x1="0" y1="${rateH / 2}" x2="${VB_W}" y2="${rateH / 2}" stroke="var(--line)" stroke-width="1" />
       ${rateBars}
-      <line class="gl-triad-guide" data-g="1" x1="0" y1="0" x2="0" y2="${H}" />
+      <line class="gl-triad-guide" data-g="1" x1="0" y1="0" x2="0" y2="${rateH}" />
     </svg>`;
+
+  // triadRows[i].slot is already formatted ("Mon 14:30", plan_table's
+  // own first column) -- not a raw ISO timestamp, so used directly
+  // rather than run through a date parser that would silently produce
+  // "Invalid Date" on it.
+  const everyN = Math.max(1, Math.ceil(n / 12));
+  const timeAxis = barAxisLabels(n, everyN, i => triadRows[i].slot);
 
   return `<div class="gl-triad">
     <div class="gl-triad-tooltip" id="gl-triad-tooltip"></div>
-    <div class="gl-combo-legend" style="margin-bottom:4px">
-      <span><span class="gl-legend-dot" style="background:var(--amber)"></span>Solar PV (kWh)</span>
-      <span><span class="gl-legend-dot" style="background:var(--violet)"></span>Home load (kWh)</span>
+    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+      <div class="gl-combo-legend" style="margin-bottom:4px">
+        <span><span class="gl-legend-dot" style="background:var(--amber)"></span>Solar PV (kWh)</span>
+        <span><span class="gl-legend-dot" style="background:var(--violet)"></span>Home load (kWh)</span>
+        <span><span class="gl-legend-dot" style="background:var(--cyan)"></span>Battery SoC (%)</span>
+      </div>
+      <span style="color:var(--dim);font-size:11px">kWh: 0–${maxE.toFixed(1)} · SoC: 0–100%</span>
     </div>
     ${chart1}
-    <div class="gl-combo-legend" style="margin:8px 0 4px"><span><span class="gl-legend-dot" style="background:var(--cyan)"></span>Battery SoC (%)</span></div>
-    ${chart2}
-    <div class="gl-combo-legend" style="margin:8px 0 4px">
-      <span><span class="gl-legend-dot" style="background:var(--amber)"></span>Import rate (p)</span>
-      <span><span class="gl-legend-dot" style="background:var(--cyan)"></span>Export rate (p)</span>
+    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-top:8px">
+      <div class="gl-combo-legend">
+        <span><span class="gl-legend-dot" style="background:var(--amber)"></span>Import rate (p)</span>
+        <span><span class="gl-legend-dot" style="background:var(--cyan)"></span>Export rate (p)</span>
+      </div>
+      <span style="color:var(--dim);font-size:11px">±${maxP.toFixed(1)}p from a £0 midline</span>
     </div>
     ${chart3}
+    ${timeAxis}
   </div>`;
 }
 function triadHover(evt, svgEl) {
@@ -1659,7 +1675,7 @@ function renderLoadProfileChart(data) {
   }).join('');
   // Every 4th half-hour slot -> a label every 2 hours (00:00, 02:00, ...).
   const axis = barAxisLabels(data.length, 4, i => data[i].x);
-  return `<div class="gl-bars">${bars}</div>${axis}`;
+  return `<div style="text-align:right;color:var(--dim);font-size:11px;margin-bottom:4px">tallest bar: ${max.toFixed(2)} kWh/slot</div><div class="gl-bars">${bars}</div>${axis}`;
 }
 function renderDailyCostChart(data) {
   if (!data || !data.length) {
@@ -1686,7 +1702,8 @@ function renderDailyCostChart(data) {
   // yet, rather than one per day (unreadable at 28+).
   const everyN = Math.max(1, Math.ceil(data.length / 7));
   const axis = barAxisLabels(data.length, everyN, i => fmtShortDate(data[i].date));
-  return `<svg viewBox="0 0 ${W} ${H}" class="gl-combo-svg" preserveAspectRatio="none" style="height:170px">
+  return `<div style="text-align:right;color:var(--dim);font-size:11px;margin-bottom:4px">tallest bar: £${maxAbs.toFixed(2)} · midline: £0</div>
+    <svg viewBox="0 0 ${W} ${H}" class="gl-combo-svg" preserveAspectRatio="none" style="height:170px">
       <line x1="0" y1="${mid}" x2="${W}" y2="${mid}" stroke="var(--line)" stroke-width="1" />
       ${bars}
     </svg>
@@ -1720,7 +1737,8 @@ function renderBillReconciliationChart(data) {
   }).join('');
   const everyN = Math.max(1, Math.ceil(data.length / 7));
   const axis = barAxisLabels(data.length, everyN, i => fmtShortDate(data[i].date));
-  return `<svg viewBox="0 0 ${W} ${H}" class="gl-combo-svg" preserveAspectRatio="none" style="height:170px">
+  return `<div style="text-align:right;color:var(--dim);font-size:11px;margin-bottom:4px">tallest bar: £${maxAbs.toFixed(2)} gap · midline: agrees exactly</div>
+    <svg viewBox="0 0 ${W} ${H}" class="gl-combo-svg" preserveAspectRatio="none" style="height:170px">
       <line x1="0" y1="${mid}" x2="${W}" y2="${mid}" stroke="var(--line)" stroke-width="1" />
       ${bars}
     </svg>
@@ -1787,7 +1805,7 @@ function renderCarbonChart(data) {
   // Every 4th half-hour slot -> a label every 2 hours, same spacing as
   // the load-profile chart's own axis.
   const axis = barAxisLabels(data.length, 4, i => fmtTime(data[i].x));
-  return `<div class="gl-bars">${bars}</div>${axis}`;
+  return `<div style="text-align:right;color:var(--dim);font-size:11px;margin-bottom:4px">tallest bar: ${max} gCO2/kWh</div><div class="gl-bars">${bars}</div>${axis}`;
 }
 function renderCircuits(circuits) {
   if (!circuits || !circuits.length) {
@@ -1829,7 +1847,7 @@ function renderCircuitDailyChart(history, entityId, everyN) {
     </div>`;
   }).join('');
   const axis = barAxisLabels(series.length, everyN, i => fmtShortDate(series[i].date));
-  return `<div class="gl-bars" style="height:70px">${bars}</div>${axis}`;
+  return `<div style="text-align:right;color:var(--dim);font-size:10px;margin-bottom:2px">tallest bar: ${max.toFixed(2)} kWh/day</div><div class="gl-bars" style="height:70px">${bars}</div>${axis}`;
 }
 function renderCircuitHistoryCharts(circuits, history) {
   if (!circuits || !circuits.length) {
@@ -1848,7 +1866,13 @@ function renderCircuitHistoryCharts(circuits, history) {
       ${renderCircuitDailyChart(history, c.entity_id, everyN)}
     </div>`).join('');
 }
-function renderProfileComparison(totals) {
+function renderProfileComparison(totals, activeMode) {
+  // Highlights whichever mode you're actually RUNNING, not whichever
+  // number happens to be lowest -- max_profit's own numbers winning
+  // this comparison is a foregone conclusion (it's built to minimise
+  // exactly this figure, at the cost of battery wear the others price
+  // in), so a trophy on it never told you anything. Seeing your actual
+  // mode against the alternatives does.
   totals = totals || {};
   const names = ['eco', 'balanced', 'max_profit'];
   const labels = { eco: 'Eco', balanced: 'Balanced', max_profit: 'Max profit' };
@@ -1856,15 +1880,14 @@ function renderProfileComparison(totals) {
   if (!vals.length) {
     return '<div style="color:var(--dim)">Building up history — one comparison point gets added each day, check back after a few days.</div>';
   }
-  const best = Math.min(...vals);
   const tiles = names.map(n => {
     const v = totals[n];
+    const isActive = n === activeMode;
     if (v === undefined || v === null) {
-      return `<div class="gl-tile"><div class="lbl">${labels[n]}</div><div class="val" style="color:var(--dim);font-size:14px">—</div></div>`;
+      return `<div class="gl-tile"${isActive ? ' style="outline:1px solid var(--cyan)"' : ''}><div class="lbl">${labels[n]}${isActive ? ' (current)' : ''}</div><div class="val" style="color:var(--dim);font-size:14px">—</div></div>`;
     }
-    const isBest = v === best;
-    return `<div class="gl-tile"${isBest ? ' style="outline:1px solid var(--green)"' : ''}>
-      <div class="lbl">${labels[n]}${isBest ? ' 🏆' : ''}</div>
+    return `<div class="gl-tile"${isActive ? ' style="outline:1px solid var(--cyan)"' : ''}>
+      <div class="lbl">${labels[n]}${isActive ? ' (current)' : ''}</div>
       <div class="val num" style="color:${v <= 0 ? 'var(--green)' : 'var(--amber)'}">£${v.toFixed(2)}</div>
     </div>`;
   }).join('');
@@ -1994,7 +2017,7 @@ async function refresh() {
       <div class="gl-wrap">
         <div class="gl-h">Risk profile comparison</div>
         <div class="gl-sub">What each risk profile's own morning plan predicted, summed across every day recorded — not a real-outcome backtest (that would need running all three profiles continuously), but a genuine forecast-vs-forecast comparison building up over time.</div>
-        ${renderProfileComparison(d.profile_comparison_totals)}
+        ${renderProfileComparison(d.profile_comparison_totals, d.mode_active)}
       </div>
       <div class="gl-wrap">
         <div class="gl-h">Carbon intensity</div>

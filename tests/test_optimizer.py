@@ -826,3 +826,24 @@ def test_storm_override_reserve_check_requires_no_safety_margin():
         charge_kw=10.0, ev_concurrent_charge_kw=5.0, ev_active=False,
         usable_kwh=5.0, expected_load_kwh=5.0)
     assert decision["override"] is False
+
+
+def test_session_export_worth_it_when_reward_exceeds_degradation_cost():
+    # 100 points/kWh at the standard 800pts=£1 rate = £0.125/kWh
+    # reward, comfortably above a typical degradation cost -- worth it.
+    assert optimizer.session_export_worth_it(
+        octopoints_per_kwh=100, octopoint_value_gbp=1 / 800, export_degradation_gbp_per_kwh=0.03) is True
+
+
+def test_session_export_not_worth_it_when_degradation_cost_exceeds_reward():
+    # 8 points/kWh (£0.01/kWh) against a higher degradation cost — not
+    # worth cycling the battery for that little.
+    assert optimizer.session_export_worth_it(
+        octopoints_per_kwh=8, octopoint_value_gbp=1 / 800, export_degradation_gbp_per_kwh=0.25) is False
+
+
+def test_session_export_not_worth_it_with_no_points_field():
+    # A raw event with no points data at all is treated as worth
+    # nothing, not "unknown, assume it's fine".
+    assert optimizer.session_export_worth_it(
+        octopoints_per_kwh="?", octopoint_value_gbp=1 / 800, export_degradation_gbp_per_kwh=0.03) is False
