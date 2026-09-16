@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.29.0 - 2026-09-16
+
+### Improvement
+- EDF GoElectric is now fetched live from EDF's own public API instead of a static hand-typed guess in `compare_tariffs` — confirmed live: EDF runs on the same Kraken billing platform as Octopus and publishes the exact same kind of open, unauthenticated product API (`api.edfgb-kraken.energy`). No config needed beyond the same auto-detected region Agile already uses. This also caught and fixed the static entry's own day-rate being stale (28.91p configured vs 32.998p real, region H) and its standing charge never having been populated at all
+- Generalized the Agile rate-fetching logic into a shared Kraken-platform poller reused by both Octopus Agile and EDF GoElectric, including correctly picking the most-recently-launched product when a supplier runs two overlapping variants at once (confirmed live: EDF currently runs "Go Electric 12m v2" and "Go Electric 18m" simultaneously during a rollover) rather than an arbitrary first match
+
 ## 3.28.0 - 2026-09-16
 
 ### Improvement

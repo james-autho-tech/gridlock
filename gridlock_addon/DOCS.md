@@ -84,15 +84,19 @@ shortcut once enabled. Tabs:
 - **GridWarm** — only shown once a heat pump zone is configured (see
   below); predicted temperature and heating cost per zone, plus COP.
 - **Tariffs** — how today's plan compares against other EV/off-peak
-  products from Octopus, EDF, E.ON, Utility Warehouse, Ecotricity,
-  Outfox Energy, ScottishPower, and Good Energy (see `compare_tariffs`
-  in `apps.yaml` — add/edit entries there for anything else, published
-  rates only, never guessed). Octopus Agile can be included too
-  (region auto-detected from your own account's real tariff code, or set
-  `agile_region` in `apps.yaml` to override) — real half-hourly rates
-  pulled live from Octopus's own public API rather than a flat+windows
-  approximation, since Agile has no fixed daily pattern to encode
-  statically. Import only; export stays whatever's actually configured.
+  products from E.ON, Utility Warehouse, Ecotricity, Outfox Energy,
+  ScottishPower, and Good Energy (see `compare_tariffs` in `apps.yaml` —
+  add/edit entries there for anything else, published rates only, never
+  guessed). Octopus Agile and EDF GoElectric are both included live
+  instead — no config needed beyond region, which is auto-detected from
+  your own account's real tariff code (or set `agile_region` in
+  `apps.yaml` to override) — real rates pulled straight from each
+  supplier's own public API (EDF runs on the same underlying platform as
+  Octopus and publishes the same kind of open product API) rather than a
+  flat+windows approximation typed in by hand, since neither has a fixed
+  daily pattern simple enough to encode statically and staying accurate
+  matters more for whichever tariff you're actually shopping against.
+  Import only; export stays whatever's actually configured.
   Each row also shows the tariff's actual rate structure (off-peak
   window and rate, standing charge) alongside its projected cost, not
   just the bottom-line total.

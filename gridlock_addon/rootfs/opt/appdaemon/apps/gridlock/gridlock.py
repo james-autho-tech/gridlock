@@ -574,6 +574,13 @@ class GridLock(hass.Hass):
         self.agile_rates = {}
         self.agile_standing_gbp = 0.0
 
+        # EDF GoElectric — same DNO region letter as Agile above (it's
+        # geographic, not supplier-specific), fetched live from EDF's own
+        # public Kraken API rather than typed into compare_tariffs as a
+        # static guess (see poll_edf_goelec_rates).
+        self.edf_goelec_windows = []
+        self.edf_goelec_standing_gbp = 0.0
+
         # Component warranty tracking — off unless configured. Each entry
         # in warranties: is independent; most (Energy Controller, Sigen
         # Gateway, a heat pump, ...) are a plain calendar countdown, but
@@ -700,6 +707,7 @@ class GridLock(hass.Hass):
 
         if self.agile_region:
             self.run_every(self.poll_agile_rates, "now", 3600)
+            self.run_every(self.poll_edf_goelec_rates, "now", 3600)
 
         if self.gridwarm_diagnostic_static_entities or self.gridwarm_diagnostic_prefix:
             self.run_every(self.poll_heatpump_diagnostics, "now", 1800)
@@ -1581,35 +1589,49 @@ class GridLock(hass.Hass):
     def _agile_rate_for(self, dt):
         return self.agile_rates.get(self._agile_slot_key(dt))
 
-    def poll_agile_rates(self, kwargs):
-        """Octopus's public Agile API — no auth needed, but genuinely
-        two real facts that can't be hardcoded: which product code is
-        Agile right now (Octopus renews it every 6-12 months, e.g.
-        AGILE-24-10-01 -> a new one), and the region-specific tariff
-        code built from it. Both looked up live every poll rather than
-        assumed, same "don't guess at something checkable" discipline as
-        everywhere else real money is on the line in this codebase."""
+    def _fetch_kraken_product_rates(self, *, api_base, products_query, name_match, region, log_label):
+        """Shared fetch against any Kraken-platform brand's public product
+        API — Octopus and EDF both run on the same underlying Kraken
+        billing platform (confirmed directly: api.edfgb-kraken.energy
+        mirrors api.octopus.energy's exact schema), no auth needed for
+        either. Two real facts that can't be hardcoded regardless of
+        brand: which product code is currently active (both Octopus
+        Agile and EDF GoElectric get renewed periodically under a new
+        dated code, e.g. AGILE-24-10-01 -> a new one), and the
+        region-specific tariff code built from it — both looked up live
+        every poll rather than assumed, same "don't guess at something
+        checkable" discipline as everywhere else real money is on the
+        line in this codebase. Returns (rate_records, standing_records)
+        raw from the API, or (None, None) on failure/no active product —
+        callers do their own post-processing since Octopus Agile (half-
+        hourly bands) and EDF GoElectric (wide day/off-peak bands) suit
+        different shapes downstream."""
         try:
             req = urllib.request.Request(
-                "https://api.octopus.energy/v1/products/?is_variable=true&brand=OCTOPUS_ENERGY",
+                f"{api_base}/products/?{products_query}",
                 headers={"User-Agent": "GridLock/3"})
             with urllib.request.urlopen(req, timeout=15) as resp:
                 products = json.load(resp).get("results", [])
             now = self.get_now()
-            agile = next(
-                (p for p in products
-                 if "Agile Octopus" in (p.get("full_name") or "")
-                 and self._iso(p["available_from"]) <= now
-                 and (not p.get("available_to") or self._iso(p["available_to"]) > now)),
-                None)
-            if not agile:
-                self.log("Agile poll: no currently-active Agile product found", level="WARNING")
-                return
-            code = agile["code"]
-            tariff_code = f"E-1R-{code}-{self.agile_region}"
+            candidates = [p for p in products
+                          if name_match in (p.get("full_name") or "")
+                          and self._iso(p["available_from"]) <= now
+                          and (not p.get("available_to") or self._iso(p["available_to"]) > now)]
+            if not candidates:
+                self.log(f"{log_label} poll: no currently-active product found", level="WARNING")
+                return None, None
+            # More than one can be active at once during a rollover (e.g.
+            # EDF running "Go Electric 12m v2" and "Go Electric 18m"
+            # simultaneously, confirmed live) — the most recently launched
+            # one is the current new-customer offering; an older still-
+            # active variant is normally there only for existing
+            # customers on it, not the one to compare against.
+            product = max(candidates, key=lambda p: self._iso(p["available_from"]))
+            code = product["code"]
+            tariff_code = f"E-1R-{code}-{region}"
             period_from = (now - timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
             period_to = (now + timedelta(days=2)).strftime("%Y-%m-%dT00:00:00Z")
-            base = f"https://api.octopus.energy/v1/products/{code}/electricity-tariffs/{tariff_code}"
+            base = f"{api_base}/products/{code}/electricity-tariffs/{tariff_code}"
             rates_req = urllib.request.Request(
                 f"{base}/standard-unit-rates/?period_from={period_from}&period_to={period_to}",
                 headers={"User-Agent": "GridLock/3"})
@@ -1620,8 +1642,17 @@ class GridLock(hass.Hass):
                 headers={"User-Agent": "GridLock/3"})
             with urllib.request.urlopen(standing_req, timeout=15) as resp:
                 standing = json.load(resp).get("results", [])
+            return rates, standing
         except Exception as exc:  # noqa: BLE001 — network is best-effort
-            self.log(f"Agile rate poll failed: {exc!r}", level="WARNING")
+            self.log(f"{log_label} rate poll failed: {exc!r}", level="WARNING")
+            return None, None
+
+    def poll_agile_rates(self, kwargs):
+        rates, standing = self._fetch_kraken_product_rates(
+            api_base="https://api.octopus.energy/v1",
+            products_query="is_variable=true&brand=OCTOPUS_ENERGY",
+            name_match="Agile Octopus", region=self.agile_region, log_label="Agile")
+        if rates is None:
             return
         self.agile_rates = {
             self._agile_slot_key(self._iso(r["valid_from"])): r["value_inc_vat"] / 100.0
@@ -1629,6 +1660,29 @@ class GridLock(hass.Hass):
         }
         if standing and standing[0].get("value_inc_vat") is not None:
             self.agile_standing_gbp = standing[0]["value_inc_vat"] / 100.0
+
+    def poll_edf_goelec_rates(self, kwargs):
+        """EDF GoElectric — same Kraken platform as Agile above, but a
+        fixed-term product (a day/off-peak split over wide bands, not
+        half-hourly), so kept as a proper (start, end, rate) window list
+        for core_slots.rate_at() rather than Agile's per-half-hour-slot
+        dict — that also means it gets the same "repeat the prior day
+        once real data runs out" fallback rate_at() already has, for
+        free, rather than needing its own coverage-counting logic like
+        the Agile comparison block below."""
+        rates, standing = self._fetch_kraken_product_rates(
+            api_base="https://api.edfgb-kraken.energy/v1",
+            products_query="brand=EDF",
+            name_match="Go Electric", region=self.agile_region, log_label="EDF GoElectric")
+        if rates is None:
+            return
+        self.edf_goelec_windows = [
+            (self._iso(r["valid_from"]), self._iso(r["valid_to"]), r["value_inc_vat"] / 100.0)
+            for r in rates if r.get("valid_from") and r.get("valid_to")
+            and r.get("value_inc_vat") is not None
+        ]
+        if standing and standing[0].get("value_inc_vat") is not None:
+            self.edf_goelec_standing_gbp = standing[0]["value_inc_vat"] / 100.0
 
     def poll_carbon_intensity(self, kwargs):
         try:
@@ -2147,6 +2201,29 @@ class GridLock(hass.Hass):
             else:
                 self.log("Agile comparison skipped — no published rate data "
                          "yet for the upcoming slots.", level="DEBUG")
+
+        # EDF GoElectric, live via the same Kraken API Agile above uses
+        # (see poll_edf_goelec_rates) — a proper window list rather than
+        # a per-slot dict, so rate_at()'s prior-day fallback covers the
+        # full 48h horizon without needing Agile's own coverage-counting
+        # dance. Import only, same rationale as Agile: export stays
+        # whatever's actually configured.
+        if self.edf_goelec_windows:
+            edf_imp = [core_slots.rate_at(self.edf_goelec_windows, s["start"], self.default_import)
+                       for s in slots]
+            cp = [dict(s, charge=0.0, export=0.0, imp=edf_imp[i], exp=s["exp"])
+                  for i, s in enumerate(slots)]
+            result = core_optimizer.solve(cp, soc0, self.cfg, today_date=now.date())
+            if result.infeasible:
+                self.log("EDF GoElectric comparison reported infeasible — "
+                         "skipping it this tick.", level="WARNING")
+            else:
+                standing = self.edf_goelec_standing_gbp * horizon_hours / 24.0
+                lo, hi = min(edf_imp) * 100, max(edf_imp) * 100
+                rows.append(("EDF GoElectric (live)", result.grid_cost + standing, True,
+                             {"import_desc": f"{round(lo, 1)}p–{round(hi, 1)}p live (off-peak/day)",
+                              "export_p": round(slots[0]["exp"] * 100, 1),
+                              "standing_p": round(self.edf_goelec_standing_gbp * 100, 1)}))
 
         rows.sort(key=lambda r: r[1])
         best = rows[0][1]

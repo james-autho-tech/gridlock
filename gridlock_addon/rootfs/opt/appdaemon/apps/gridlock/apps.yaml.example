@@ -260,16 +260,18 @@ gridlock:
       import_default: 0.2950
       import: [{ start: "00:30", end: "07:30", rate: 0.13 }]
       export: 0.04
-    # EDF GoElectric and E.ON Next Drive rates below checked against
-    # each supplier's own published figures (2026) — both suppliers'
-    # actual rates vary by region/meter type/fixed-vs-smart variant, so
-    # treat these as illustrative starting points and check your own
-    # postcode's real published rate rather than assuming these match
-    # exactly, same caveat as every other entry in this list.
-    - name: "EDF GoElectric"
-      import_default: 0.2891
-      import: [{ start: "23:00", end: "06:00", rate: 0.0699 }]
-      export: 0.15
+    # EDF GoElectric isn't listed here — it's fetched live instead (see
+    # poll_edf_goelec_rates), same "real API over a static guess" as
+    # Agile above, since EDF runs on the same Kraken platform as Octopus
+    # and publishes the same kind of open product API. No config needed;
+    # it uses the same auto-detected region as agile_region.
+    #
+    # E.ON Next Drive's rate below checked against the supplier's own
+    # published figures (2026) — actual rates vary by region/meter
+    # type/fixed-vs-smart variant, so treat this as an illustrative
+    # starting point and check your own postcode's real published rate
+    # rather than assuming it matches exactly, same caveat as every
+    # other entry in this list.
     - name: "E.ON Next Drive"
       import_default: 0.30625
       import: [{ start: "00:00", end: "06:00", rate: 0.08 }]
