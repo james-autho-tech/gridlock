@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.27.2 - 2026-09-16
+
+### Fix
+- Reverted part of 3.27.1: adding "Current"'s real live standing charge to the comparison biased it against every `compare_tariffs` entry, since `standing` on those defaults to £0 unless explicitly configured (undocumented until 3.27.1, so realistically none were) — confirmed live by a user on IOG whose own tariff's static entry came out cheaper than "Current" for no reason but this. Comparison is unit-rate-only again unless you've explicitly configured `standing` on the entries you want it counted for; the 48h horizon-scaling for whenever it is configured stays from 3.27.1
+
 ## 3.27.1 - 2026-09-16
 
 ### Fix

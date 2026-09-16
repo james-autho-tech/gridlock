@@ -2030,16 +2030,22 @@ class GridLock(hass.Hass):
         # and a static row for the SAME product you're actually on reads
         # as "estimate vs your real dispatch", not as a discrepancy/bug.
         #
-        # The horizon is 48h (HORIZON_SLOTS), not 24h — every `standing`
-        # figure below (a £/day rate, same convention as the live sensor
-        # and apps.yaml's own comments) is scaled to it so a 2-day standing
-        # charge isn't compared against a 1-day one. live_cost itself never
-        # included a standing charge (grid_cost is import/export only), so
-        # without this "Current" always looked artificially cheaper than
-        # every other row regardless of tariff.
+        # The horizon is 48h (HORIZON_SLOTS), not 24h — a configured
+        # `standing` figure (a £/day rate, same convention as apps.yaml's
+        # own comments) is scaled to it so a 2-day standing charge isn't
+        # compared against a 1-day one.
+        #
+        # "Current" deliberately does NOT add its own live standing charge
+        # here even though a real sensor for it exists (self.
+        # ent_daily_standing_charge) — `standing` on every compare_tariffs
+        # entry defaults to 0.0 unless the user's actually typed in that
+        # tariff's real published figure, so adding a real number only to
+        # Current would bias every unconfigured row (almost certainly all
+        # of them) in its favour by that exact amount, for no reason tied
+        # to the tariffs themselves. Comparison stays unit-rate-only unless
+        # standing is explicitly configured on the entries you care about.
         horizon_hours = len(slots) * SLOT_MIN / 60.0
-        live_standing = self.get_float_state(self.ent_daily_standing_charge) * horizon_hours / 24.0
-        rows = [("Current (live rates)", live_cost + live_standing, True)]
+        rows = [("Current (live rates)", live_cost, True)]
         for t in self.compare_tariffs:
             imp, exp = [], []
             for s in slots:
