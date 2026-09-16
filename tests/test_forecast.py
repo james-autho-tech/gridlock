@@ -88,6 +88,28 @@ def test_ev_and_circuits_both_subtracted_together(tmp_path):
     assert provider.load_kwh(NOW) == (10.0 - 4.0 - 1.5) * (5 / 60) + 1.5 * (5 / 60)
 
 
+def test_load_kwh_ignores_stale_circuit_no_longer_tracked(tmp_path):
+    """Confirmed live: an entity that used to be (or was mistakenly)
+    labelled as a circuit — e.g. an EV power sensor also carrying the
+    gridlock_power label, double-counting on top of its own ev_entity
+    subtraction — keeps its learned profile in circuit_profiles forever,
+    since nothing else prunes that dict. load_kwh() must only add back
+    entities still in circuit_power_entities, or removing/un-labelling a
+    circuit would never actually stop it inflating the forecast."""
+    app = _FakeApp({"sensor.house_power": "3.0", "sensor.circuit_a": "1.0"})
+    provider = _provider(tmp_path, app, circuit_power_entities=["sensor.circuit_a"])
+    provider.sample(NOW)
+    provider.sample(NEXT_SLOT)
+    assert provider.circuit_profiles["sensor.circuit_a"][SLOT_IDX] == 1.0 * (5 / 60)
+
+    # Circuit un-labelled: no longer passed to circuit_power_entities on
+    # the next provider (mirrors gridlock.py re-discovering it fresh),
+    # but the old file on disk still has its stale learned entry.
+    reloaded = _provider(tmp_path, _FakeApp({}), circuit_power_entities=[])
+    assert reloaded.circuit_profiles["sensor.circuit_a"][SLOT_IDX] == 1.0 * (5 / 60)
+    assert reloaded.load_kwh(NOW) == reloaded.house_profile[SLOT_IDX]
+
+
 def test_save_and_reload_round_trips_new_schema(tmp_path):
     app = _FakeApp({"sensor.house_power": "3.0", "sensor.circuit_a": "1.0"})
     provider = _provider(tmp_path, app, circuit_power_entities=["sensor.circuit_a"])

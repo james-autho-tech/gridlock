@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.27.3 - 2026-09-16
+
+### Fix
+- Plan's forecasted load could run 3-5x higher than real historical consumption whenever a circuit-tracking label (`gridlock_power`) was also applied to an entity already used as `ev_power_entity` (confirmed live: a Hypervolt EV power sensor labelled both ways) — its charging pattern got learned a second time as a standalone "circuit" and added back on top of house load, on top of its own `ev_entity` subtraction, exactly the double-count `core/forecast.py` says it's designed to prevent. The pure house-only learned profile (`learned_load_profile`, the Forecast tab's chart) was never affected, only the plan's actual `load_kwh()` total, which is why the chart looked fine while the Plan tab didn't
+- `load_kwh()` also summed every entity ever persisted in `circuit_profiles.json`, not just currently-labelled ones — a circuit removed or re-labelled later (including fixing the issue above) would have kept contributing its last-learned figure forever, since nothing else prunes that file. Now only entities still in the discovered circuit list are counted
+
 ## 3.27.2 - 2026-09-16
 
 ### Fix

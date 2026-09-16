@@ -170,8 +170,18 @@ class LearnedLoadForecastProvider(LoadForecastProvider):
 
     def load_kwh(self, slot_start):
         slot_idx = str(slot_start.hour * 2 + (1 if slot_start.minute >= 30 else 0))
-        circuits_kwh = sum(profile.get(slot_idx, 0.0)
-                            for profile in self.circuit_profiles.values())
+        # Only currently-tracked circuits, not every entity ever persisted
+        # in circuit_profiles — an entity unlabelled/removed from
+        # circuit_power_entities (e.g. re-tagged, hardware swapped, or
+        # mistakenly labelled in the first place, confirmed live: an EV
+        # power sensor also carrying the gridlock_power label learned its
+        # own charging pattern as a "circuit" on top of the ev_entity
+        # subtraction already excluding it from house load — a real,
+        # persistent double-count) would otherwise keep contributing its
+        # last-learned figure to every future forecast forever, since
+        # nothing else ever prunes this dict.
+        circuits_kwh = sum(self.circuit_profiles.get(eid, {}).get(slot_idx, 0.0)
+                            for eid in self.circuit_power_entities)
         learned = self.house_profile.get(slot_idx)
         if learned is not None:
             return learned + circuits_kwh
