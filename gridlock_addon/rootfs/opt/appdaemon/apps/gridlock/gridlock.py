@@ -563,12 +563,14 @@ class GridLock(hass.Hass):
 
         # Octopus Agile comparison — engine polls the open API directly
         # (public, no auth needed), same "poll periodically, cache the
-        # result" pattern as SSEN Power Track above. Off unless
-        # agile_region is explicitly set: Agile rates are region-specific
-        # (14 DNO regions, letters A-P) and this add-on is shared across
-        # installs — silently defaulting to one region would be actively
-        # wrong for anyone outside it, not a harmless guess.
-        self.agile_region = a.get("agile_region")
+        # result" pattern as SSEN Power Track above. Falls back to your
+        # own account's real tariff code (see _detect_octopus_region) when
+        # not set explicitly — Agile rates are region-specific (14 DNO
+        # regions, letters A-P) and this add-on is shared across installs,
+        # so an unconfigured, undetectable region still stays off rather
+        # than silently defaulting to one, which would be actively wrong
+        # for anyone outside it, not a harmless guess.
+        self.agile_region = a.get("agile_region") or self._detect_octopus_region()
         self.agile_rates = {}
         self.agile_standing_gbp = 0.0
 
@@ -775,6 +777,24 @@ class GridLock(hass.Hass):
             return f if math.isfinite(f) else default
         except (ValueError, TypeError):
             return default
+
+    def _detect_octopus_region(self):
+        """DNO region letter (A-P) straight from your own account's real
+        tariff code, e.g. "E-1R-IOG-SMB-FIX-12M-25-08-29-H" -> "H" — the
+        BottlecapDave integration already carries this on the import rate
+        sensor (as "tariff" on *_current_rate, "tariff_code" elsewhere),
+        which Octopus itself derived from your actual address. More
+        authoritative than asking you to go find and type in the same
+        letter apps.yaml's own comments used to walk you through by hand,
+        and correct even if you move house without touching config."""
+        if not self.ent_import_rate:
+            return None
+        for attr in ("tariff", "tariff_code"):
+            code = self.get_state(self.ent_import_rate, attribute=attr)
+            m = re.search(r"-([A-P])$", str(code or ""))
+            if m:
+                return m.group(1)
+        return None
 
     @staticmethod
     def _json_safe(value):
@@ -2045,7 +2065,13 @@ class GridLock(hass.Hass):
         # to the tariffs themselves. Comparison stays unit-rate-only unless
         # standing is explicitly configured on the entries you care about.
         horizon_hours = len(slots) * SLOT_MIN / 60.0
-        rows = [("Current (live rates)", live_cost, True)]
+        live_imp = self.get_float_state(self.ent_import_rate, self.default_import)
+        live_exp = self.get_float_state(self.ent_export_rate, self.default_export)
+        live_standing = self.get_float_state(self.ent_daily_standing_charge, None)
+        rows = [("Current (live rates)", live_cost, True,
+                  {"import_desc": f"{round(live_imp * 100, 1)}p right now",
+                   "export_p": round(live_exp * 100, 1),
+                   "standing_p": round(live_standing * 100, 1) if live_standing is not None else None})]
         for t in self.compare_tariffs:
             imp, exp = [], []
             for s in slots:
@@ -2067,8 +2093,17 @@ class GridLock(hass.Hass):
                 self.log(f"Tariff comparison for {t.get('name', 'tariff')!r} "
                          "reported infeasible — skipping it this tick.", level="WARNING")
                 continue
-            c = result.grid_cost + float(t.get("standing", 0.0)) * horizon_hours / 24.0
-            rows.append((t.get("name", "tariff"), c, False))
+            standing = t.get("standing")
+            c = result.grid_cost + float(standing or 0.0) * horizon_hours / 24.0
+            default_p = round(float(t.get("import_default", self.default_import)) * 100, 1)
+            windows_desc = "; ".join(
+                f"{round(float(w['rate']) * 100, 1)}p off-peak {w['start']}–{w['end']}"
+                for w in t.get("import", []))
+            import_desc = f"{windows_desc} / {default_p}p otherwise" if windows_desc else f"{default_p}p"
+            rows.append((t.get("name", "tariff"), c, False,
+                         {"import_desc": import_desc,
+                          "export_p": round(float(t.get("export", 0.0)) * 100, 1),
+                          "standing_p": round(standing * 100, 1) if standing is not None else None}))
 
         # Agile import only (per the user's own ask — export stays as
         # whatever's actually configured, not also swapped to Agile's own
@@ -2103,8 +2138,12 @@ class GridLock(hass.Hass):
                 else:
                     hours = covered * SLOT_MIN / 60.0
                     standing = self.agile_standing_gbp * hours / 24.0
+                    lo, hi = min(agile_imp) * 100, max(agile_imp) * 100
                     rows.append((f"Octopus Agile (import, next {hours:.0f}h)",
-                                 result.grid_cost + standing, True))
+                                 result.grid_cost + standing, True,
+                                 {"import_desc": f"{round(lo, 1)}p–{round(hi, 1)}p live half-hourly",
+                                  "export_p": round(agile_slots[0]["exp"] * 100, 1),
+                                  "standing_p": round(self.agile_standing_gbp * 100, 1)}))
             else:
                 self.log("Agile comparison skipped — no published rate data "
                          "yet for the upcoming slots.", level="DEBUG")
@@ -2114,15 +2153,15 @@ class GridLock(hass.Hass):
         html_rows = "".join(
             f"<tr><td>{n}</td><td>£{c:.2f}</td>"
             f"<td>{'—' if c == best else f'+£{c-best:.2f}'}</td></tr>"
-            for n, c, _ in rows)
+            for n, c, *_ in rows)
         html = ("<table class='gridlock-plan'><tr><th>Tariff</th>"
                 f"<th>{horizon_hours:.0f}h cost</th><th>vs best</th></tr>" + html_rows +
                 "</table>")
         self.set_state("sensor.gridlock_tariff_compare", state=rows[0][0],
                        attributes={"friendly_name": "GridLock Tariff Compare",
                                    "compare_html": html,
-                                   "results": [{"name": n, "cost": c, "is_live": is_live}
-                                               for n, c, is_live in rows]})
+                                   "results": [{"name": n, "cost": c, "is_live": is_live, **rate_info}
+                                               for n, c, is_live, rate_info in rows]})
 
     def publish_solar_forecast(self, now):
         curve = self.forecast_provider.pv_curve()

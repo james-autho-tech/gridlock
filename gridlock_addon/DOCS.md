@@ -88,10 +88,14 @@ shortcut once enabled. Tabs:
   Outfox Energy, ScottishPower, and Good Energy (see `compare_tariffs`
   in `apps.yaml` — add/edit entries there for anything else, published
   rates only, never guessed). Octopus Agile can be included too
-  (`agile_region` in `apps.yaml`) — real half-hourly rates pulled live
-  from Octopus's own public API rather than a flat+windows
+  (region auto-detected from your own account's real tariff code, or set
+  `agile_region` in `apps.yaml` to override) — real half-hourly rates
+  pulled live from Octopus's own public API rather than a flat+windows
   approximation, since Agile has no fixed daily pattern to encode
   statically. Import only; export stays whatever's actually configured.
+  Each row also shows the tariff's actual rate structure (off-peak
+  window and rate, standing charge) alongside its projected cost, not
+  just the bottom-line total.
 
   **Reading the numbers**: negative = credit (you'd end the period in
   profit), positive = cost — lower is always better regardless of sign.

@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.28.0 - 2026-09-16
+
+### Improvement
+- Tariff comparison now shows each option's actual rate structure alongside its projected cost — off-peak rate and window (or a live half-hourly range for Agile), export rate, and standing charge (or "not configured" when a `compare_tariffs` entry hasn't set one) — so you can see *why* a tariff wins, not just that it does
+- `agile_region` is now auto-detected from your own account's real tariff code (the same region letter Octopus itself derived from your address) instead of requiring you to go find and type it in — `apps.yaml`'s `agile_region` is now optional, only needed to override
+
 ## 3.27.4 - 2026-09-16
 
 ### Fix

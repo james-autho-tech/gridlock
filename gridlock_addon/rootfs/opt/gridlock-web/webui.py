@@ -608,8 +608,10 @@ PAGE = r"""<!doctype html>
   .gl-triad-tooltip b { color:var(--ink); }
 
   /* ---- tariff bar visualizer ---- */
-  .gl-tariff-row { display:grid; grid-template-columns:120px 1fr 70px; align-items:center;
+  .gl-tariff-row { display:grid; grid-template-columns:180px 1fr 70px; align-items:center;
                     gap:10px; font-size:13px; padding:8px 0; }
+  .gl-name-col { display:flex; flex-direction:column; gap:2px; min-width:0; }
+  .gl-tariff-rates { color:var(--dim); font-size:11px; font-weight:400; white-space:normal; }
   .gl-tariff-track { height:16px; border-radius:5px; background:#0b1220;
                       border:1px solid var(--line); overflow:hidden; }
   .gl-tariff-fill { height:100%; border-radius:5px; }
@@ -638,7 +640,7 @@ PAGE = r"""<!doctype html>
     .gl-nav-right { width:100%; justify-content:space-between; }
     .gl-log-ts { flex-basis:100px; }
     .gl-log-state { flex-basis:140px; }
-    .gl-tariff-row { grid-template-columns:90px 1fr 60px; font-size:12px; }
+    .gl-tariff-row { grid-template-columns:130px 1fr 60px; font-size:12px; }
   }
 </style>
 </head>
@@ -1278,8 +1280,15 @@ function renderTariffCompare(results, activeTariffName) {
     const valueLabel = cost < 0
       ? `<span style="color:var(--green)">£${Math.abs(cost).toFixed(2)} credit</span>`
       : `<span style="color:var(--amber)">£${cost.toFixed(2)} cost</span>`;
+    const rateParts = [];
+    if (r.import_desc) rateParts.push(r.import_desc);
+    if (r.export_p != null) rateParts.push(`${r.export_p}p export`);
+    rateParts.push(r.standing_p != null ? `${r.standing_p}p/day standing` : 'standing not configured');
     return `<div class="gl-tariff-row${isBest ? ' is-best' : ''}${isActive ? ' is-active' : ''}">
-      <span class="gl-name">${esc(r.name)}${r.is_live === false ? ' <span style="color:var(--dim);font-weight:400;font-size:11px">(est.)</span>' : ''}${isBest ? ' 🏆' : ''}${info ? ` <span style="color:var(--dim);cursor:help" title="${esc(info)}">ⓘ</span>` : ''}</span>
+      <div class="gl-name-col">
+        <span class="gl-name">${esc(r.name)}${r.is_live === false ? ' <span style="color:var(--dim);font-weight:400;font-size:11px">(est.)</span>' : ''}${isBest ? ' 🏆' : ''}${info ? ` <span style="color:var(--dim);cursor:help" title="${esc(info)}">ⓘ</span>` : ''}</span>
+        <span class="gl-tariff-rates">${esc(rateParts.join(' · '))}</span>
+      </div>
       <div class="gl-tariff-track"><div class="gl-tariff-fill" style="width:${pct.toFixed(0)}%"></div></div>
       <span class="num" style="text-align:right">${valueLabel}</span>
     </div>`;
