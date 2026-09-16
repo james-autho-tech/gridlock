@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.27.4 - 2026-09-16
+
+### Fix
+- Tariff comparison's "Current (live rates)" could price out tens of pounds worse than a static `compare_tariffs` entry for the exact same real tariff (confirmed live: IOG's own entry at £29.82 vs "Current" at £42.58 on a 48h horizon) — Octopus only ever publishes ~24-30h of real half-hourly rates ahead, so the second night of a 48h comparison had no published rate data and silently collapsed to one flat, non-time-varying default rate: no off-peak window modelled at all, even for a tariff whose entire point is a cheap overnight window every night. Now repeats the prior day's same time-of-day rate once real data runs out — the same fallback already used for PV forecasts past Solcast's own horizon, for the same reason
+
 ## 3.27.3 - 2026-09-16
 
 ### Fix

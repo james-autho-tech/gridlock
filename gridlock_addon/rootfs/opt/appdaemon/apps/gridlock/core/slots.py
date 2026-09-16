@@ -11,6 +11,21 @@ def rate_at(windows, t, default):
     for s, e, v in windows:
         if s <= t < e:
             return v
+    # Octopus only ever publishes ~24-30h of real half-hourly rates ahead
+    # -- a 48h plan/comparison horizon reaches past that for roughly its
+    # second half, which otherwise collapsed to one flat, non-time-varying
+    # `default` for the rest of the horizon: no off-peak window at all on
+    # day 2, even for a tariff (like IOG) whose whole point is a cheap
+    # overnight window every night. Same "repeat the prior day's same
+    # time-of-day" fallback already used for PV in _pv_for_slot(), for the
+    # same reason -- confirmed live: this alone was responsible for
+    # "Current (live rates)" pricing out ~£12/48h worse than the static
+    # compare_tariffs entry for the SAME real tariff, purely because the
+    # comparison's second night wasn't modelled as having any off-peak
+    # rate at all.
+    for s, e, v in windows:
+        if s <= t - timedelta(hours=24) < e:
+            return v
     return default
 
 

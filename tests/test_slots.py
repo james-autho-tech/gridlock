@@ -57,6 +57,44 @@ def test_pv_defaults_to_zero_when_no_data_exists_at_all():
     assert all(s["pv"] == 0.0 for s in slots)
 
 
+def test_import_rate_falls_back_to_prior_night_past_published_horizon():
+    """Octopus only ever publishes ~24-30h of real half-hourly rates ahead
+    -- a 48h+ plan/comparison horizon reaches past that. Real production
+    symptom: "Current (live rates)" pricing out ~£12/48h worse than a
+    static compare_tariffs entry for the SAME real tariff (IOG), because
+    the comparison's second night had no off-peak window modelled at all
+    once real rate data ran out -- it silently collapsed to one flat,
+    non-time-varying default rate instead. Only two real nights of cheap
+    windows here (mirrors real published coverage); a third night beyond
+    that must repeat the prior night's cheap rate, not the flat default."""
+    base = NOW.replace(hour=0, minute=0, second=0, microsecond=0)
+    cheap_windows = [
+        (base + timedelta(hours=23, minutes=30), base + timedelta(days=1, hours=5, minutes=30), 0.035),
+        (base + timedelta(days=1, hours=23, minutes=30), base + timedelta(days=2, hours=5, minutes=30), 0.035),
+    ]
+
+    slots = build_slots(
+        NOW,
+        import_windows=cheap_windows,
+        export_windows=[(NOW, NOW + timedelta(hours=120), 0.10)],
+        dispatch_windows=[],
+        pv_curve={},
+        load_kwh_fn=lambda s: 0.4,
+        cheap_rate=0.10,
+        live_import_rate=0.27, live_export_rate=0.10,
+        default_import_rate=0.27, default_export_rate=0.10,
+        horizon_slots=120, slot_min=30)
+
+    third_night = [s for s in slots
+                   if base + timedelta(days=2, hours=23, minutes=30) <= s["start"]
+                   < base + timedelta(days=3, hours=5, minutes=30)]
+    assert third_night, "fixture should include a third overnight cheap-window slot"
+    for s in third_night:
+        assert s["imp"] == 0.035, (
+            f"slot {s['start']} has no published rate data (3rd night) and should have "
+            f"repeated the prior night's cheap rate instead of the flat default; got {s['imp']}")
+
+
 def test_power_down_and_power_up_windows_populate_only_their_own_slots():
     """power_down_windows/power_up_windows come from gridlock.py's own
     _octoplus_session_windows() — real per-half-hour baseline data from
