@@ -2029,7 +2029,17 @@ class GridLock(hass.Hass):
         # dashboard so a close-but-not-identical number between "Current"
         # and a static row for the SAME product you're actually on reads
         # as "estimate vs your real dispatch", not as a discrepancy/bug.
-        rows = [("Current (live rates)", live_cost, True)]
+        #
+        # The horizon is 48h (HORIZON_SLOTS), not 24h — every `standing`
+        # figure below (a £/day rate, same convention as the live sensor
+        # and apps.yaml's own comments) is scaled to it so a 2-day standing
+        # charge isn't compared against a 1-day one. live_cost itself never
+        # included a standing charge (grid_cost is import/export only), so
+        # without this "Current" always looked artificially cheaper than
+        # every other row regardless of tariff.
+        horizon_hours = len(slots) * SLOT_MIN / 60.0
+        live_standing = self.get_float_state(self.ent_daily_standing_charge) * horizon_hours / 24.0
+        rows = [("Current (live rates)", live_cost + live_standing, True)]
         for t in self.compare_tariffs:
             imp, exp = [], []
             for s in slots:
@@ -2051,7 +2061,7 @@ class GridLock(hass.Hass):
                 self.log(f"Tariff comparison for {t.get('name', 'tariff')!r} "
                          "reported infeasible — skipping it this tick.", level="WARNING")
                 continue
-            c = result.grid_cost + float(t.get("standing", 0.0))
+            c = result.grid_cost + float(t.get("standing", 0.0)) * horizon_hours / 24.0
             rows.append((t.get("name", "tariff"), c, False))
 
         # Agile import only (per the user's own ask — export stays as
@@ -2100,7 +2110,7 @@ class GridLock(hass.Hass):
             f"<td>{'—' if c == best else f'+£{c-best:.2f}'}</td></tr>"
             for n, c, _ in rows)
         html = ("<table class='gridlock-plan'><tr><th>Tariff</th>"
-                "<th>24h cost</th><th>vs best</th></tr>" + html_rows +
+                f"<th>{horizon_hours:.0f}h cost</th><th>vs best</th></tr>" + html_rows +
                 "</table>")
         self.set_state("sensor.gridlock_tariff_compare", state=rows[0][0],
                        attributes={"friendly_name": "GridLock Tariff Compare",

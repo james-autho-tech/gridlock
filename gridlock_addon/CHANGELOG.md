@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.27.1 - 2026-09-16
+
+### Fix
+- Tariff comparison's "Current (live rates)" row never included your live standing charge, while `compare_tariffs` entries and Agile did (when set) — made your current tariff look artificially cheaper than every alternative regardless of the real numbers. Now pulled from the same live standing-charge sensor used elsewhere on the dashboard
+- Every `standing` figure in the comparison (live and `compare_tariffs`) was being added as a flat one-day amount even though the comparison horizon is actually 48h, understating two-day standing costs by half. Now scaled to the real horizon length, and the (previously undocumented, so never actually used) `standing:` key in `compare_tariffs` is documented in `apps.yaml.example`
+- Tariff comparison table's `compare_html` attribute was mislabelled "24h cost" — the comparison has always run over 48h. Now labelled with the real horizon
+
 ## 3.27.0 - 2026-09-09
 
 ### Fix

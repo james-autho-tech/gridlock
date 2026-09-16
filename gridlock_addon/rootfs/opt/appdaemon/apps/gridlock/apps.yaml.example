@@ -229,6 +229,10 @@ gridlock:
   # Only the import side is compared — export stays whatever's actually
   # configured, not also swapped to Agile's own export tariff.
   agile_region: "H"
+  # Optional per-entry `standing:` — that tariff's daily standing charge
+  # in £/day (published rate, not your own current one), added to its
+  # comparison cost and scaled to the actual comparison horizon
+  # automatically. Omit it (as below) to compare on unit rates only.
   compare_tariffs:
     - name: "Intelligent Octopus Go"
       import_default: 0.274
