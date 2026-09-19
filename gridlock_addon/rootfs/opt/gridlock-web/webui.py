@@ -627,16 +627,17 @@ PAGE = r"""<!doctype html>
   .gl-triad-tooltip b { color:var(--ink); }
 
   /* ---- tariff bar visualizer ---- */
-  .gl-tariff-row { display:grid; grid-template-columns:170px minmax(0,420px) 100px;
+  .gl-tariff-list { max-width:640px; }
+  .gl-tariff-row { display:grid; grid-template-columns:170px minmax(0,220px) 100px;
                     align-items:center; gap:10px; padding:6px 0; font-size:13px; }
   .gl-name-col { display:flex; flex-direction:column; gap:1px; min-width:0; }
   .gl-tariff-rates { color:var(--dim); font-size:10.5px; font-weight:400; line-height:1.35;
                       white-space:normal; }
   .gl-tariff-value-col { display:flex; flex-direction:column; align-items:flex-end; gap:0; }
   .gl-tariff-per-day { color:var(--dim); font-size:10.5px; }
-  .gl-tariff-track { height:10px; border-radius:4px; background:#0b1220;
+  .gl-tariff-track { height:8px; border-radius:0; background:#0b1220;
                       border:1px solid var(--line); overflow:hidden; }
-  .gl-tariff-fill { height:100%; border-radius:5px; }
+  .gl-tariff-fill { height:100%; border-radius:0; }
   .gl-tariff-row.is-best .gl-tariff-fill { background:linear-gradient(90deg,#0e7490,var(--green)); }
   .gl-tariff-row:not(.is-best) .gl-tariff-fill { background:linear-gradient(90deg,#7c2d12,var(--amber)); }
   .gl-tariff-row.is-active .gl-name { color:var(--cyan); font-weight:700; }
@@ -1367,7 +1368,7 @@ function renderTariffCompare(results, activeTariffName) {
   }).join('');
   return `
     <div style="color:var(--dim);font-size:12px;margin-bottom:10px">Lower is better. <span style="color:var(--green)">Credit</span> means you'd end the period in profit; <span style="color:var(--amber)">cost</span> means it's a net expense. Bar length shows how much extra each option would cost you compared with your best one — not its own raw size.</div>
-    ${rows}`;
+    <div class="gl-tariff-list">${rows}</div>`;
 }
 function fmtTs(iso) {
   try {

@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.30.3 - 2026-09-19
+
+### Fix
+- Tariff comparison card left a large empty void beside the (now-narrower) bars, since the row's own capped width sat inside a much wider card — capped the whole list's width instead of just the bar column, and squared off the bar's rounded corners
+
 ## 3.30.2 - 2026-09-19
 
 ### Fix
