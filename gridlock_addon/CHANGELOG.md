@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.30.1 - 2026-09-19
+
+### Improvement
+- EV Agile charging settings (`ev_daily_charge_hours`, `ev_high_price_notify_p`) are now dashboard-editable from a new "EV charging on Agile" card on the Tariffs tab — no `apps.yaml` edit or add-on restart needed, same pattern as component warranties. `apps.yaml` keys still work as a fallback default for anyone who prefers config-as-code; a dashboard-set value wins if present
+
 ## 3.30.0 - 2026-09-19
 
 ### Improvement

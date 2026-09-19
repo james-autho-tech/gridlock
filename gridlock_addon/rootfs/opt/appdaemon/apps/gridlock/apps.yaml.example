@@ -235,19 +235,25 @@ gridlock:
   # so this is a real confirmed figure, not a generic guess. Override
   # with your own actual EDF export quote if it differs.
   edf_export_rate: 0.13
-  # EV smart-charging on Agile — off unless set. Only relevant once your
-  # account is genuinely ON Agile import (auto-detected from your real
-  # tariff code): Octopus's own Intelligent dispatch already schedules
-  # EV charging for IOG; Agile has no equivalent, so without this the
-  # car just charges whenever plugged in at whatever the live rate is.
-  # GridLock finds the cheapest contiguous window of this length in the
-  # real published Agile rates and writes it onto the Hypervolt's own
-  # schedule (session 1) directly — not via Hypervolt's "Set Schedule"
-  # service, which depends on Octopus's Target Rate sensors, removed
-  # from the integration entirely in late 2025. Always schedules the
-  # cheapest window it can find, even on a genuinely expensive day (the
-  # car still needs its charge) — ev_high_price_notify_p just flags
-  # those days rather than skipping them.
+  # EV smart-charging on Agile — off unless set here or (preferred) from
+  # the dashboard's own EV Charging card on the Tariffs tab, no
+  # apps.yaml edit or add-on restart needed there. These two keys are
+  # only the fallback default for anyone who prefers config-as-code; a
+  # dashboard-set value always wins, same precedence as warranties:
+  # below vs the dashboard's own "Add a component" form. Only relevant
+  # once your account is genuinely ON Agile import (auto-detected from
+  # your real tariff code): Octopus's own Intelligent dispatch already
+  # schedules EV charging for IOG; Agile has no equivalent, so without
+  # this the car just charges whenever plugged in at whatever the live
+  # rate is. GridLock finds the cheapest contiguous window of this
+  # length in the real published Agile rates and writes it onto the
+  # Hypervolt's own schedule (session 1) directly — not via Hypervolt's
+  # "Set Schedule" service, which depends on Octopus's Target Rate
+  # sensors, removed from the integration entirely in late 2025. Always
+  # schedules the cheapest window it can find, even on a genuinely
+  # expensive day (the car still needs its charge) —
+  # ev_high_price_notify_p just flags those days rather than skipping
+  # them.
   # ev_daily_charge_hours: 6
   # ev_high_price_notify_p: 15.0
   # Optional per-entry `standing:` — that tariff's daily standing charge

@@ -593,20 +593,28 @@ class GridLock(hass.Hass):
         # yours differs.
         self.edf_export_rate = float(a.get("edf_export_rate", 0.13))
 
-        # EV Agile smart-charging — off unless ev_daily_charge_hours is
-        # set. Only relevant once actually ON Agile import: Octopus's own
-        # Intelligent dispatch (IOG) already schedules EV charging for
-        # you; Agile has no equivalent, so without this the car would
-        # just charge whenever plugged in at whatever the live rate
-        # happens to be. GridLock finds the cheapest contiguous window of
-        # this length in the real published Agile rates itself and
-        # writes it straight onto the Hypervolt's own schedule (session 1
-        # — confirmed unused) rather than depending on Octopus's "Target
-        # Rate" sensors, which the integration removed entirely in late
-        # 2025 (the mechanism Hypervolt's own "Set Schedule" service was
-        # built around, now broken for current installs).
-        self.ev_charge_hours = float(a.get("ev_daily_charge_hours", 0) or 0)
-        self.ev_high_price_notify_p = float(a.get("ev_high_price_notify_p", 15.0))
+        # EV Agile smart-charging — off unless ev_daily_charge_hours ends
+        # up set, from either source below. Only relevant once actually
+        # ON Agile import: Octopus's own Intelligent dispatch (IOG)
+        # already schedules EV charging for you; Agile has no
+        # equivalent, so without this the car would just charge whenever
+        # plugged in at whatever the live rate happens to be. GridLock
+        # finds the cheapest contiguous window of this length in the
+        # real published Agile rates itself and writes it straight onto
+        # the Hypervolt's own schedule (session 1 — confirmed unused)
+        # rather than depending on Octopus's "Target Rate" sensors,
+        # which the integration removed entirely in late 2025 (the
+        # mechanism Hypervolt's own "Set Schedule" service was built
+        # around, now broken for current installs).
+        #
+        # apps.yaml is only the fallback default here — the dashboard's
+        # own EV Charging card (ev_schedule_settings.json, no apps.yaml
+        # edit or add-on restart needed) wins if present, same
+        # config-vs-dashboard precedence as component warranties
+        # (_all_warranties/_ev_schedule_settings re-read this fresh on
+        # every poll, not just once at startup).
+        self.ev_charge_hours_cfg = float(a.get("ev_daily_charge_hours", 0) or 0)
+        self.ev_high_price_notify_p_cfg = float(a.get("ev_high_price_notify_p", 15.0))
         self.ent_ev_schedule_start = a.get(
             "ev_schedule_start_entity", "time.hypervolt_schedule_session_1_start_time")
         self.ent_ev_schedule_end = a.get(
@@ -1721,21 +1729,41 @@ class GridLock(hass.Hass):
                 return True
         return False
 
+    def _ev_schedule_settings(self):
+        """apps.yaml's ev_daily_charge_hours/ev_high_price_notify_p are
+        only the fallback default — a value saved from the dashboard's
+        own EV Charging card (ev_schedule_settings.json, written by the
+        web UI, no apps.yaml edit or add-on restart needed) wins if
+        present. Re-read fresh every call, same pattern as
+        _all_warranties(), so a dashboard change shows up on the next
+        poll rather than only after a restart."""
+        dash = self._load_json("ev_schedule_settings.json", {})
+        try:
+            hours = float(dash.get("daily_charge_hours", self.ev_charge_hours_cfg) or 0)
+        except (TypeError, ValueError):
+            hours = self.ev_charge_hours_cfg
+        try:
+            notify_p = float(dash.get("high_price_notify_p", self.ev_high_price_notify_p_cfg))
+        except (TypeError, ValueError):
+            notify_p = self.ev_high_price_notify_p_cfg
+        return hours, notify_p
+
     def _schedule_ev_agile_charge(self):
         """Find the cheapest contiguous ev_charge_hours window in the real
         published Agile rates and write it onto the Hypervolt's own daily
-        schedule (see ev_charge_hours' own comment for why this exists
-        and why it doesn't use Hypervolt's "Set Schedule" service).
-        Always schedules the cheapest window it can find, even on a
-        genuinely expensive day (e.g. a low-wind stretch where even the
-        best 6h averages 30p) — the car still needs its charge every day
-        regardless, so this never silently skips a day. A price notify
-        threshold flags those days instead, so you can step in manually
-        if you'd genuinely rather skip one."""
-        if not (self.ev_charge_hours and self._is_on_agile_import()):
+        schedule (see ev_charge_hours_cfg's own comment for why this
+        exists and why it doesn't use Hypervolt's "Set Schedule"
+        service). Always schedules the cheapest window it can find, even
+        on a genuinely expensive day (e.g. a low-wind stretch where even
+        the best 6h averages 30p) — the car still needs its charge every
+        day regardless, so this never silently skips a day. A price
+        notify threshold flags those days instead, so you can step in
+        manually if you'd genuinely rather skip one."""
+        ev_charge_hours, ev_high_price_notify_p = self._ev_schedule_settings()
+        if not (ev_charge_hours and self._is_on_agile_import()):
             return
         rates_by_start = {self._iso(k): v for k, v in self.agile_rates.items()}
-        result = find_cheapest_window(rates_by_start, self.ev_charge_hours, SLOT_MIN)
+        result = find_cheapest_window(rates_by_start, ev_charge_hours, SLOT_MIN)
         if result is None:
             self.log("EV Agile scheduling: no contiguous window found in published rates",
                      level="WARNING")
@@ -1759,13 +1787,13 @@ class GridLock(hass.Hass):
         avg_p = best_avg * 100
         self._log_decision(
             "EV Agile Charge Scheduled",
-            f"Cheapest {self.ev_charge_hours:.0f}h window found: "
+            f"Cheapest {ev_charge_hours:.0f}h window found: "
             f"{local_start.strftime('%H:%M')}–{local_end.strftime('%H:%M')} at {avg_p:.1f}p/kWh avg")
-        if avg_p > self.ev_high_price_notify_p:
+        if avg_p > ev_high_price_notify_p:
             self._notify(
                 "GridLock: expensive EV charge window today",
                 f"No genuinely cheap Agile window today — the cheapest "
-                f"{self.ev_charge_hours:.0f}h block available averages {avg_p:.1f}p/kWh "
+                f"{ev_charge_hours:.0f}h block available averages {avg_p:.1f}p/kWh "
                 f"({local_start.strftime('%H:%M')}–{local_end.strftime('%H:%M')}). "
                 "Charging anyway so the car doesn't go short — step in manually on the "
                 "Hypervolt app if you'd rather skip today.")
@@ -2372,12 +2400,16 @@ class GridLock(hass.Hass):
         html = ("<table class='gridlock-plan'><tr><th>Tariff</th>"
                 f"<th>{horizon_hours:.0f}h cost</th><th>vs best</th></tr>" + html_rows +
                 "</table>")
+        ev_charge_hours, ev_high_price_notify_p = self._ev_schedule_settings()
         self.set_state("sensor.gridlock_tariff_compare", state=rows[0][0],
                        attributes={"friendly_name": "GridLock Tariff Compare",
                                    "compare_html": html,
                                    "results": [{"name": n, "cost": c, "is_live": is_live,
                                                  "cost_per_day": round(c / h * 24, 2), **rate_info}
-                                               for n, c, is_live, rate_info, h in rows]})
+                                               for n, c, is_live, rate_info, h in rows],
+                                   "ev_schedule": {"daily_charge_hours": ev_charge_hours,
+                                                    "high_price_notify_p": ev_high_price_notify_p,
+                                                    "on_agile": self._is_on_agile_import()}})
 
     def publish_solar_forecast(self, now):
         curve = self.forecast_provider.pv_curve()

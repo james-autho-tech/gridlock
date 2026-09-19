@@ -68,6 +68,24 @@ def save_warranty_entries(entries):
         json.dump(entries, f)
 
 
+# EV Agile smart-charging settings, same "no apps.yaml edit or add-on
+# restart needed" pattern as warranties above.
+EV_SCHEDULE_SETTINGS_PATH = "/opt/appdaemon/apps/gridlock/ev_schedule_settings.json"
+
+
+def load_ev_schedule_settings():
+    try:
+        with open(EV_SCHEDULE_SETTINGS_PATH) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_ev_schedule_settings(settings):
+    with open(EV_SCHEDULE_SETTINGS_PATH, "w") as f:
+        json.dump(settings, f)
+
+
 def ha_get_all_states():
     """One bulk call instead of one HTTP round-trip per entity —
     build_status() looks up 20+ entities per request; fetching them
@@ -261,6 +279,7 @@ def build_status():
         "best_tariff": compare.get("state", "—"),
         "compare_html": compare.get("attributes", {}).get("compare_html") or "",
         "compare_results": compare.get("attributes", {}).get("results") or [],
+        "ev_schedule": compare.get("attributes", {}).get("ev_schedule") or {},
         "weather": find_weather_entity(states),
         "mode_active": status_attrs.get("battery_risk_profile") or "balanced",
         "mode_override": (get("input_select.gridlock_mode_override") or {}).get("state", "auto"),
@@ -855,6 +874,29 @@ async function deleteWarrantyFromEl(el) {
   warrantyBusy = false;
   refresh();
 }
+let evScheduleBusy = false;
+async function saveEvSchedule() {
+  if (evScheduleBusy) return;
+  const field = id => document.getElementById(id);
+  const hours = field('gl-ev-hours').value.trim();
+  if (hours === '' || Number(hours) < 0 || Number(hours) > 24) {
+    window.alert('Daily charge hours must be between 0 and 24.'); return;
+  }
+  evScheduleBusy = true;
+  try {
+    const resp = await fetch('api/ev-schedule', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        daily_charge_hours: hours,
+        high_price_notify_p: field('gl-ev-notify-p').value.trim() || 15.0,
+      }),
+    });
+    const result = await resp.json();
+    if (!resp.ok) { window.alert(result.error || 'Failed to save.'); evScheduleBusy = false; return; }
+  } catch (e) { window.alert('Failed to save — network error.'); }
+  evScheduleBusy = false;
+  refresh();
+}
 // Reads the real/display name back out via data attributes (encodeURIComponent'd
 // in the template) rather than inlining them into the onclick string directly --
 // a zone name containing a quote character would otherwise break the attribute.
@@ -1121,6 +1163,23 @@ function renderWarranties(items) {
       <div><div class="lbl" style="font-size:10px">Throughput cap (MWh, battery only)</div><input id="gl-warranty-cap" type="number" step="0.01" placeholder="optional" style="background:#0b1220;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:6px 8px;font-family:inherit;width:110px"></div>
       <div><div class="lbl" style="font-size:10px">Capacity retention %</div><input id="gl-warranty-retention" type="number" placeholder="optional" style="background:#0b1220;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:6px 8px;font-family:inherit;width:100px"></div>
       <button class="gl-btn-sm" style="padding:7px 14px" onclick="addWarranty()">Add</button>
+    </div>
+  </div>`;
+}
+function renderEvSchedule(ev) {
+  const hours = ev.daily_charge_hours != null ? ev.daily_charge_hours : '';
+  const notifyP = ev.high_price_notify_p != null ? ev.high_price_notify_p : 15.0;
+  const statusLine = ev.on_agile
+    ? '<span style="color:var(--green)">On Agile import</span> — active once daily charge hours is set below.'
+    : '<span style="color:var(--dim)">Not currently on Agile import</span> — safe to set up now, it stays dormant until you switch.';
+  return `<div class="gl-wrap">
+    <div class="gl-h">EV charging on Agile</div>
+    <div class="gl-sub">Octopus's own Intelligent dispatch already schedules EV charging for Intelligent Octopus Go; Agile has no equivalent. GridLock finds the cheapest contiguous window of the length below in the real published Agile rates each hour and writes it onto your Hypervolt's own schedule directly. Always charges in the cheapest window it can find even on an expensive day — the notify threshold below just flags those days instead of skipping them.</div>
+    <div class="gl-sub" style="margin-bottom:10px">${statusLine}</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:end">
+      <div><div class="lbl" style="font-size:10px">Daily charge hours</div><input id="gl-ev-hours" type="number" min="0" max="24" step="0.5" value="${esc(String(hours))}" placeholder="e.g. 6" style="background:#0b1220;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:6px 8px;font-family:inherit;width:90px"></div>
+      <div><div class="lbl" style="font-size:10px">Notify above (p/kWh)</div><input id="gl-ev-notify-p" type="number" min="0" step="0.5" value="${esc(String(notifyP))}" style="background:#0b1220;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:6px 8px;font-family:inherit;width:90px"></div>
+      <button class="gl-btn-sm" style="padding:7px 14px" onclick="saveEvSchedule()">Save</button>
     </div>
   </div>`;
 }
@@ -2126,6 +2185,7 @@ async function refresh() {
         <div class="gl-sub">Estimated cost over the same plan horizon, each tariff re-optimised under your active strategy (<b style="color:var(--ink)">${esc(d.mode_active)}</b>) — not just today's rates re-applied to today's plan.</div>
         ${renderTariffCompare(d.compare_results, d.best_tariff)}
       </div>
+      ${renderEvSchedule(d.ev_schedule)}
     </div>
     <div class="tab-page" data-tab="entities">
       <div class="gl-wrap">
@@ -2192,6 +2252,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_warranty_add()
         elif path.endswith("/api/warranty-delete"):
             self._handle_warranty_delete()
+        elif path.endswith("/api/ev-schedule"):
+            self._handle_ev_schedule()
         else:
             self._send(404, b"not found", "text/plain")
 
@@ -2322,6 +2384,33 @@ class Handler(http.server.BaseHTTPRequestHandler):
             entries = [e for e in load_warranty_entries() if e.get("name") != name]
             save_warranty_entries(entries)
             self._send(200, json.dumps({"ok": True}).encode(), "application/json")
+        except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
+            self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
+
+    def _handle_ev_schedule(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+            try:
+                hours = float(body.get("daily_charge_hours", 0) or 0)
+            except (TypeError, ValueError):
+                self._send(400, json.dumps(
+                    {"error": "daily_charge_hours must be a number"}).encode(), "application/json")
+                return
+            if hours < 0 or hours > 24:
+                self._send(400, json.dumps(
+                    {"error": "daily_charge_hours must be between 0 and 24"}).encode(),
+                    "application/json")
+                return
+            try:
+                notify_p = float(body.get("high_price_notify_p", 15.0))
+            except (TypeError, ValueError):
+                self._send(400, json.dumps(
+                    {"error": "high_price_notify_p must be a number"}).encode(), "application/json")
+                return
+            settings = {"daily_charge_hours": hours, "high_price_notify_p": notify_p}
+            save_ev_schedule_settings(settings)
+            self._send(200, json.dumps({"ok": True, **settings}).encode(), "application/json")
         except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
             self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
 
