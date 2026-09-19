@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.30.4 - 2026-09-19
+
+### Fix
+- The v3.27.3 fix for the EV-power-entity-double-labelled-as-a-circuit bug only stopped *stale, removed* circuit entries from lingering forever — it didn't help if the entity was still actively mislabelled, which is exactly what was still happening live: the evening load forecast was still inflated 8-10x (6.0kWh forecast vs a real 0.45kWh baseline), causing the battery to sit idle all afternoon defensively reserving for a peak that isn't real. No API exists to fix a Home Assistant label from here, so instead the EV power entity is now unconditionally excluded from the circuit list in code, regardless of what it's labelled — it's never a valid circuit no matter what
+
 ## 3.30.3 - 2026-09-19
 
 ### Fix

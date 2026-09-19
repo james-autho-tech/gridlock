@@ -3349,6 +3349,21 @@ class GridLock(hass.Hass):
         # and forecast in its own right too, not just shown live.
         all_circuits = list(dict.fromkeys(
             self.registry.find_shelly_power_entities() + labeled_circuits))
+        # Confirmed live: the EV power entity can end up carrying the
+        # gridlock_power label too (easy mistake — it's a completely
+        # ordinary-looking power sensor from the label picker's point of
+        # view), which silently reinflates the load forecast by learning
+        # its own charging pattern as a "circuit" ON TOP of the
+        # ev_entity subtraction already excluding it from house load —
+        # exactly the double-count core/forecast.py's own docstring says
+        # this design is meant to prevent. That's an HA-side labelling
+        # mistake this code can't fix at the source (no registry/label
+        # API available here), but it can refuse to act on it — the
+        # entity already wired up as ev_power_entity is never a valid
+        # circuit no matter what it's labelled, so it's dropped here
+        # unconditionally rather than trusting the label.
+        if self.ent_ev_power:
+            all_circuits = [c for c in all_circuits if c != self.ent_ev_power]
         self.load_provider.circuit_power_entities = all_circuits
         self.load_provider.sample(now)
         self.publish_circuits(labeled_circuits, now)
