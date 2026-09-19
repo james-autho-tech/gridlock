@@ -2334,7 +2334,20 @@ class GridLock(hass.Hass):
             if covered >= 4:  # at least 2h — anything shorter isn't a useful comparison
                 agile_slots = slots[:covered]
                 agile_imp = [self._agile_rate_for(s["start"]) for s in agile_slots]
-                cp = [dict(s, charge=0.0, export=0.0, imp=agile_imp[i], exp=s["exp"])
+                # EV energy is priced separately below rather than through
+                # the LP's own ev_kwh handling (zeroed here) — confirmed
+                # live against real data: unlike every other row (a fixed
+                # daily off-peak clock window an EV charge can always sit
+                # inside), Agile has no such window, so pricing the SAME
+                # real dispatched EV kWh at whatever Agile rate happens to
+                # apply at IOG's own real dispatch time (this constraint's
+                # only other option) isn't a real Agile-native charging
+                # strategy — averaging Agile's rate implicitly like that
+                # is exactly the mistake the whole-30-days-vs-7.7p analysis
+                # caught: some nights beat IOG, most don't, and only a
+                # genuine per-day cheapest-window search reflects that.
+                ev_total_kwh = sum(s.get("ev_kwh", 0.0) for s in agile_slots)
+                cp = [dict(s, charge=0.0, export=0.0, imp=agile_imp[i], exp=s["exp"], ev_kwh=0.0)
                       for i, s in enumerate(agile_slots)]
                 result = core_optimizer.solve(cp, soc0, self.cfg, today_date=now.date())
                 if result.infeasible:
@@ -2344,9 +2357,18 @@ class GridLock(hass.Hass):
                     hours = covered * SLOT_MIN / 60.0
                     standing = self.agile_standing_gbp * hours / 24.0
                     lo, hi = min(agile_imp) * 100, max(agile_imp) * 100
+                    ev_charge_hours, _ = self._ev_schedule_settings()
+                    ev_cost, ev_desc = 0.0, ""
+                    if ev_total_kwh > core_optimizer.EPS and ev_charge_hours:
+                        rates_by_start = {self._iso(k): v for k, v in self.agile_rates.items()}
+                        window = find_cheapest_window(rates_by_start, ev_charge_hours, SLOT_MIN)
+                        if window:
+                            _, _, ev_avg_rate = window
+                            ev_cost = ev_avg_rate * ev_total_kwh
+                            ev_desc = f" · EV {ev_total_kwh:.1f}kWh @ {round(ev_avg_rate * 100, 1)}p (best window)"
                     rows.append((f"Octopus Agile (import, next {hours:.0f}h)",
-                                 result.grid_cost + standing, True,
-                                 {"import_desc": f"{round(lo, 1)}p–{round(hi, 1)}p live half-hourly",
+                                 result.grid_cost + standing + ev_cost, True,
+                                 {"import_desc": f"{round(lo, 1)}p–{round(hi, 1)}p live half-hourly{ev_desc}",
                                   "export_p": round(agile_slots[0]["exp"] * 100, 1),
                                   "standing_p": round(self.agile_standing_gbp * 100, 1)},
                                  hours))

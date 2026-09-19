@@ -627,9 +627,9 @@ PAGE = r"""<!doctype html>
   .gl-triad-tooltip b { color:var(--ink); }
 
   /* ---- tariff bar visualizer ---- */
-  .gl-tariff-list { max-width:640px; }
-  .gl-tariff-row { display:grid; grid-template-columns:170px minmax(0,220px) 100px;
-                    align-items:center; gap:10px; padding:6px 0; font-size:13px; }
+  .gl-tariff-list { max-width:480px; }
+  .gl-tariff-row { display:grid; grid-template-columns:150px minmax(0,140px) 90px;
+                    align-items:center; gap:8px; padding:5px 0; font-size:12px; }
   .gl-name-col { display:flex; flex-direction:column; gap:1px; min-width:0; }
   .gl-tariff-rates { color:var(--dim); font-size:10.5px; font-weight:400; line-height:1.35;
                       white-space:normal; }

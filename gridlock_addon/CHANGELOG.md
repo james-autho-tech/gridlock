@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.31.0 - 2026-09-19
+
+### Fix
+- Octopus Agile's comparison row was pricing your real dispatched EV charge at whatever Agile rate happened to apply at IOG's own real dispatch time — not a real Agile-native strategy, and not what a genuine per-day cheapest-window search would find. Confirmed live with a real 30-day analysis: averaging Agile's rate like that hides that IOG's guaranteed rate actually beats Agile's best available window on the large majority of real days. EV energy is now priced separately via the same cheapest-window search the EV Agile scheduling feature itself uses, shown as its own line in the row's rate description
+
+### Improvement
+- Tariff comparison list tightened further (narrower bars, denser rows) after still looking oversized
+
 ## 3.30.4 - 2026-09-19
 
 ### Fix
