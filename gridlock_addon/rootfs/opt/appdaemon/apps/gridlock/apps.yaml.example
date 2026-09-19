@@ -229,6 +229,12 @@ gridlock:
   # compared — export stays whatever's actually configured, not also
   # swapped to Agile's own export tariff.
   # agile_region: "H"
+  # A real switch to EDF GoElectric (see below) moves your export
+  # contract to EDF's own rate too, not whatever you're on today — no
+  # public EDF export-tariff product was found via their API (checked),
+  # so this is a real confirmed figure, not a generic guess. Override
+  # with your own actual EDF export quote if it differs.
+  edf_export_rate: 0.13
   # Optional per-entry `standing:` — that tariff's daily standing charge
   # in £/day (published rate, not your own current one), added to its
   # comparison cost and scaled to the actual comparison horizon
@@ -261,10 +267,13 @@ gridlock:
       import: [{ start: "00:30", end: "07:30", rate: 0.13 }]
       export: 0.04
     # EDF GoElectric isn't listed here — it's fetched live instead (see
-    # poll_edf_goelec_rates), same "real API over a static guess" as
-    # Agile above, since EDF runs on the same Kraken platform as Octopus
-    # and publishes the same kind of open product API. No config needed;
-    # it uses the same auto-detected region as agile_region.
+    # poll_edf_goelec_rates and edf_export_rate above), same "real API
+    # over a static guess" as Agile above, since EDF runs on the same
+    # Kraken platform as Octopus and publishes the same kind of open
+    # product API. No config needed beyond edf_export_rate; region is
+    # the same auto-detected one as agile_region. Shows one row per
+    # contract term (12m/18m) when more than one is live at once, since
+    # they can carry genuinely different real rates.
     #
     # E.ON Next Drive's rate below checked against the supplier's own
     # published figures (2026) — actual rates vary by region/meter

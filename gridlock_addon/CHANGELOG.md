@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.29.1 - 2026-09-19
+
+### Fix
+- EDF GoElectric's live comparison row was pricing export at whatever your current live export rate is (e.g. real Octopus Agile Outgoing rates) instead of a real EDF export rate — a full supplier switch moves your export contract too, unlike the Agile import-only row (same Octopus account, export genuinely untouched). Overstated how good EDF would look, especially for anyone exporting meaningfully. Now uses a real confirmed `edf_export_rate` (0.13 default, override in `apps.yaml` with your own quote — no public EDF export-tariff product exists to fetch this live)
+- EDF is currently running two "Go Electric" contract terms live at the exact same launch timestamp (12m and 18m) with genuinely different real day rates (38.19p vs 36.19p, confirmed live) — the comparison was silently picking one arbitrarily. Now shows one row per term rather than guessing which you'd actually be quoted
+
 ## 3.29.0 - 2026-09-16
 
 ### Improvement
