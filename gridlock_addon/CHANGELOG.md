@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.30.0 - 2026-09-19
+
+### Improvement
+- New EV smart-charging on Octopus Agile (`ev_daily_charge_hours` in `apps.yaml`) — Intelligent Octopus Go already schedules EV charging via Octopus's own dispatch; Agile has no equivalent, so without this the car just charges at whatever the live rate happens to be. GridLock now finds the cheapest contiguous window of the configured length in the real published Agile rates each poll and writes it directly onto the Hypervolt's own schedule. Deliberately doesn't use Hypervolt's own "Set Schedule" service, which depends on Octopus's Target Rate sensors — removed from the integration entirely in late 2025, so that mechanism no longer works on current installs. Always schedules the cheapest window it can find even on a genuinely expensive day (the car still needs its charge) — `ev_high_price_notify_p` flags those days instead of skipping them
+- New `core/ev_schedule.py` (`find_cheapest_window`) — pure function, unit tested, including against a real-shaped Agile pricing sample (a cheap negative-price overnight stretch correctly preferred over a flat expensive day)
+
 ## 3.29.2 - 2026-09-19
 
 ### Fix

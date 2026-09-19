@@ -26,6 +26,7 @@ from core.forecast import SolcastForecastProvider, LearnedLoadForecastProvider
 from core import thermal as core_thermal
 from core import diagnostics as core_diagnostics
 from core import warranty as core_warranty
+from core.ev_schedule import find_cheapest_window
 
 STATE_FILES = ("load_profile.json", "savings_state.json", "savings_history.json",
                "cost_tracking_state.json", "decision_log.json",
@@ -591,6 +592,30 @@ class GridLock(hass.Hass):
         # (checked) — real confirmed figure, override in apps.yaml if
         # yours differs.
         self.edf_export_rate = float(a.get("edf_export_rate", 0.13))
+
+        # EV Agile smart-charging — off unless ev_daily_charge_hours is
+        # set. Only relevant once actually ON Agile import: Octopus's own
+        # Intelligent dispatch (IOG) already schedules EV charging for
+        # you; Agile has no equivalent, so without this the car would
+        # just charge whenever plugged in at whatever the live rate
+        # happens to be. GridLock finds the cheapest contiguous window of
+        # this length in the real published Agile rates itself and
+        # writes it straight onto the Hypervolt's own schedule (session 1
+        # — confirmed unused) rather than depending on Octopus's "Target
+        # Rate" sensors, which the integration removed entirely in late
+        # 2025 (the mechanism Hypervolt's own "Set Schedule" service was
+        # built around, now broken for current installs).
+        self.ev_charge_hours = float(a.get("ev_daily_charge_hours", 0) or 0)
+        self.ev_high_price_notify_p = float(a.get("ev_high_price_notify_p", 15.0))
+        self.ent_ev_schedule_start = a.get(
+            "ev_schedule_start_entity", "time.hypervolt_schedule_session_1_start_time")
+        self.ent_ev_schedule_end = a.get(
+            "ev_schedule_end_entity", "time.hypervolt_schedule_session_1_end_time")
+        self.ent_ev_schedule_days = a.get(
+            "ev_schedule_days_entity", "text.hypervolt_schedule_session_1_days_of_week")
+        self.ent_ev_schedule_apply = a.get(
+            "ev_schedule_apply_entity", "button.hypervolt_apply_schedule")
+        self._ev_scheduled_window = None
 
         # Component warranty tracking — off unless configured. Each entry
         # in warranties: is independent; most (Energy Controller, Sigen
@@ -1682,6 +1707,68 @@ class GridLock(hass.Hass):
         }
         if standing and standing[0].get("value_inc_vat") is not None:
             self.agile_standing_gbp = standing[0]["value_inc_vat"] / 100.0
+        self._schedule_ev_agile_charge()
+
+    def _is_on_agile_import(self):
+        """Whether the account is genuinely ON Agile import right now, not
+        just that agile_region is set (that also drives the "what-if"
+        comparison row for accounts on a different real tariff)."""
+        if not self.ent_import_rate:
+            return False
+        for attr in ("tariff", "tariff_code"):
+            code = self.get_state(self.ent_import_rate, attribute=attr)
+            if code and "AGILE" in str(code).upper():
+                return True
+        return False
+
+    def _schedule_ev_agile_charge(self):
+        """Find the cheapest contiguous ev_charge_hours window in the real
+        published Agile rates and write it onto the Hypervolt's own daily
+        schedule (see ev_charge_hours' own comment for why this exists
+        and why it doesn't use Hypervolt's "Set Schedule" service).
+        Always schedules the cheapest window it can find, even on a
+        genuinely expensive day (e.g. a low-wind stretch where even the
+        best 6h averages 30p) — the car still needs its charge every day
+        regardless, so this never silently skips a day. A price notify
+        threshold flags those days instead, so you can step in manually
+        if you'd genuinely rather skip one."""
+        if not (self.ev_charge_hours and self._is_on_agile_import()):
+            return
+        rates_by_start = {self._iso(k): v for k, v in self.agile_rates.items()}
+        result = find_cheapest_window(rates_by_start, self.ev_charge_hours, SLOT_MIN)
+        if result is None:
+            self.log("EV Agile scheduling: no contiguous window found in published rates",
+                     level="WARNING")
+            return
+        best_start, best_end, best_avg = result
+        if (best_start, best_end) == self._ev_scheduled_window:
+            return  # already set to this exact window -- don't hammer the charger's API
+        local_start, local_end = best_start.astimezone(), best_end.astimezone()
+        try:
+            self.call_service("time/set_value", target={"entity_id": self.ent_ev_schedule_start},
+                               time=local_start.strftime("%H:%M:%S"))
+            self.call_service("time/set_value", target={"entity_id": self.ent_ev_schedule_end},
+                               time=local_end.strftime("%H:%M:%S"))
+            self.call_service("text/set_value", target={"entity_id": self.ent_ev_schedule_days},
+                               value="")  # blank = every day, matching this schedule's own default
+            self.call_service("button/press", target={"entity_id": self.ent_ev_schedule_apply})
+        except Exception as exc:  # noqa: BLE001 — best-effort, retried next poll
+            self.log(f"EV Agile scheduling: failed to apply schedule: {exc!r}", level="WARNING")
+            return
+        self._ev_scheduled_window = (best_start, best_end)
+        avg_p = best_avg * 100
+        self._log_decision(
+            "EV Agile Charge Scheduled",
+            f"Cheapest {self.ev_charge_hours:.0f}h window found: "
+            f"{local_start.strftime('%H:%M')}–{local_end.strftime('%H:%M')} at {avg_p:.1f}p/kWh avg")
+        if avg_p > self.ev_high_price_notify_p:
+            self._notify(
+                "GridLock: expensive EV charge window today",
+                f"No genuinely cheap Agile window today — the cheapest "
+                f"{self.ev_charge_hours:.0f}h block available averages {avg_p:.1f}p/kWh "
+                f"({local_start.strftime('%H:%M')}–{local_end.strftime('%H:%M')}). "
+                "Charging anyway so the car doesn't go short — step in manually on the "
+                "Hypervolt app if you'd rather skip today.")
 
     def poll_edf_goelec_rates(self, kwargs):
         """EDF GoElectric — same Kraken platform as Agile above, but a

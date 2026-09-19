@@ -112,7 +112,24 @@ shortcut once enabled. Tabs:
   product's real live dispatch — if you're actually on one of the listed
   tariffs, a small gap between it and "Current" is expected, not a bug
   (Intelligent Octopus Go's real dispatch window shifts night to night;
-  the static entry can only approximate it as a fixed window).
+  the static entry can only approximate it as a fixed window). Rows are
+  ranked by £/day, not their raw total — the Agile row only ever covers
+  whatever prefix of the horizon Octopus has actually published (often
+  well short of every other row's full 48h), so ranking on the raw
+  total could hand it "best" purely for covering fewer hours.
+
+  **EV smart-charging on Agile** (`ev_daily_charge_hours` in
+  `apps.yaml`) — Octopus's own Intelligent dispatch already schedules
+  EV charging for IOG; Agile has no equivalent. Once your account is
+  genuinely on Agile import (auto-detected), GridLock finds the
+  cheapest contiguous window of the configured length in the real
+  published rates each poll and writes it straight onto the
+  Hypervolt's own schedule (not via Hypervolt's "Set Schedule" service,
+  which depends on Octopus's Target Rate sensors — removed from the
+  integration in late 2025). Always schedules the cheapest window it
+  can find, even on a genuinely expensive day, so the car is never left
+  short — `ev_high_price_notify_p` just flags those days instead of
+  skipping them.
 - **Entities** — every entity GridLock discovered or was told about,
   grouped by category, with current state — the same data as the
   sidebar's Discovered Entities card, in more detail.
