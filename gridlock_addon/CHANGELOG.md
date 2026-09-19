@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.29.2 - 2026-09-19
+
+### Fix
+- Tariff comparison was ranking rows by raw £ total, but Octopus Agile's row only ever covers whatever prefix of the horizon has published rates (often far short of every other row's full 48h) — a shorter window could technically win the "best" trophy purely by covering fewer hours, independent of whether its rate is actually cheaper. Now ranked by £/day, with each row's £/day shown alongside its real total so the comparison basis is visible, not hidden
+
 ## 3.29.1 - 2026-09-19
 
 ### Fix

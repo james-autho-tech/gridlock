@@ -1261,25 +1261,35 @@ function renderTariffCompare(results, activeTariffName) {
   if (!results || !results.length) {
     return '<div style="color:var(--dim)">Waiting for first comparison run.</div>';
   }
-  const sorted = [...results].sort((a, b) => Number(a.cost) - Number(b.cost));
-  const best = Number(sorted[0].cost);
+  // Ranked by £/day, not the raw total shown per row -- some rows (e.g.
+  // Octopus Agile) only cover whatever prefix of the horizon has
+  // published rates so far, often far short of the other rows' full
+  // horizon. Sorting on the raw total would let a row "win" purely for
+  // covering fewer hours, independent of whether its rate is actually
+  // any cheaper -- ranking on a common £/day basis is the only fair
+  // comparison across rows with different covered windows.
+  const perDay = r => Number(r.cost_per_day != null ? r.cost_per_day : r.cost);
+  const sorted = [...results].sort((a, b) => perDay(a) - perDay(b));
+  const bestPerDay = perDay(sorted[0]);
   // Bar length = how much MORE this would cost you than your best/
-  // current option over the same horizon -- not the raw cost's own
-  // magnitude, which made a big negative (great, a credit) draw the same
-  // size bar as a big positive (bad, a real cost) and put barely-worse
-  // options right next to the winner at wildly different bar lengths.
-  // This way length and the number always move together.
-  const maxExtra = Math.max(...sorted.map(r => Number(r.cost) - best), 0.01);
+  // current option per day -- not the raw cost's own magnitude, which
+  // made a big negative (great, a credit) draw the same size bar as a
+  // big positive (bad, a real cost) and put barely-worse options right
+  // next to the winner at wildly different bar lengths. This way length
+  // and the number always move together.
+  const maxExtra = Math.max(...sorted.map(r => perDay(r) - bestPerDay), 0.01);
   const rows = sorted.map(r => {
     const cost = Number(r.cost);
-    const extra = cost - best;
+    const extra = perDay(r) - bestPerDay;
     const pct = Math.max(2, (extra / maxExtra) * 100);
     const isBest = Math.abs(extra) < 0.005;
     const isActive = r.name === activeTariffName;
     const info = tariffTypeInfo(r.name);
+    const perDaySuffix = r.cost_per_day != null
+      ? ` <span style="color:var(--dim);font-weight:400">(£${Number(r.cost_per_day).toFixed(2)}/day)</span>` : '';
     const valueLabel = cost < 0
-      ? `<span style="color:var(--green)">£${Math.abs(cost).toFixed(2)} credit</span>`
-      : `<span style="color:var(--amber)">£${cost.toFixed(2)} cost</span>`;
+      ? `<span style="color:var(--green)">£${Math.abs(cost).toFixed(2)} credit${perDaySuffix}</span>`
+      : `<span style="color:var(--amber)">£${cost.toFixed(2)} cost${perDaySuffix}</span>`;
     const rateParts = [];
     if (r.import_desc) rateParts.push(r.import_desc);
     if (r.export_p != null) rateParts.push(`${r.export_p}p export`);

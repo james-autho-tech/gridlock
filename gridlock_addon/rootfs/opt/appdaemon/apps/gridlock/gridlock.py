@@ -2159,7 +2159,8 @@ class GridLock(hass.Hass):
         rows = [("Current (live rates)", live_cost, True,
                   {"import_desc": f"{round(live_imp * 100, 1)}p right now",
                    "export_p": round(live_exp * 100, 1),
-                   "standing_p": round(live_standing * 100, 1) if live_standing is not None else None})]
+                   "standing_p": round(live_standing * 100, 1) if live_standing is not None else None},
+                  horizon_hours)]
         for t in self.compare_tariffs:
             imp, exp = [], []
             for s in slots:
@@ -2191,7 +2192,8 @@ class GridLock(hass.Hass):
             rows.append((t.get("name", "tariff"), c, False,
                          {"import_desc": import_desc,
                           "export_p": round(float(t.get("export", 0.0)) * 100, 1),
-                          "standing_p": round(standing * 100, 1) if standing is not None else None}))
+                          "standing_p": round(standing * 100, 1) if standing is not None else None},
+                         horizon_hours))
 
         # Agile import only (per the user's own ask — export stays as
         # whatever's actually configured, not also swapped to Agile's own
@@ -2231,7 +2233,8 @@ class GridLock(hass.Hass):
                                  result.grid_cost + standing, True,
                                  {"import_desc": f"{round(lo, 1)}p–{round(hi, 1)}p live half-hourly",
                                   "export_p": round(agile_slots[0]["exp"] * 100, 1),
-                                  "standing_p": round(self.agile_standing_gbp * 100, 1)}))
+                                  "standing_p": round(self.agile_standing_gbp * 100, 1)},
+                                 hours))
             else:
                 self.log("Agile comparison skipped — no published rate data "
                          "yet for the upcoming slots.", level="DEBUG")
@@ -2260,22 +2263,34 @@ class GridLock(hass.Hass):
             rows.append((f"EDF GoElectric ({term}, live)", result.grid_cost + standing, True,
                          {"import_desc": f"{round(lo, 1)}p–{round(hi, 1)}p live (off-peak/day)",
                           "export_p": round(self.edf_export_rate * 100, 1),
-                          "standing_p": round(prod["standing_gbp"] * 100, 1)}))
+                          "standing_p": round(prod["standing_gbp"] * 100, 1)},
+                         horizon_hours))
 
-        rows.sort(key=lambda r: r[1])
-        best = rows[0][1]
+        # Ranked by £/day, not raw £ total — Agile's row covers whatever
+        # prefix of the horizon Octopus has actually published (often far
+        # short of the full 48h every other row uses), so sorting on the
+        # raw total would let a row win purely for covering fewer hours,
+        # independent of whether its rate is actually any cheaper.
+        # Confirmed live: without this, "best" was technically still
+        # correct on the day it was checked, but only because the
+        # per-day gap happened to be wide enough to survive the
+        # normalisation too — not something the raw-total sort actually
+        # guaranteed.
+        rows.sort(key=lambda r: r[1] / r[4])
+        best_per_day = rows[0][1] / rows[0][4]
         html_rows = "".join(
             f"<tr><td>{n}</td><td>£{c:.2f}</td>"
-            f"<td>{'—' if c == best else f'+£{c-best:.2f}'}</td></tr>"
-            for n, c, *_ in rows)
+            f"<td>{'—' if abs(c / h - best_per_day) < 1e-9 else f'+£{(c / h - best_per_day) * h:.2f}'}</td></tr>"
+            for n, c, _, _, h in rows)
         html = ("<table class='gridlock-plan'><tr><th>Tariff</th>"
                 f"<th>{horizon_hours:.0f}h cost</th><th>vs best</th></tr>" + html_rows +
                 "</table>")
         self.set_state("sensor.gridlock_tariff_compare", state=rows[0][0],
                        attributes={"friendly_name": "GridLock Tariff Compare",
                                    "compare_html": html,
-                                   "results": [{"name": n, "cost": c, "is_live": is_live, **rate_info}
-                                               for n, c, is_live, rate_info in rows]})
+                                   "results": [{"name": n, "cost": c, "is_live": is_live,
+                                                 "cost_per_day": round(c / h * 24, 2), **rate_info}
+                                               for n, c, is_live, rate_info, h in rows]})
 
     def publish_solar_forecast(self, now):
         curve = self.forecast_provider.pv_curve()
