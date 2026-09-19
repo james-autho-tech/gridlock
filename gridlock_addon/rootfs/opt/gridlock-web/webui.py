@@ -627,11 +627,14 @@ PAGE = r"""<!doctype html>
   .gl-triad-tooltip b { color:var(--ink); }
 
   /* ---- tariff bar visualizer ---- */
-  .gl-tariff-row { display:grid; grid-template-columns:180px 1fr 70px; align-items:center;
-                    gap:10px; font-size:13px; padding:8px 0; }
-  .gl-name-col { display:flex; flex-direction:column; gap:2px; min-width:0; }
-  .gl-tariff-rates { color:var(--dim); font-size:11px; font-weight:400; white-space:normal; }
-  .gl-tariff-track { height:16px; border-radius:5px; background:#0b1220;
+  .gl-tariff-row { display:grid; grid-template-columns:170px minmax(0,420px) 100px;
+                    align-items:center; gap:10px; padding:6px 0; font-size:13px; }
+  .gl-name-col { display:flex; flex-direction:column; gap:1px; min-width:0; }
+  .gl-tariff-rates { color:var(--dim); font-size:10.5px; font-weight:400; line-height:1.35;
+                      white-space:normal; }
+  .gl-tariff-value-col { display:flex; flex-direction:column; align-items:flex-end; gap:0; }
+  .gl-tariff-per-day { color:var(--dim); font-size:10.5px; }
+  .gl-tariff-track { height:10px; border-radius:4px; background:#0b1220;
                       border:1px solid var(--line); overflow:hidden; }
   .gl-tariff-fill { height:100%; border-radius:5px; }
   .gl-tariff-row.is-best .gl-tariff-fill { background:linear-gradient(90deg,#0e7490,var(--green)); }
@@ -659,7 +662,7 @@ PAGE = r"""<!doctype html>
     .gl-nav-right { width:100%; justify-content:space-between; }
     .gl-log-ts { flex-basis:100px; }
     .gl-log-state { flex-basis:140px; }
-    .gl-tariff-row { grid-template-columns:130px 1fr 60px; font-size:12px; }
+    .gl-tariff-row { grid-template-columns:120px minmax(0,1fr) 80px; font-size:12px; }
   }
 </style>
 </head>
@@ -1344,11 +1347,11 @@ function renderTariffCompare(results, activeTariffName) {
     const isBest = Math.abs(extra) < 0.005;
     const isActive = r.name === activeTariffName;
     const info = tariffTypeInfo(r.name);
-    const perDaySuffix = r.cost_per_day != null
-      ? ` <span style="color:var(--dim);font-weight:400">(£${Number(r.cost_per_day).toFixed(2)}/day)</span>` : '';
+    const perDayLine = r.cost_per_day != null
+      ? `<span class="gl-tariff-per-day">£${Number(r.cost_per_day).toFixed(2)}/day</span>` : '';
     const valueLabel = cost < 0
-      ? `<span style="color:var(--green)">£${Math.abs(cost).toFixed(2)} credit${perDaySuffix}</span>`
-      : `<span style="color:var(--amber)">£${cost.toFixed(2)} cost${perDaySuffix}</span>`;
+      ? `<span style="color:var(--green)">£${Math.abs(cost).toFixed(2)} credit</span>`
+      : `<span style="color:var(--amber)">£${cost.toFixed(2)} cost</span>`;
     const rateParts = [];
     if (r.import_desc) rateParts.push(r.import_desc);
     if (r.export_p != null) rateParts.push(`${r.export_p}p export`);
@@ -1359,7 +1362,7 @@ function renderTariffCompare(results, activeTariffName) {
         <span class="gl-tariff-rates">${esc(rateParts.join(' · '))}</span>
       </div>
       <div class="gl-tariff-track"><div class="gl-tariff-fill" style="width:${pct.toFixed(0)}%"></div></div>
-      <span class="num" style="text-align:right">${valueLabel}</span>
+      <div class="gl-tariff-value-col num">${valueLabel}${perDayLine}</div>
     </div>`;
   }).join('');
   return `

@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.30.2 - 2026-09-19
+
+### Fix
+- Tariff comparison rows had gotten visually heavy — the £/day figure was appended inline onto the cost value, wrapping across several lines on anything but a very wide screen, and the bar track stretched full-width on wide monitors making the whole card feel oversized. £/day is now its own small line under the total instead of an inline suffix, and the bar column has a sane max width
+
 ## 3.30.1 - 2026-09-19
 
 ### Improvement
