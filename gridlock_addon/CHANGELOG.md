@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.34.0 - 2026-09-20
+
+### Improvement
+- Auto-enrolls in EDF's Flextras free-electricity perks — same "no cost, no downside, don't make the user do it by hand" reasoning as Saving Sessions' own existing auto-join, and checked directly against the integration's own button.py to confirm these are plain opt-ins, not a financial commitment: joins Flextras, registers for Power Perks once eligible, and claims the one-off joining bonus. Sunday Saver is deliberately excluded — the integration's own maintainer left its join action out on purpose ("that endpoint is not known, and guessing it risks unintended account changes"), so it still needs enrolling by hand in EDF's app
+- Also wired up Sunday Saver's real free-electricity window (once manually enrolled) alongside Power Perks — both now feed the same free-electricity import-rate override from v3.33.0
+
 ## 3.33.0 - 2026-09-20
 
 ### Improvement

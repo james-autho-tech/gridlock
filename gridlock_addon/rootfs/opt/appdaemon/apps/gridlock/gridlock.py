@@ -223,9 +223,16 @@ class GridLock(hass.Hass):
         # on — the windows show up in the event entity regardless of
         # whether you're enrolled to benefit from them, so reading them
         # unconditionally would plan around a discount that isn't really
-        # yours. No auto-join here (unlike Saving Sessions) — enrolling
-        # is a real account action (a button entity in EDF's own
-        # integration), not something to press on your behalf.
+        # yours. Auto-enrolled (see _auto_enroll_edf_flextras) — checked
+        # directly against the integration's own button.py: these are
+        # plain no-cost loyalty opt-ins (join Flextras, register for
+        # Power Perks, claim the one-off joining bonus), same "no
+        # downside, don't make the user do it by hand" reasoning as
+        # Saving Sessions' own auto-join. Deliberately NOT extended to
+        # Sunday Saver — the integration's own maintainer left that
+        # join action out on purpose ("that endpoint is not known, and
+        # guessing it risks unintended account changes"), so it still
+        # needs enrolling by hand in EDF's own app.
         self.ent_edf_power_perks_events = (a.get("edf_power_perks_events")
                                            or self.overrides.get("edf_power_perks_events_override")
                                            or self.registry.find(
@@ -235,6 +242,44 @@ class GridLock(hass.Hass):
             "edf_power_perks_registered_entity_override")
                                                or self.registry.find(
             prefix="binary_sensor.edf_energy_", suffix="_flextras_power_perks_registered"))
+        self.ent_edf_flextras_registered = (a.get("edf_flextras_registered_entity")
+                                            or self.overrides.get(
+            "edf_flextras_registered_entity_override")
+                                            or self.registry.find(
+            prefix="binary_sensor.edf_energy_", suffix="_flextras_registered"))
+        self.ent_edf_flextras_bonus_hours = (a.get("edf_flextras_bonus_hours_entity")
+                                             or self.overrides.get(
+            "edf_flextras_bonus_hours_entity_override")
+                                             or self.registry.find(
+            prefix="sensor.edf_energy_", suffix="_flextras_bonus_hours"))
+        self.ent_edf_flextras_join_button = self.registry.find(
+            prefix="button.edf_energy_", suffix="_flextras_join")
+        self.ent_edf_power_perks_button = self.registry.find(
+            prefix="button.edf_energy_", suffix="_flextras_register_power_perks")
+        self.ent_edf_bonus_hours_button = self.registry.find(
+            prefix="button.edf_energy_", suffix="_flextras_claim_bonus_hours")
+
+        # EDF's separate "Sunday Saver" perk — checked directly against
+        # the integration's own source rather than guessed from its
+        # live attributes alone (they were empty/unenrolled when
+        # checked, which isn't enough to trust a shape from). Its own
+        # `sunday_saver_windows` attribute is a 60-day rolling HISTORY
+        # for the EDF panel's own display, not a forward planning list
+        # like Power Perks' event entity — the real forward-looking
+        # data is this single start/end sensor pair (each sensor's own
+        # state IS the next window's timestamp), gated on that same
+        # sensor's own "is_enrolled" attribute rather than a separate
+        # registration entity.
+        self.ent_edf_sunday_saver_start = (a.get("edf_sunday_saver_start_entity")
+                                           or self.overrides.get(
+            "edf_sunday_saver_start_entity_override")
+                                           or self.registry.find(
+            prefix="sensor.edf_energy_", suffix="_sunday_saver_start"))
+        self.ent_edf_sunday_saver_end = (a.get("edf_sunday_saver_end_entity")
+                                         or self.overrides.get(
+            "edf_sunday_saver_end_entity_override")
+                                         or self.registry.find(
+            prefix="sensor.edf_energy_", suffix="_sunday_saver_end"))
 
         import_stem = self.registry.mpan_stem(self.ent_import_rate, "_current_rate")
         export_stem = self.registry.mpan_stem(self.ent_export_rate, "_export_current_rate")
@@ -802,6 +847,9 @@ class GridLock(hass.Hass):
         if self.agile_region:
             self.run_every(self.poll_agile_rates, "now", 3600)
             self.run_every(self.poll_edf_goelec_rates, "now", 3600)
+
+        if self.ent_edf_flextras_registered:
+            self.run_every(self._auto_enroll_edf_flextras, "now", 3600)
 
         if self.gridwarm_diagnostic_static_entities or self.gridwarm_diagnostic_prefix:
             self.run_every(self.poll_heatpump_diagnostics, "now", 1800)
@@ -1646,6 +1694,53 @@ class GridLock(hass.Hass):
         if changed:
             self._save_json("saving_session_state.json", self.joined_session_codes)
 
+    def _auto_enroll_edf_flextras(self, kwargs):
+        """Auto-enroll in EDF's own free-electricity loyalty perks, same
+        "no cost, no downside, don't make the user do it by hand"
+        reasoning as Saving Sessions' own auto-join above — confirmed
+        directly against the integration's button.py that these three
+        are plain opt-ins (join Flextras, register for Power Perks,
+        claim the one-off joining bonus), not a financial commitment of
+        any kind. Order matters: Power Perks registration only becomes
+        possible once actually a Flextras member, so this checks and
+        presses in dependency order rather than trying all three
+        blindly. Idempotent by construction — each press is gated on the
+        real underlying state actually still needing it, so a restart or
+        a repeat poll never re-presses something already done, and a
+        transient failure just retries next poll rather than being
+        silently abandoned. Sunday Saver is deliberately not included
+        here — see the discovery comment on ent_edf_power_perks_events
+        for why the integration itself doesn't support joining it."""
+        if self.get_state("input_boolean.gridlock_enable") == "off":
+            return
+        if not self.ent_edf_flextras_registered:
+            return  # EDF integration not present at all -- nothing to do
+        try:
+            if (self.get_state(self.ent_edf_flextras_registered) != "on"
+                    and self.ent_edf_flextras_join_button):
+                self.call_service("button/press",
+                                  target={"entity_id": self.ent_edf_flextras_join_button})
+                self._log_decision("EDF Flextras joined",
+                                  "Auto-enrolled — no cost, unlocks Power Perks free-electricity slots")
+                return  # let the next poll see the new registered state before going further
+            if (self.get_state(self.ent_edf_flextras_registered) == "on"
+                    and self.ent_edf_power_perks_registered
+                    and self.get_state(self.ent_edf_power_perks_registered) != "on"
+                    and self.ent_edf_power_perks_button):
+                self.call_service("button/press",
+                                  target={"entity_id": self.ent_edf_power_perks_button})
+                self._log_decision("EDF Power Perks registered",
+                                  "Auto-enrolled — GridLock will now plan around announced free-electricity windows")
+            claimed = self.get_state(self.ent_edf_flextras_bonus_hours, attribute="claimed") \
+                if self.ent_edf_flextras_bonus_hours else None
+            if (self.get_state(self.ent_edf_flextras_registered) == "on"
+                    and not claimed and self.ent_edf_bonus_hours_button):
+                self.call_service("button/press",
+                                  target={"entity_id": self.ent_edf_bonus_hours_button})
+                self._log_decision("EDF Flextras bonus hours claimed", "Auto-claimed the one-off joining bonus")
+        except Exception as exc:  # noqa: BLE001 — best-effort, retried next poll
+            self.log(f"EDF Flextras auto-enrollment failed: {exc!r}", level="WARNING")
+
     def _saving_session_plan_note(self, start, end):
         """Best-effort: solve a fresh plan and report how much battery
         it currently expects to use across this specific session's own
@@ -2100,22 +2195,36 @@ class GridLock(hass.Hass):
         return windows
 
     def _edf_free_electricity_windows(self):
-        """Real announced EDF Power Perks free-electricity windows (see
-        the discovery comment on ent_edf_power_perks_events) — only
-        trusted once the registration binary_sensor confirms you're
-        actually enrolled to benefit from them, not just that the data
-        happens to be visible."""
-        if not (self.ent_edf_power_perks_events and self.ent_edf_power_perks_registered):
-            return []
-        if self.get_state(self.ent_edf_power_perks_registered) != "on":
-            return []
-        raw = self._attr_list(self.ent_edf_power_perks_events, "free_electricity_windows")
+        """Every genuinely-free EDF import window currently known about —
+        Power Perks (a real multi-window forward list) plus Sunday Saver
+        (a single next-window pair) — each only trusted once its own
+        real enrollment signal confirms you actually benefit from it,
+        not just that the data happens to be visible. Deliberately not
+        wired up: EDF's football/event-tied free electricity and
+        Flextras Bonus Hours — their real data shape wasn't available to
+        verify (both were unenrolled/inactive when checked, the same
+        reason Sunday Saver's own history attribute was double-checked
+        against source rather than assumed from an empty example) —
+        adding those without seeing a real populated example would be
+        guessing at what they actually mean, not reading real data."""
         windows = []
-        for period in raw:
-            try:
-                windows.append((self._iso(period["start"]), self._iso(period["end"])))
-            except (KeyError, ValueError, TypeError):
-                continue
+        if self.ent_edf_power_perks_events and self.ent_edf_power_perks_registered \
+                and self.get_state(self.ent_edf_power_perks_registered) == "on":
+            for period in self._attr_list(self.ent_edf_power_perks_events, "free_electricity_windows"):
+                try:
+                    windows.append((self._iso(period["start"]), self._iso(period["end"])))
+                except (KeyError, ValueError, TypeError):
+                    continue
+        if self.ent_edf_sunday_saver_start and self.ent_edf_sunday_saver_end:
+            enrolled = self.get_state(self.ent_edf_sunday_saver_start, attribute="is_enrolled")
+            start = self.get_state(self.ent_edf_sunday_saver_start)
+            end = self.get_state(self.ent_edf_sunday_saver_end)
+            if enrolled and start not in (None, "unknown", "unavailable") \
+                    and end not in (None, "unknown", "unavailable"):
+                try:
+                    windows.append((self._iso(start), self._iso(end)))
+                except (ValueError, TypeError):
+                    pass
         return windows
 
     def build_slots(self, now):
