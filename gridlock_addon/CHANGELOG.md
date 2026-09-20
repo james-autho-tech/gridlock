@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.32.1 - 2026-09-20
+
+### Fix
+- GridLock's live rate/dispatch entity discovery was hardcoded to Octopus's own integration naming (`octopus_energy_`) — a real switch away from Octopus wouldn't just be "less reliably supported," it would silently find nothing at all, since EDF's Home Assistant integration uses a different domain (`edf_energy`). Confirmed directly against source: EDF's integration is a literal fork of Octopus's own, sharing every entity suffix convention, only the prefix differs — discovery now checks both, with zero guessing about entity names required either way
+
 ## 3.32.0 - 2026-09-20
 
 ### Improvement

@@ -44,6 +44,24 @@ PLAN_TABLE_COLS = ["slot", "import_p", "export_p", "pv_kwh", "load_kwh",
                    "soc_pct", "cost_delta_p", "total_gbp",
                    "import_rank", "export_rank"]
 
+# Every HA integration whose entities this app auto-discovers by name
+# that's actually a Kraken-platform fork sharing BottlecapDave's own
+# entity suffix conventions (confirmed directly against source: EDF's
+# integration is a literal fork of the Octopus one, same suffixes, only
+# the domain prefix differs) — used as a tuple so registry.find()'s
+# plain str.startswith() already matches whichever one is actually
+# installed, with zero changes needed to registry.py itself. A supplier
+# switch away from Octopus previously meant GridLock's own rate/dispatch
+# discovery silently found nothing at all, not just "less reliable" —
+# confirmed as a real gap, not a hypothetical one, before it shipped.
+KRAKEN_FORK_DOMAINS = ("octopus_energy", "edf_energy")
+
+
+def _kraken_prefixes(entity_domain, suffix_after_prefix=""):
+    """e.g. _kraken_prefixes("sensor", "electricity_") ->
+    ("sensor.octopus_energy_electricity_", "sensor.edf_energy_electricity_")"""
+    return tuple(f"{entity_domain}.{d}_{suffix_after_prefix}" for d in KRAKEN_FORK_DOMAINS)
+
 # The thermal model steps at a finer resolution than the battery plan's own
 # 30-min slots (core/thermal.py's docstring/tests: a fast zone like a hot
 # water tank can reach its target well within a single 30-min slot, and
@@ -158,15 +176,15 @@ class GridLock(hass.Hass):
         self.ent_dispatch = (a.get("octopus_dispatch")
                              or self.overrides.get("octopus_dispatch_override")
                              or self.registry.find(
-            prefix="binary_sensor.octopus_energy_", suffix="_intelligent_dispatching"))
+            prefix=_kraken_prefixes("binary_sensor"), suffix="_intelligent_dispatching"))
         self.ent_import_rate = (a.get("import_rate")
                                 or self.overrides.get("import_rate_override")
                                 or self.registry.find(
-            prefix="sensor.octopus_energy_electricity_", suffix="_current_rate", avoid="export"))
+            prefix=_kraken_prefixes("sensor", "electricity_"), suffix="_current_rate", avoid="export"))
         self.ent_export_rate = (a.get("export_rate")
                                 or self.overrides.get("export_rate_override")
                                 or self.registry.find(
-            prefix="sensor.octopus_energy_electricity_", suffix="_export_current_rate"))
+            prefix=_kraken_prefixes("sensor", "electricity_"), suffix="_export_current_rate"))
         # Octopus renamed "Saving Sessions" to "Power Down" sessions
         # (HomeAssistant-OctopusEnergy ADR 0004) — old _saving_session_
         # events entities are kept until Jan 2027, then removed, so this
