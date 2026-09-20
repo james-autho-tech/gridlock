@@ -223,6 +223,29 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
         prob += pv_to_load[i] + eff * batt_to_load[i] + grid_to_load[i] == load
         prob += batt_to_load[i] + batt_to_export[i] <= max_d
 
+        # PV always serves load first, full stop — a hard floor, not left
+        # for the objective to discover on its own. Confirmed live: real
+        # plan rows showed grid importing to cover load in the SAME slot
+        # PV was simultaneously routed into the battery instead of
+        # straight to that same load — objectively never correct (using
+        # PV for load directly always avoids paying import for that unit;
+        # routing it to the battery for later self-consumption instead
+        # only ever recovers eff*imp of that value, strictly less), yet
+        # the solver did it anyway. Root cause: once the on-peak forced-
+        # self-consumption / reserve shortfall becomes genuinely
+        # unavoidable somewhere later in the horizon (total demand simply
+        # exceeds total available battery+PV energy), RESERVE_PENALTY's
+        # flat per-kWh weight gives the solver an incentive to keep
+        # shaving that terminal shortfall by *any* fraction, however
+        # small — including hoarding PV into the battery now instead of
+        # using it for load, even though that trade loses real money at
+        # far worse than 1000:1 odds. min(pv, load) is a plain constant
+        # here (not decision-variable-dependent), so this is a safe,
+        # unconditional lower bound, not a complementarity condition that
+        # risks the same false-infeasibility failure mode as the other
+        # Big-M gates in this function.
+        prob += pv_to_load[i] >= min(pv, load)
+
         # Hardware PV-routing priority: in self-consumption mode the
         # inverter's own firmware always routes surplus PV into the
         # battery until it's full before any of it is allowed to export

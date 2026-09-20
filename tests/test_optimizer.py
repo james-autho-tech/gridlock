@@ -180,6 +180,45 @@ def test_flat_rate_shortfall_prefers_using_battery_now_over_later():
     )
 
 
+def test_pv_always_serves_load_before_battery_even_under_terminal_shortfall():
+    """Real-world report (screenshot + live plan table): grid was importing
+    to cover load in slots where PV was simultaneously being generated
+    and available, and the plan showed grid cost during hours the user
+    confirmed never actually pull from the grid. Root cause: once a
+    later slot's on-peak/reserve shortfall becomes genuinely unavoidable
+    (total demand across the whole stretch exceeds what PV+battery can
+    supply), RESERVE_PENALTY's flat per-kWh weight gave the solver an
+    incentive to shave that terminal shortfall by any fraction, however
+    tiny — including routing current PV into the battery instead of
+    straight to load, and importing grid to cover that same load
+    instead, even though that trade loses real money at far worse than
+    1000:1 odds against the reserve penalty it marginally reduces.
+
+    Fixture mirrors the real report: substantial PV available in the
+    early slots, load that grows enough later that total demand
+    genuinely exceeds capacity (an unavoidable shortfall must land
+    somewhere) — before the fix, this reproduced grid import in an
+    early, PV-rich slot with PV simultaneously diverted into the
+    battery instead of load."""
+    rows = [
+        {"imp": 0.30, "exp": 0.24, "pv": 2.0, "load": 3.0},
+        {"imp": 0.30, "exp": 0.24, "pv": 1.0, "load": 2.5},
+        {"imp": 0.30, "exp": 0.20, "pv": 0.0, "load": 5.0},
+        {"imp": 0.30, "exp": 0.20, "pv": 0.0, "load": 5.0},
+        {"imp": 0.30, "exp": 0.20, "pv": 0.0, "load": 5.0},
+    ]
+    slots = make_slots(rows, CHEAP)
+    cfg = base_cfg(battery_kwh=10.0, floor_soc=10.0, mode=Mode.ECO, degradation=0.05)
+    result = optimizer.solve(slots, soc0_pct=100.0, cfg=cfg)
+    assert not result.infeasible
+    # Slot 0 has 2.0 pv against 3.0 load: PV must be used for load first,
+    # so grid should only ever cover the genuine post-PV/battery gap,
+    # never a gap that exists only because PV was diverted elsewhere.
+    assert result.cost_trace[0]["grid_in"] < 1.0 + EPS_COST, (
+        f"slot 0 imported more than the real PV-and-battery-adjusted deficit: {result.cost_trace[0]['grid_in']}"
+    )
+
+
 def test_charging_blocked_outside_cheap_slots():
     rows = [{"imp": 0.30, "exp": 0.05, "load": 1.0} for _ in range(3)]
     slots = make_slots(rows, CHEAP)

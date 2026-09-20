@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.36.0 - 2026-09-20
+
+### Fix
+- Fixed grid importing to cover load in slots where PV was simultaneously available and being routed into the battery instead — PV now always serves load first, hard rule, no exceptions
+
 ## 3.35.0 - 2026-09-20
 
 ### Fix
