@@ -2136,6 +2136,26 @@ class GridLock(hass.Hass):
                     return f"{sev}: {headline}"
         return None
 
+    def _ev_is_charging(self):
+        """Whether the EV is genuinely drawing charge current right now.
+        Prefers the EV's own power reading — real current flowing is the
+        actually-reliable signal — over ent_ev's discovered switch/state
+        entity. Real bug, confirmed live: a Hypervolt charger's "is
+        charging" entity is a switch that reflects whether charging is
+        *enabled* (schedule armed), not whether the car is actually
+        pulling power, and other chargers expose status as a string
+        sensor ("Charging"/"Paused"/"Complete") that never equals the
+        literal "on" this used to require — either way EV Protection
+        (pausing battery discharge while the EV shares the circuit)
+        silently never engaged despite the car genuinely charging.
+        Falls back to the old switch-state check only when no power
+        entity is configured at all, so this never goes from "wrong" to
+        "no signal" instead of "correct"."""
+        if self.ent_ev_power:
+            kw = self.get_float_state(self.ent_ev_power, 0.0) or 0.0
+            return kw > 0.05
+        return bool(self.ent_ev) and self.get_state(self.ent_ev) == "on"
+
     # ------------------------------------------------------------------
     # SLOT MODEL / OPTIMISER
     # ------------------------------------------------------------------
@@ -3668,7 +3688,7 @@ class GridLock(hass.Hass):
 
         cur = slots[0]
         action = core_optimizer.action(cur)
-        ev_active = bool(self.ent_ev) and self.get_state(self.ent_ev) == "on"
+        ev_active = self._ev_is_charging()
         session = self.active_saving_session(now)
         storm = self.storm_active()
         off_grid = self.grid_connection_off()

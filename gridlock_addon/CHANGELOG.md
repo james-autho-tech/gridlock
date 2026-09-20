@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.40.0 - 2026-09-20
+
+### Fix
+- EV charging power now correctly excluded from house load and from live EV Protection detection even when the discovered "is charging" entity doesn't report the state expected (a Hypervolt charger's own switch reflects whether charging is enabled, not whether current is actually flowing) — the EV's own power reading is now the authoritative signal instead
+
 ## 3.39.0 - 2026-09-20
 
 ### Fix

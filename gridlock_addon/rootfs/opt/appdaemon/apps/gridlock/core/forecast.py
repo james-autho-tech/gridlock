@@ -164,10 +164,25 @@ class LearnedLoadForecastProvider(LoadForecastProvider):
         kw = _get_float(self.app, self.load_power_entity, None)
         if kw is None:
             return
-        ev_active = bool(self.ev_entity) and self.app.get_state(self.ev_entity) == "on"
-        if ev_active and self.ev_power_entity:
+        # Gating this on self.ev_entity's state used to require it to
+        # read exactly "on" — real bug, confirmed live: a Hypervolt
+        # charger's discovered "is charging" entity is a switch that
+        # reflects whether charging is *enabled* (schedule armed), not
+        # whether current is actually flowing, and other chargers expose
+        # charging status as a string sensor ("Charging"/"Paused"/
+        # "Complete") that never equals the literal string "on" at all —
+        # either way this gate silently stayed false while the car
+        # genuinely drew power, and that power stayed wrongly lumped
+        # into house load with no way to tell from the outside. The
+        # power reading itself is the actually-reliable signal: real
+        # current flowing is definitionally what needs subtracting,
+        # whatever any separate status entity claims — a small floor
+        # (50W) just filters out standby/phantom draw a charger reports
+        # even when idle, not genuine charging at any real rate.
+        if self.ev_power_entity:
             ev_kw = _get_float(self.app, self.ev_power_entity, 0.0) or 0.0
-            kw = max(0.0, kw - ev_kw)
+            if ev_kw > 0.05:
+                kw = max(0.0, kw - ev_kw)
         slot_idx = str(now.hour * 2 + (1 if now.minute >= 30 else 0))
 
         if self._accum_slot_idx is not None and self._accum_slot_idx != slot_idx:

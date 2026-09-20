@@ -94,6 +94,38 @@ def test_ev_subtraction_still_works_and_is_not_learned_as_a_circuit(tmp_path):
     assert provider.load_kwh(NOW) == (5.0 - 2.0) * (5 / 60)
 
 
+def test_ev_subtracted_by_power_reading_even_when_state_entity_says_off(tmp_path):
+    """Real-world report: a Hypervolt charger's discovered "is charging"
+    entity is a switch reflecting whether charging is *enabled*
+    (schedule armed), not whether current is actually flowing — so it
+    can read "off" (or any string other than the literal "on", for a
+    different charger's status sensor) while the car is genuinely
+    drawing power. The old code required ev_entity's state to equal
+    "on" before ever looking at ev_power_entity, so real EV load stayed
+    wrongly lumped into house load whenever that mismatch happened.
+    ev_power_entity's own reading is now the authoritative signal —
+    subtracted whenever it's meaningfully positive, regardless of what
+    ev_entity (if anything) reports."""
+    app = _FakeApp({"sensor.house_power": "5.0", "input_boolean.ev": "off",
+                     "sensor.ev_power": "2.0"})
+    provider = _provider(tmp_path, app, ev_entity="input_boolean.ev",
+                          ev_power_entity="sensor.ev_power")
+    provider.sample(NOW)
+    provider.sample(NEXT_SLOT)
+    assert provider.house_profile[SLOT_IDX] == (5.0 - 2.0) * (5 / 60)
+
+
+def test_ev_power_below_standby_floor_not_subtracted(tmp_path):
+    """A charger reporting a small phantom/standby draw while genuinely
+    idle shouldn't get treated as "charging" and subtracted from house
+    load — only a real, meaningful power draw should."""
+    app = _FakeApp({"sensor.house_power": "5.0", "sensor.ev_power": "0.02"})
+    provider = _provider(tmp_path, app, ev_power_entity="sensor.ev_power")
+    provider.sample(NOW)
+    provider.sample(NEXT_SLOT)
+    assert provider.house_profile[SLOT_IDX] == 5.0 * (5 / 60)
+
+
 def test_ev_and_circuits_both_subtracted_together(tmp_path):
     app = _FakeApp({"sensor.house_power": "10.0", "input_boolean.ev": "on",
                      "sensor.ev_power": "4.0", "sensor.circuit_a": "1.5"})
