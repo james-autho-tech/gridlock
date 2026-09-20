@@ -57,6 +57,32 @@ def test_pv_defaults_to_zero_when_no_data_exists_at_all():
     assert all(s["pv"] == 0.0 for s in slots)
 
 
+def test_free_electricity_window_overrides_import_rate_to_zero():
+    """EDF's real Power Perks events (or any genuinely-free-electricity
+    source) aren't a baseline-vs-excess reward like Power Up -- the whole
+    window is free, full stop -- so this is a straight import-rate
+    override, not routed through the session-reward machinery."""
+    free_start = NOW.replace(minute=0, second=0, microsecond=0) + timedelta(hours=2)
+    free_end = free_start + timedelta(hours=1)
+    slots = build_slots(
+        NOW,
+        import_windows=[(NOW, NOW + timedelta(hours=72), 0.20)],
+        export_windows=[(NOW, NOW + timedelta(hours=72), 0.10)],
+        dispatch_windows=[],
+        pv_curve={},
+        load_kwh_fn=lambda s: 0.4,
+        cheap_rate=0.10,
+        live_import_rate=0.20, live_export_rate=0.10,
+        default_import_rate=0.20, default_export_rate=0.10,
+        horizon_slots=12, slot_min=30,
+        free_electricity_windows=[(free_start, free_end)])
+    free_slots = [s for s in slots if free_start <= s["start"] < free_end]
+    other_slots = [s for s in slots if not (free_start <= s["start"] < free_end)]
+    assert free_slots, "fixture should include at least one slot inside the free window"
+    assert all(s["imp"] == 0.0 for s in free_slots)
+    assert all(s["imp"] == 0.20 for s in other_slots)
+
+
 def test_import_rate_falls_back_to_prior_night_past_published_horizon():
     """Octopus only ever publishes ~24-30h of real half-hourly rates ahead
     -- a 48h+ plan/comparison horizon reaches past that. Real production

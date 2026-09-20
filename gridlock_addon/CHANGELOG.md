@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.33.0 - 2026-09-20
+
+### Improvement
+- New EDF Power Perks support — genuinely real, structured free-electricity windows straight from EDF's own API (confirmed live: not routed through the same third-party feed Octopus's broken Free Electricity Sessions depends on). Applied as a straight import-rate override (the whole window is free, not a baseline-vs-excess reward like Power Up), and only trusted once the account's own registration sensor confirms you're actually enrolled to benefit — the windows are visible in EDF's event entity regardless of enrollment, so reading them unconditionally would have planned around a discount that isn't really yours. No auto-join — enrolling is a real account action (EDF's own button entity), not something GridLock presses on your behalf
+- New `core/slots.py` `free_electricity_windows` parameter, unit tested
+
 ## 3.32.2 - 2026-09-20
 
 ### Fix

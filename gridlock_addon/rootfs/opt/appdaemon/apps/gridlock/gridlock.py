@@ -213,6 +213,29 @@ class GridLock(hass.Hass):
                                     or self.registry.find(
             prefix="event.octopus_energy_", suffix="_octoplus_power_up_events"))
 
+        # EDF's own "Power Perks" (part of its Flextras loyalty scheme) —
+        # a genuinely separate mechanism from Octopus's Power Up: not a
+        # baseline-vs-excess reward, just real announced free-electricity
+        # windows straight from EDF's own API (confirmed live: real
+        # `free_electricity_windows` data, not routed through the same
+        # third-party feed Octopus's Free Electricity Sessions depends
+        # on). Gated on the registration binary_sensor actually being
+        # on — the windows show up in the event entity regardless of
+        # whether you're enrolled to benefit from them, so reading them
+        # unconditionally would plan around a discount that isn't really
+        # yours. No auto-join here (unlike Saving Sessions) — enrolling
+        # is a real account action (a button entity in EDF's own
+        # integration), not something to press on your behalf.
+        self.ent_edf_power_perks_events = (a.get("edf_power_perks_events")
+                                           or self.overrides.get("edf_power_perks_events_override")
+                                           or self.registry.find(
+            prefix="event.edf_energy_", suffix="_free_electricity_session_events"))
+        self.ent_edf_power_perks_registered = (a.get("edf_power_perks_registered_entity")
+                                               or self.overrides.get(
+            "edf_power_perks_registered_entity_override")
+                                               or self.registry.find(
+            prefix="binary_sensor.edf_energy_", suffix="_flextras_power_perks_registered"))
+
         import_stem = self.registry.mpan_stem(self.ent_import_rate, "_current_rate")
         export_stem = self.registry.mpan_stem(self.ent_export_rate, "_export_current_rate")
 
@@ -2076,6 +2099,25 @@ class GridLock(hass.Hass):
                 continue
         return windows
 
+    def _edf_free_electricity_windows(self):
+        """Real announced EDF Power Perks free-electricity windows (see
+        the discovery comment on ent_edf_power_perks_events) — only
+        trusted once the registration binary_sensor confirms you're
+        actually enrolled to benefit from them, not just that the data
+        happens to be visible."""
+        if not (self.ent_edf_power_perks_events and self.ent_edf_power_perks_registered):
+            return []
+        if self.get_state(self.ent_edf_power_perks_registered) != "on":
+            return []
+        raw = self._attr_list(self.ent_edf_power_perks_events, "free_electricity_windows")
+        windows = []
+        for period in raw:
+            try:
+                windows.append((self._iso(period["start"]), self._iso(period["end"])))
+            except (KeyError, ValueError, TypeError):
+                continue
+        return windows
+
     def build_slots(self, now):
         live_imp = self.get_float_state(self.ent_import_rate, self.default_import)
         live_exp = self.get_float_state(self.ent_export_rate, self.default_export)
@@ -2095,6 +2137,7 @@ class GridLock(hass.Hass):
             power_down_export_windows=self._octoplus_session_windows(
                 self.ent_power_down_export_baseline, self._power_down_points_for_session),
             power_up_export_windows=self._octoplus_session_windows(self.ent_power_up_export_baseline),
+            free_electricity_windows=self._edf_free_electricity_windows(),
             horizon_slots=self.cfg.horizon_slots, slot_min=self.cfg.slot_min)
 
     def _solve_plan(self, slots, soc0, now):
