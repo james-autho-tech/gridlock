@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.39.0 - 2026-09-20
+
+### Fix
+- EV charging on Agile card now hidden unless you're actually on Agile import, instead of always showing as "safe to set up ahead of time" (still shows if a previously-saved value needs fixing, so it stays reachable)
+- Daily charge hours now rejects anything between 0 and 30 minutes (e.g. a stray "1e-9") instead of accepting any value in the 0-24 range
+
 ## 3.38.0 - 2026-09-20
 
 ### Fix

@@ -885,8 +885,14 @@ async function saveEvSchedule() {
   if (evScheduleBusy) return;
   const field = id => document.getElementById(id);
   const hours = field('gl-ev-hours').value.trim();
-  if (hours === '' || Number(hours) < 0 || Number(hours) > 24) {
-    window.alert('Daily charge hours must be between 0 and 24.'); return;
+  // 0 is a valid explicit "off"; anything else below half an hour is
+  // almost certainly a typo (e.g. scientific notation like "1e-9") —
+  // confirmed a stray value like that passed a bare 0-24 range check
+  // and got saved for real, then displayed back as "1e-9" with no way
+  // to tell it apart from a genuine, if oddly small, setting.
+  if (hours === '' || Number(hours) < 0 || Number(hours) > 24
+      || (Number(hours) > 0 && Number(hours) < 0.5)) {
+    window.alert('Daily charge hours must be 0 (off) or between 0.5 and 24.'); return;
   }
   evScheduleBusy = true;
   try {
@@ -1174,10 +1180,19 @@ function renderWarranties(items) {
 }
 function renderEvSchedule(ev) {
   const hours = ev.daily_charge_hours != null ? ev.daily_charge_hours : '';
+  // Only shown once Agile import is actually selected — a "safe to set
+  // up ahead of time, stays dormant" card for a tariff you're not on
+  // just reads as clutter, not a helpful head start. Exception: a
+  // previously-saved value that wouldn't pass today's validation (e.g.
+  // a stray "1e-9" saved before a sanity floor existed) still needs a
+  // way to be fixed — hiding the card unconditionally would strand
+  // that value with no path to ever correct it via the UI.
+  const savedHoursInvalid = hours !== '' && Number(hours) > 0 && Number(hours) < 0.5;
+  if (!ev.on_agile && !savedHoursInvalid) return '';
   const notifyP = ev.high_price_notify_p != null ? ev.high_price_notify_p : 15.0;
   const statusLine = ev.on_agile
     ? '<span style="color:var(--green)">On Agile import</span> — active once daily charge hours is set below.'
-    : '<span style="color:var(--dim)">Not currently on Agile import</span> — safe to set up now, it stays dormant until you switch.';
+    : '<span style="color:var(--warn, #fbbf24)">Not on Agile import</span> — but the saved value below needs fixing (won\'t take effect until you are).';
   return `<div class="gl-wrap">
     <div class="gl-h">EV charging on Agile</div>
     <div class="gl-sub">Octopus's own Intelligent dispatch already schedules EV charging for Intelligent Octopus Go; Agile has no equivalent. GridLock finds the cheapest contiguous window of the length below in the real published Agile rates each hour and writes it onto your Hypervolt's own schedule directly. Always charges in the cheapest window it can find even on an expensive day — the notify threshold below just flags those days instead of skipping them.</div>
@@ -2436,9 +2451,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send(400, json.dumps(
                     {"error": "daily_charge_hours must be a number"}).encode(), "application/json")
                 return
-            if hours < 0 or hours > 24:
+            # 0 is a valid explicit "off"; anything else below half an
+            # hour is almost certainly a typo (e.g. scientific notation
+            # like "1e-9") rather than a genuine setting — a bare 0-24
+            # range check let exactly that through and get saved for
+            # real. Server-side mirror of the same check in
+            # saveEvSchedule() above, since this endpoint isn't only
+            # ever reached through that form.
+            if hours < 0 or hours > 24 or (0 < hours < 0.5):
                 self._send(400, json.dumps(
-                    {"error": "daily_charge_hours must be between 0 and 24"}).encode(),
+                    {"error": "daily_charge_hours must be 0 (off) or between 0.5 and 24"}).encode(),
                     "application/json")
                 return
             try:
