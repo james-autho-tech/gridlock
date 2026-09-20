@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.35.0 - 2026-09-20
+
+### Fix
+- Fixed battery sitting idle on a full charge during flat-rate periods instead of covering load, then dumping everything late — optimiser now prefers using the battery now over deferring when cost is otherwise tied
+
 ## 3.34.0 - 2026-09-20
 
 ### Improvement

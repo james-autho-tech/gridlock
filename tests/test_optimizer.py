@@ -144,6 +144,42 @@ def test_max_profit_exports_fully_where_balanced_would_not():
         "max_profit's small export floor should still find this margin worth selling"
 
 
+def test_flat_rate_shortfall_prefers_using_battery_now_over_later():
+    """Real-world report: with SoC at 100% and a dead-flat on-peak rate
+    for many hours, the LP is otherwise economically indifferent about
+    WHICH slots get battery vs grid, since £ saved = kWh discharged x
+    price regardless of timing — and previously just landed on whichever
+    allocation it reached first, which could mean a fully-charged
+    battery sitting completely unused for hours (reading as "ECO is
+    still costing me money" even though total plan cost was identical),
+    then dumping its entire remaining capacity into the last few slots.
+    Same price either way, but self-consuming NOW is a genuinely better
+    habit than gambling everything on a later window a re-solve can't
+    claw back from if that forecast turns out wrong.
+
+    Deliberately shaped like the real report (several smaller early
+    loads, then bigger ones later) with total demand (12kWh) exceeding
+    usable battery capacity (10kWh) so a real shortfall is unavoidable
+    SOMEWHERE — confirmed this fixture actually discriminates (fails
+    without TIEBREAK_EPSILON doing anything, e.g. at a too-small value
+    swamped by the solver's own numerical tolerance) before trusting it,
+    rather than assuming a plausible-looking fixture would catch a
+    regression here."""
+    rows = [{"imp": 0.30, "exp": 0.05, "load": 1.0} for _ in range(4)] + \
+        [{"imp": 0.30, "exp": 0.05, "load": 4.0} for _ in range(2)]
+    slots = make_slots(rows, CHEAP)  # none of these qualify as cheap (0.30 > CHEAP)
+    cfg = base_cfg(battery_kwh=10.0, mode=Mode.BALANCED, degradation=0.05)
+    result = optimizer.solve(slots, soc0_pct=100.0, cfg=cfg)
+    assert not result.infeasible
+    grid_in = [round(c["grid_in"], 3) for c in result.cost_trace]
+    assert all(g < EPS_COST for g in grid_in[:-1]), (
+        f"every slot except the last should be fully covered by the battery, not deferred: {grid_in}"
+    )
+    assert grid_in[-1] > EPS_COST, (
+        "the unavoidable shortfall should land entirely on the last slot, not be spread earlier"
+    )
+
+
 def test_charging_blocked_outside_cheap_slots():
     rows = [{"imp": 0.30, "exp": 0.05, "load": 1.0} for _ in range(3)]
     slots = make_slots(rows, CHEAP)

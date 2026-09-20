@@ -52,6 +52,39 @@ def _val(var, default=0.0):
 # than planned would be strictly worse for a live battery controller.
 RESERVE_PENALTY = 1000.0
 
+# Deliberately negligible per-slot weight breaking ties toward using the
+# battery NOW rather than deferring to an equally-priced later slot.
+# Confirmed live: under a genuinely flat import rate spanning many
+# hours, the LP is otherwise economically indifferent between "self-
+# consume this slot" and "self-consume a later one instead" — same
+# total cost either way — and previously just landed on whichever
+# allocation the solver happened to reach first. In practice that meant
+# a fully-charged battery sitting completely unused for hours (reading
+# as "ECO is still costing me money" even though the total plan cost
+# was unaffected), then dumping its entire remaining capacity into the
+# last few slots before the next cheap window. Same price, but real
+# solar/PV self-consumption whenever it's available is a genuinely
+# better habit than gambling everything on a single later window,
+# since a later re-solve can't claw back energy an earlier slot could
+# have self-consumed for free.
+#
+# 1e-9 was the first value tried and it does NOT work — confirmed by
+# actually reproducing the reported scenario end-to-end rather than
+# reasoning about magnitudes alone: at 1e-9 the solver still produced
+# the broken split-shortfall pattern, because a term at this scale is
+# swamped by the solver's own numerical/MIP-gap tolerance once
+# RESERVE_PENALTY (1000) terms are in the same problem — theoretically
+# "negligible enough" doesn't mean "large enough to actually influence
+# which solution the solver reports." 1e-6 empirically produces the
+# correct behaviour (verified directly) while still being nowhere near
+# any real tariff's own price granularity: summed over the full 48h
+# horizon at the maximum plausible per-slot discharge, this term still
+# can't approach a tenth of a penny, so it can only ever break a
+# genuine tie, never override an actual price- or reserve-driven
+# decision — RESERVE_PENALTY above still dominates it by nine orders
+# of magnitude.
+TIEBREAK_EPSILON = 1e-6
+
 # Hard wall-clock cap (seconds) on a single solver invocation. solve()
 # can call _solve_lp up to 3 times a tick (initial pass + two correction
 # passes), so this bounds worst-case tick time to a multiple of this,
@@ -438,9 +471,16 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
         degradation_terms.append(degradation * batt_to_load[i]
                                   + export_degradation * batt_to_export[i])
 
+    # See TIEBREAK_EPSILON's own comment — (n - i) weights grid import
+    # in an EARLY slot more heavily than the same import LATE, so
+    # among cost-tied allocations the solver prefers using the battery
+    # now and deferring any unavoidable grid import, not the reverse.
+    tiebreak_terms = [grid_to_load[i] * (n - i) for i in range(n)]
+
     prob += (pulp.lpSum(grid_cost_terms) + pulp.lpSum(degradation_terms)
              + RESERVE_PENALTY * pulp.lpSum(reserve_penalty_terms)
-             - pulp.lpSum(session_reward_terms))
+             - pulp.lpSum(session_reward_terms)
+             + TIEBREAK_EPSILON * pulp.lpSum(tiebreak_terms))
     try:
         prob.solve(_solver())
         infeasible = pulp.LpStatus[prob.status] != "Optimal"
