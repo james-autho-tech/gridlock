@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.38.0 - 2026-09-20
+
+### Fix
+- Sped up how fast the learned load forecast adapts to a genuine weather/season change (~6-7 days instead of ~20) — a heat pump not split out as its own tracked circuit was baking a run of cold days straight into the house average, forecasting that same inflated load for weeks after a warm spell arrived
+
 ## 3.37.0 - 2026-09-20
 
 ### Fix

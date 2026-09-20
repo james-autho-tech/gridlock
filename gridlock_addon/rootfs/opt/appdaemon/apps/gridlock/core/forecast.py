@@ -119,8 +119,25 @@ class LearnedLoadForecastProvider(LoadForecastProvider):
         except OSError:
             pass
 
+    # 0.05 (~20-day time constant) was too slow to unlearn a genuine
+    # regime change — confirmed real: a heat pump isn't split out as its
+    # own labelled circuit on this install, so a run of cold days baked
+    # its draw straight into house_profile for those evening slots, and
+    # the plan kept forecasting that same inflated load for weeks after
+    # a warm spell arrived with the heat pump plainly off (reported as
+    # "5kWh in an hour" that isn't physically possible without both a
+    # hot tub AND heating running at once). 0.15 (~6-7 days) still
+    # smooths out one genuinely one-off day (a single cold snap, guests
+    # over) without taking three weeks to catch up to an actual weather
+    # swing — a heat pump circuit getting its own "gridlock_power" label
+    # would let it adapt same-day instead of averaging at all, but that
+    # needs a monitored circuit entity this install doesn't have.
+    _BLEND_ALPHA = 0.15
+
     @staticmethod
-    def _blend(profile, slot_idx, observed_slot_kwh, alpha=0.05):
+    def _blend(profile, slot_idx, observed_slot_kwh, alpha=None):
+        if alpha is None:
+            alpha = LearnedLoadForecastProvider._BLEND_ALPHA
         prev = profile.get(slot_idx)
         profile[slot_idx] = (observed_slot_kwh if prev is None
                               else prev * (1 - alpha) + observed_slot_kwh * alpha)

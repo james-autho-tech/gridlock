@@ -50,6 +50,25 @@ def test_circuit_power_is_subtracted_from_house_and_learned_on_its_own(tmp_path)
     assert provider.circuit_profiles["sensor.circuit_a"][SLOT_IDX] == 1.0 * (5 / 60)
 
 
+def test_blend_alpha_adapts_within_about_a_week_not_a_month(tmp_path):
+    """Real-world report: a heat pump isn't split out as its own labelled
+    circuit on this install, so a run of cold days baked its draw into
+    house_profile for those evening slots — and with the old alpha=0.05
+    (~20-day time constant), the plan kept forecasting that inflated
+    load for weeks into a warm spell with the heat pump plainly off
+    ("5kWh in an hour" the user said isn't physically possible without
+    a hot tub AND heating running together). Locks in the faster 0.15
+    blend (~6-7 days) so a regression back to the old slow value doesn't
+    silently reintroduce the same stale-forecast bug."""
+    app = _FakeApp({"sensor.house_power": "1.0"})
+    provider = _provider(tmp_path, app)
+    provider.house_profile[SLOT_IDX] = 5.0  # a stale, inflated prior average
+    provider.sample(NOW)
+    provider.sample(NEXT_SLOT)  # flushes slot 24 against the new observation
+    observed = 1.0 * (5 / 60)
+    assert provider.house_profile[SLOT_IDX] == 5.0 * (1 - 0.15) + observed * 0.15
+
+
 def test_load_kwh_returns_house_residual_plus_circuit_forecasts(tmp_path):
     app = _FakeApp({"sensor.house_power": "3.0", "sensor.circuit_a": "1.0"})
     provider = _provider(tmp_path, app, circuit_power_entities=["sensor.circuit_a"])
