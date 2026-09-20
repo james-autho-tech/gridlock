@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.32.2 - 2026-09-20
+
+### Fix
+- Finished the EDF-parity audit: renamed `OctopusTariffProvider`/`_detect_octopus_region` to `KrakenTariffProvider`/`_detect_dno_region`, since both were already fully brand-agnostic in practice (they just read whatever entity was actually discovered) but still named as if they weren't — confusing given `stevekirtley/HomeAssistant-EDFEnergy` is now a fully supported, auto-detected integration, not an afterthought bolted on. No behaviour change; audited every remaining Octopus-specific discovery point and confirmed the only ones left genuinely Octopus-only (Saving Sessions, Power Up/Free Electricity) are correctly so, since EDF's own integration has those features removed at the source
+
 ## 3.32.1 - 2026-09-20
 
 ### Fix

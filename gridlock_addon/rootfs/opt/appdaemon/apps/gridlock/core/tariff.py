@@ -1,7 +1,9 @@
 """TariffProvider — rate/dispatch windows for the slot builder. Ported
 from the old GridLock's _rate_windows/_dispatch_windows/_mpan_stem/
 _find_sibling logic (BottlecapDave's Octopus Energy integration
-conventions)."""
+conventions — also shared by EDF's own integration, a direct fork of
+BottlecapDave's with identical entity attribute shapes, so this reads
+either one without caring which)."""
 
 from abc import ABC, abstractmethod
 from datetime import datetime
@@ -27,7 +29,7 @@ class TariffProvider(ABC):
         """-> [(start, end, kwh), ...] — off-peak EV dispatch windows."""
 
 
-class OctopusTariffProvider(TariffProvider):
+class KrakenTariffProvider(TariffProvider):
     def __init__(self, app, ent_rates, ent_export_rates, ent_dispatch):
         self.app = app
         self.ent_rates = ent_rates or []

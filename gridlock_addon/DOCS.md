@@ -7,16 +7,20 @@ storage folder, `/addon_configs/gridlock/` (visible over Samba / the
 File editor / Studio Code Server add-ons):
 
 - `apps/gridlock/apps.yaml` — model parameters, tariff rates.
-  Octopus and Hypervolt entities are **auto-discovered by naming
+  Octopus/EDF and Hypervolt entities are **auto-discovered by naming
   pattern at startup** — nothing to set for a single account/meter/
-  charger. If discovery is ambiguous (multiple Octopus accounts/
-  meters), set the affected key explicitly here as a **literal
-  value** — not `!secret`. AppDaemon's app-config loader has no
-  built-in secrets.yaml support the way HA core does; a `!secret` tag
-  here makes the whole file fail to parse and the app silently stops
-  publishing anything. The add-on self-heals from that (backs up the
-  broken file, restores the template) but it's simplest to just not
-  use it.
+  charger. EDF's own Home Assistant integration (`stevekirtley/
+  HomeAssistant-EDFEnergy`) is a direct fork of BottlecapDave's Octopus
+  one, sharing the same entity naming conventions, so switching
+  supplier doesn't need any reconfiguration here — whichever one is
+  actually installed is what gets found. If discovery is ambiguous
+  (multiple accounts/meters), set the affected key explicitly here as a
+  **literal value** — not `!secret`. AppDaemon's app-config loader has
+  no built-in secrets.yaml support the way HA core does; a `!secret`
+  tag here makes the whole file fail to parse and the app silently
+  stops publishing anything. The add-on self-heals from that (backs up
+  the broken file, restores the template) but it's simplest to just
+  not use it.
 
 Open the add-on's sidebar panel (once Ingress is enabled via "Show in
 sidebar" on this add-on's Info page) — the "Discovered entities" card

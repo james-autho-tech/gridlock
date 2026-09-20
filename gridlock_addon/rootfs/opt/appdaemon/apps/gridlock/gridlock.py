@@ -21,7 +21,7 @@ from core import optimizer as core_optimizer
 from core import failsafe as core_failsafe
 from core.registry import HASensorRegistry
 from core.inverter import SigenergyAdapter
-from core.tariff import OctopusTariffProvider
+from core.tariff import KrakenTariffProvider
 from core.forecast import SolcastForecastProvider, LearnedLoadForecastProvider
 from core import thermal as core_thermal
 from core import diagnostics as core_diagnostics
@@ -429,7 +429,7 @@ class GridLock(hass.Hass):
             self.ent_discharge_cutoff, mode_charge=self.mode_charge,
             mode_discharge=self.mode_discharge, mode_eco=self.mode_eco)
 
-        self.tariff_provider = OctopusTariffProvider(
+        self.tariff_provider = KrakenTariffProvider(
             self, self.ent_rates, self.ent_export_rates, self.ent_dispatch)
         self.forecast_provider = SolcastForecastProvider(self, self.ent_solcast)
         self.load_provider = LearnedLoadForecastProvider(
@@ -584,13 +584,13 @@ class GridLock(hass.Hass):
         # Octopus Agile comparison — engine polls the open API directly
         # (public, no auth needed), same "poll periodically, cache the
         # result" pattern as SSEN Power Track above. Falls back to your
-        # own account's real tariff code (see _detect_octopus_region) when
+        # own account's real tariff code (see _detect_dno_region) when
         # not set explicitly — Agile rates are region-specific (14 DNO
         # regions, letters A-P) and this add-on is shared across installs,
         # so an unconfigured, undetectable region still stays off rather
         # than silently defaulting to one, which would be actively wrong
         # for anyone outside it, not a harmless guess.
-        self.agile_region = a.get("agile_region") or self._detect_octopus_region()
+        self.agile_region = a.get("agile_region") or self._detect_dno_region()
         self.agile_rates = {}
         self.agile_standing_gbp = 0.0
 
@@ -857,15 +857,16 @@ class GridLock(hass.Hass):
         except (ValueError, TypeError):
             return default
 
-    def _detect_octopus_region(self):
+    def _detect_dno_region(self):
         """DNO region letter (A-P) straight from your own account's real
-        tariff code, e.g. "E-1R-IOG-SMB-FIX-12M-25-08-29-H" -> "H" — the
-        BottlecapDave integration already carries this on the import rate
-        sensor (as "tariff" on *_current_rate, "tariff_code" elsewhere),
-        which Octopus itself derived from your actual address. More
-        authoritative than asking you to go find and type in the same
-        letter apps.yaml's own comments used to walk you through by hand,
-        and correct even if you move house without touching config."""
+        tariff code, e.g. "E-1R-IOG-SMB-FIX-12M-25-08-29-H" -> "H" — both
+        Octopus's and EDF's integrations carry this on the import rate
+        sensor (as "tariff" on *_current_rate, "tariff_code" elsewhere;
+        EDF's is a literal fork, same convention), derived by your
+        supplier from your actual address either way. More authoritative
+        than asking you to go find and type in the same letter apps.yaml's
+        own comments used to walk you through by hand, and correct even
+        if you move house without touching config, or switch supplier."""
         if not self.ent_import_rate:
             return None
         for attr in ("tariff", "tariff_code"):
