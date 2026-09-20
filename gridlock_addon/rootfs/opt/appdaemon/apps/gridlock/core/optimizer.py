@@ -52,6 +52,7 @@ def _val(var, default=0.0):
 # than planned would be strictly worse for a live battery controller.
 RESERVE_PENALTY = 1000.0
 
+
 # Deliberately negligible per-slot weight breaking ties toward using the
 # battery NOW rather than deferring to an equally-priced later slot.
 # Confirmed live: under a genuinely flat import rate spanning many
@@ -196,6 +197,10 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
     grid_cost_terms = []
     degradation_terms = []
     reserve_penalty_terms = []
+    # Per-slot "credit" toward the future reserve requirement for battery
+    # already spent on THIS slot's own mandatory on-peak self-consumption
+    # — see the reserve constraint below for why this exists.
+    self_consumption_credits = []
     session_reward_terms = []
     # Indexed by slot, unlike reserve_penalty_terms (which is just a flat
     # list for the objective sum and doesn't preserve which slot each
@@ -311,6 +316,20 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
                     f"import_over_battery_{i}", 0, required_self_consumption)
                 prob += batt_to_load[i] + import_over_battery >= required_self_consumption
                 reserve_penalty_terms.append(import_over_battery)
+                # Whatever of THIS slot's own required self-consumption
+                # actually came from the battery (not grid) is spending
+                # unavoidably, not a discretionary reserve trade-off — see
+                # the reserve constraint below for why it needs crediting
+                # back. <= batt_to_load[i] AND <= required_self_consumption
+                # (its own declared upper bound) is enough to pin this to
+                # min(batt_to_load[i], required_self_consumption) with no
+                # binary needed: it only ever helps satisfy the reserve
+                # constraint it feeds into (never hurts), so the solver
+                # has no incentive to under-report it below that minimum.
+                credit = pulp.LpVariable(
+                    f"self_consumption_credit_{i}", 0, required_self_consumption)
+                prob += credit <= batt_to_load[i]
+                self_consumption_credits.append(credit)
         else:
             # Off-peak, symmetric case: don't drain the battery for THIS
             # slot's own load either. Battery self-consumption only costs
@@ -381,7 +400,29 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
             future_deficit = max(0.0, s.get("remaining_deficit", 0.0) - (load - pv))
             future_deficit *= (1.0 + cfg.reserve_margin_pct)
             shortfall = pulp.LpVariable(f"reserve_shortfall_{i}", 0)
-            prob += soc[i] + shortfall >= floor_kwh + future_deficit / eff
+            # + self_consumption_credits: battery already spent covering
+            # THIS slot's (or an earlier slot's) own mandatory on-peak
+            # self-consumption doesn't count as eating into the reserve —
+            # that spend was going to happen regardless of source (grid
+            # now vs battery now), so soc[i] being lower BECAUSE of it is
+            # not a real reserve risk, just bookkeeping. Confirmed live
+            # this mattered: without the credit, the same RESERVE_PENALTY
+            # weight on both this shortfall and the immediate on-peak
+            # slack above let the solver "solve" a still-unavoidable
+            # future shortfall by refusing today's already-available
+            # battery instead — reported live as SoC pinned at 100% and
+            # grid importing the full deficit for hours on end, battery
+            # only engaging once close enough to the next off-peak window
+            # that holding back stopped mattering. Bumping the immediate
+            # penalty's weight to compensate was tried and confirmed NOT
+            # to work even at absurd multiples (up to 1e12): the two
+            # penalties are already 3+ orders of magnitude apart from
+            # real prices, and pushing the gap wider than that just left
+            # the solver numerically unable to tell them apart, not
+            # economically corrected — this is the actual, structural
+            # fix instead of a bigger constant.
+            prob += soc[i] + shortfall + pulp.lpSum(self_consumption_credits) \
+                >= floor_kwh + future_deficit / eff
             reserve_penalty_terms.append(shortfall)
             reserve_shortfall_vars[i] = shortfall
 

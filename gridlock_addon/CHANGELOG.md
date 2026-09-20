@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.37.0 - 2026-09-20
+
+### Fix
+- Fixed battery being held back from a slot's own on-peak load (grid importing instead) whenever a real future off-peak window existed — battery already spent on today's own required self-consumption is now credited back against the future reserve target instead of competing with it
+
 ## 3.36.0 - 2026-09-20
 
 ### Fix

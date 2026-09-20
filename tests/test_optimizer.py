@@ -180,6 +180,48 @@ def test_flat_rate_shortfall_prefers_using_battery_now_over_later():
     )
 
 
+def test_on_peak_self_consumption_not_deferred_for_a_real_future_cheap_window():
+    """Real-world report, still broken after the tiebreak fix above: with
+    a GENUINE future off-peak window inside the horizon (unlike the
+    flat-rate-forever fixture above, which never triggers the reserve
+    constraint at all), the on-peak reserve mechanism and the immediate
+    on-peak self-consumption requirement shared the same RESERVE_PENALTY
+    weight and modelled soc as one shared pool — so using the battery to
+    cover an early on-peak slot's own unavoidable load looked, to the
+    reserve constraint, exactly like "eating into" reserve meant for
+    later, even though that same load had to be paid for from *somewhere*
+    regardless of source. The solver reliably chose to import now and
+    hold SoC at 100% instead, only touching the battery once close enough
+    to the cheap window that holding back stopped helping — reproduced
+    end-to-end against the exact real reported plan. Confirmed this
+    wasn't just an under-weighted penalty: even scaling the immediate
+    penalty to an absurd 1e12 per kWh had zero effect (a real solver
+    conditioning failure at that scale, not an economics problem) —
+    the actual fix credits battery already spent on a slot's own
+    mandatory self-consumption back against the reserve requirement,
+    since that spend was never a discretionary choice.
+
+    Total on-peak demand (6kWh across 6 slots) exceeds usable battery
+    capacity (4kWh) so a real shortfall is unavoidable somewhere, with a
+    genuine cheap window right after — confirmed this fixture reproduces
+    the exact broken pattern (SoC pinned at 100%, grid covering the early
+    slots in full) before trusting it."""
+    rows = [{"imp": 0.30, "exp": 0.05, "load": 1.0} for _ in range(6)] + \
+        [{"imp": 0.05, "exp": 0.02, "load": 1.0} for _ in range(2)]
+    slots = make_slots(rows, CHEAP)
+    cfg = base_cfg(battery_kwh=4.0, floor_soc=0.0, mode=Mode.BALANCED, degradation=0.05)
+    result = optimizer.solve(slots, soc0_pct=100.0, cfg=cfg)
+    assert not result.infeasible
+    grid_in = [round(c["grid_in"], 3) for c in result.cost_trace]
+    on_peak = grid_in[:6]
+    assert all(g < EPS_COST for g in on_peak[:2]), (
+        f"the fully-charged battery should cover the earliest on-peak slots first, not defer to grid: {on_peak}"
+    )
+    assert on_peak[-1] > EPS_COST, (
+        f"the unavoidable shortfall should land closest to the cheap window, not at the start: {on_peak}"
+    )
+
+
 def test_pv_always_serves_load_before_battery_even_under_terminal_shortfall():
     """Real-world report (screenshot + live plan table): grid was importing
     to cover load in slots where PV was simultaneously being generated
