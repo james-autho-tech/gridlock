@@ -130,6 +130,20 @@ shortcut once enabled. Tabs:
   can find, even on a genuinely expensive day, so the car is never left
   short — `ev_high_price_notify_p` just flags those days instead of
   skipping them.
+
+  **Real 30-day tariff backtest** — separate from the forward-looking
+  comparison above, and answering a different question: not "what
+  would the optimiser plan next," but "what would each tariff's own
+  rate structure genuinely have cost, applied to what you actually used
+  and exported each day." Built from GridLock's own real per-day
+  tracked usage (`savings_history`), accumulated one real day at a
+  time, so it can only get more accurate over time, never staler — and
+  it can't drift out of sync with itself the way a one-off manual
+  calculation can, since it's the same tested code every day. Each
+  row shows how many real days it's built from; a tariff added
+  recently (or one whose live rate poll failed on a given day, e.g.
+  EDF's) has fewer days behind it than one tracked the whole month, so
+  don't treat a thin sample the same as a full one.
 - **Entities** — every entity GridLock discovered or was told about,
   grouped by category, with current state — the same data as the
   sidebar's Discovered Entities card, in more detail.

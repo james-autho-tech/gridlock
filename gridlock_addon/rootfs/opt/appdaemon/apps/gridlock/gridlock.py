@@ -27,6 +27,7 @@ from core import thermal as core_thermal
 from core import diagnostics as core_diagnostics
 from core import warranty as core_warranty
 from core.ev_schedule import find_cheapest_window
+from core import tariff_backtest as core_tariff_backtest
 
 STATE_FILES = ("load_profile.json", "savings_state.json", "savings_history.json",
                "cost_tracking_state.json", "decision_log.json",
@@ -679,6 +680,14 @@ class GridLock(hass.Hass):
         self.tracked_onpeak_kwh_today = 0.0
         self.tracked_offpeak_cost_today = 0.0
         self.tracked_onpeak_cost_today = 0.0
+        # Real per-half-hour-of-day import/export kWh, today only —
+        # rolled into savings_history as a daily tariff backtest (see
+        # _compute_tariff_backtest) once the day ends. Kept separate from
+        # the aggregate offpeak/onpeak split above since a backtest needs
+        # to re-classify each slot against OTHER tariffs' own off-peak
+        # windows too, not just this account's real one.
+        self._backtest_import_kwh = [0.0] * 48
+        self._backtest_export_kwh = [0.0] * 48
         self._load_cost_tracking_state()
 
         self.plan = []
@@ -1167,6 +1176,26 @@ class GridLock(hass.Hass):
         profile_totals = {k: round(v, 2) for k, v in profile_totals.items()}
         profile_history = [{"date": d, **pc} for d, pc in profile_days[-28:]]
 
+        # Real 30-day tariff backtest — each tariff's own rate structure
+        # applied to what you actually used/exported each day (see
+        # _compute_tariff_backtest), not a forward-looking plan. A
+        # tariff missing from an older day's record (e.g. added to
+        # compare_tariffs after that day rolled, or EDF's poll failing
+        # that day) just doesn't contribute to that tariff's total for
+        # that day rather than being back-filled or guessed.
+        backtest_days = sorted(
+            ((d, v["tariff_backtest"]) for d, v in self.savings_history.items()
+             if "tariff_backtest" in v),
+            key=lambda p: p[0])[-30:]
+        backtest_totals = {}
+        backtest_day_counts = {}
+        for _, tb in backtest_days:
+            for name, cost in tb.items():
+                backtest_totals[name] = backtest_totals.get(name, 0.0) + cost
+                backtest_day_counts[name] = backtest_day_counts.get(name, 0) + 1
+        backtest_totals = {k: round(v, 2) for k, v in backtest_totals.items()}
+        backtest_history = [{"date": d, **tb} for d, tb in backtest_days]
+
         # Bill reconciliation: does GridLock's own live-tracked estimate
         # agree with the real bill entity? Only days where both are
         # present — bill_import is explicitly None (not skipped via a
@@ -1261,7 +1290,10 @@ class GridLock(hass.Hass):
                                    "profile_comparison_totals": profile_totals,
                                    "bill_reconciliation_history": bill_recon_history,
                                    "bill_breakdown": bill_breakdown,
-                                   "bill_month_to_date": bill_month_to_date})
+                                   "bill_month_to_date": bill_month_to_date,
+                                   "tariff_backtest_totals": backtest_totals,
+                                   "tariff_backtest_days": backtest_day_counts,
+                                   "tariff_backtest_history": backtest_history})
 
     # ------------------------------------------------------------------
     # COST TRACKING
@@ -1276,12 +1308,16 @@ class GridLock(hass.Hass):
         self.tracked_onpeak_kwh_today = state.get("onpeak_kwh", 0.0)
         self.tracked_offpeak_cost_today = state.get("offpeak_cost", 0.0)
         self.tracked_onpeak_cost_today = state.get("onpeak_cost", 0.0)
+        self._backtest_import_kwh = state.get("backtest_import_kwh") or [0.0] * 48
+        self._backtest_export_kwh = state.get("backtest_export_kwh") or [0.0] * 48
 
     def _save_cost_tracking_state(self):
         self._save_json("cost_tracking_state.json", {
             "day": self.cost_tracking_day,
             "import_cost": self.tracked_import_cost_today,
             "export_value": self.tracked_export_value_today,
+            "backtest_import_kwh": self._backtest_import_kwh,
+            "backtest_export_kwh": self._backtest_export_kwh,
             "import_kwh": self.tracked_import_kwh_today,
             "offpeak_kwh": self.tracked_offpeak_kwh_today,
             "onpeak_kwh": self.tracked_onpeak_kwh_today,
@@ -1314,7 +1350,8 @@ class GridLock(hass.Hass):
             "offpeak_import_kwh": round(self.tracked_offpeak_kwh_today, 3),
             "onpeak_import_kwh": round(self.tracked_onpeak_kwh_today, 3),
             "offpeak_import_cost": round(self.tracked_offpeak_cost_today, 4),
-            "onpeak_import_cost": round(self.tracked_onpeak_cost_today, 4)})
+            "onpeak_import_cost": round(self.tracked_onpeak_cost_today, 4),
+            "tariff_backtest": self._compute_tariff_backtest()})
         self.savings_history = dict(list(self.savings_history.items())[-400:])
         self._save_json("savings_history.json", self.savings_history)
         self.cost_tracking_day = today_iso
@@ -1325,6 +1362,46 @@ class GridLock(hass.Hass):
         self.tracked_onpeak_kwh_today = 0.0
         self.tracked_offpeak_cost_today = 0.0
         self.tracked_onpeak_cost_today = 0.0
+        self._backtest_import_kwh = [0.0] * 48
+        self._backtest_export_kwh = [0.0] * 48
+
+    def _compute_tariff_backtest(self):
+        """What the day that just ended would REALLY have cost under each
+        configured tariff, applying that tariff's own real rate
+        structure to what you actually used and exported — not a
+        forward-looking re-optimized plan. Exists because doing this by
+        hand in chat (cross-referencing several separately-fetched real
+        data sources over many turns) produced two different answers for
+        the same real numbers before the mistake was caught — this is
+        the tested, single-source-of-truth version of that calculation,
+        computed automatically every day rather than on demand and by
+        hand. Best-effort: any one tariff's price data being unavailable
+        (e.g. EDF's live poll having failed that day) just skips that
+        tariff for the day rather than losing the whole day's record."""
+        results = {}
+        live_standing = self.get_float_state(self.ent_daily_standing_charge, 0.0)
+        results["Current (real)"] = round(
+            self.tracked_import_cost_today - self.tracked_export_value_today + live_standing, 4)
+        for t in self.compare_tariffs:
+            name = t.get("name", "tariff")
+            try:
+                results[name] = core_tariff_backtest.backtest_day_cost(
+                    self._backtest_import_kwh, self._backtest_export_kwh,
+                    import_default=t.get("import_default", self.default_import),
+                    import_windows=t.get("import", []),
+                    export_rate=float(t.get("export", 0.0)),
+                    standing_gbp=float(t.get("standing") or 0.0))
+            except (KeyError, ValueError, TypeError) as exc:
+                self.log(f"Tariff backtest skipped {name!r} for today: {exc!r}", level="DEBUG")
+        for term, prod in self.edf_goelec_products.items():
+            pattern = core_tariff_backtest.edf_windows_to_daily_pattern(prod.get("windows"))
+            if not pattern:
+                continue
+            results[f"EDF GoElectric ({term})"] = core_tariff_backtest.backtest_day_cost(
+                self._backtest_import_kwh, self._backtest_export_kwh,
+                import_default=pattern["default"], import_windows=pattern["windows"],
+                export_rate=self.edf_export_rate, standing_gbp=prod.get("standing_gbp", 0.0))
+        return results
 
     def _update_energy_cost_tracking(self, now):
         self._roll_cost_day(now)
@@ -1332,13 +1409,16 @@ class GridLock(hass.Hass):
         if grid_kw is None:
             return
         kwh = grid_kw * (5 / 60)
+        slot_idx = now.hour * 2 + (1 if now.minute >= 30 else 0)
         if self.ent_exporting and self.get_state(self.ent_exporting) == "on":
             exp_rate = self.get_float_state(self.ent_export_rate, self.default_export)
             self.tracked_export_value_today += kwh * exp_rate
+            self._backtest_export_kwh[slot_idx] += kwh
         elif self.ent_importing and self.get_state(self.ent_importing) == "on":
             imp_rate = self.get_float_state(self.ent_import_rate, self.default_import)
             self.tracked_import_cost_today += kwh * imp_rate
             self.tracked_import_kwh_today += kwh
+            self._backtest_import_kwh[slot_idx] += kwh
             # Same cheap_rate threshold already used for the off-peak
             # Bypass classification in publish_plan — not a new concept.
             if imp_rate <= self.cheap_rate:

@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.32.0 - 2026-09-20
+
+### Improvement
+- New real 30-day tariff backtest — a genuinely different question from the existing forward-looking comparison: not "what would the optimiser plan next," but "what would each tariff's own real rate structure actually have cost, applied to what you genuinely used and exported each day." Built from GridLock's own real per-day tracked usage, accumulated automatically one real day at a time on the Tariffs tab. Written specifically because doing this exact calculation by hand (cross-referencing several separately-fetched real data sources across a long conversation) produced two different answers for the same real numbers before the mistake was caught — this replaces that fragile, error-prone manual process with a tested, single-source-of-truth calculation that can't silently disagree with itself
+- New `core/tariff_backtest.py` (`backtest_day_cost`, `edf_windows_to_daily_pattern`) — pure functions, unit tested, including a real-shaped EDF off-peak-window extraction case and a midnight-wrapping off-peak window case
+
 ## 3.31.0 - 2026-09-19
 
 ### Fix

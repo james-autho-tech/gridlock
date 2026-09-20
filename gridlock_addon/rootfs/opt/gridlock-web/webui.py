@@ -273,6 +273,8 @@ def build_status():
         "plan_accuracy": savings.get("attributes", {}).get("plan_accuracy"),
         "profile_comparison_history": savings.get("attributes", {}).get("profile_comparison_history") or [],
         "profile_comparison_totals": savings.get("attributes", {}).get("profile_comparison_totals") or {},
+        "tariff_backtest_totals": savings.get("attributes", {}).get("tariff_backtest_totals") or {},
+        "tariff_backtest_days": savings.get("attributes", {}).get("tariff_backtest_days") or {},
         "carbon_now": as_float(carbon, None),
         "carbon_index": carbon.get("attributes", {}).get("index"),
         "carbon_forecast_data": carbon.get("attributes", {}).get("forecast_data") or [],
@@ -1370,6 +1372,34 @@ function renderTariffCompare(results, activeTariffName) {
     <div style="color:var(--dim);font-size:12px;margin-bottom:10px">Lower is better. <span style="color:var(--green)">Credit</span> means you'd end the period in profit; <span style="color:var(--amber)">cost</span> means it's a net expense. Bar length shows how much extra each option would cost you compared with your best one — not its own raw size.</div>
     <div class="gl-tariff-list">${rows}</div>`;
 }
+function renderTariffBacktest(totals, dayCounts) {
+  const names = Object.keys(totals || {});
+  if (!names.length) {
+    return '<div style="color:var(--dim)">No real usage data yet — this builds up one real day at a time.</div>';
+  }
+  const rows = names.map(name => ({ name, cost: Number(totals[name]), days: Number(dayCounts[name]) || 1 }));
+  rows.sort((a, b) => (a.cost / a.days) - (b.cost / b.days));
+  const bestPerDay = rows[0].cost / rows[0].days;
+  const maxExtra = Math.max(...rows.map(r => (r.cost / r.days) - bestPerDay), 0.01);
+  const html = rows.map(r => {
+    const perDay = r.cost / r.days;
+    const extra = perDay - bestPerDay;
+    const pct = Math.max(2, (extra / maxExtra) * 100);
+    const isBest = Math.abs(extra) < 0.005;
+    const valueLabel = r.cost < 0
+      ? `<span style="color:var(--green)">£${Math.abs(r.cost).toFixed(2)} credit</span>`
+      : `<span style="color:var(--amber)">£${r.cost.toFixed(2)} cost</span>`;
+    return `<div class="gl-tariff-row${isBest ? ' is-best' : ''}">
+      <div class="gl-name-col">
+        <span class="gl-name">${esc(r.name)}${isBest ? ' 🏆' : ''}</span>
+        <span class="gl-tariff-rates">${r.days} real day${r.days === 1 ? '' : 's'}</span>
+      </div>
+      <div class="gl-tariff-track"><div class="gl-tariff-fill" style="width:${pct.toFixed(0)}%"></div></div>
+      <div class="gl-tariff-value-col num">${valueLabel}<span class="gl-tariff-per-day">£${perDay.toFixed(2)}/day</span></div>
+    </div>`;
+  }).join('');
+  return `<div class="gl-tariff-list">${html}</div>`;
+}
 function fmtTs(iso) {
   try {
     return new Date(iso).toLocaleString(undefined, {
@@ -2188,6 +2218,11 @@ async function refresh() {
         <div class="gl-h">Tariff comparison</div>
         <div class="gl-sub">Estimated cost over the same plan horizon, each tariff re-optimised under your active strategy (<b style="color:var(--ink)">${esc(d.mode_active)}</b>) — not just today's rates re-applied to today's plan.</div>
         ${renderTariffCompare(d.compare_results, d.best_tariff)}
+      </div>
+      <div class="gl-wrap">
+        <div class="gl-h">Real 30-day tariff backtest</div>
+        <div class="gl-sub">What each tariff's own real rate structure would actually have cost, applied to what you genuinely used and exported each day — not a re-optimised plan. Builds up one real day at a time; a tariff with fewer real days behind it (shown per row) is a thinner sample than one that's been tracked the whole month.</div>
+        ${renderTariffBacktest(d.tariff_backtest_totals, d.tariff_backtest_days)}
       </div>
       ${renderEvSchedule(d.ev_schedule)}
     </div>
