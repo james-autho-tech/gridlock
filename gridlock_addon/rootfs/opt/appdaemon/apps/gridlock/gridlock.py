@@ -27,6 +27,7 @@ from core import thermal as core_thermal
 from core import diagnostics as core_diagnostics
 from core import warranty as core_warranty
 from core.ev_schedule import find_cheapest_window
+from core import ev_charge_assist as core_ev_charge_assist
 from core import tariff_backtest as core_tariff_backtest
 
 STATE_FILES = ("load_profile.json", "savings_state.json", "savings_history.json",
@@ -443,6 +444,16 @@ class GridLock(hass.Hass):
                     self.discharge_kw = hw_max
 
         self.ev_concurrent_charge_kw = float(a.get("ev_concurrent_charge_kw", 5.0))
+        # EV Charge Assist: every Tesla Fleet vehicle discovered, keyed by
+        # its device slug — see core/ev_charge_assist.py's own docstring
+        # for why this exists (the supplier's own smart charging is
+        # linked to the shared charger, not either specific car, and
+        # can't read a Tesla's real battery % over its own protocol).
+        # last_commanded per vehicle avoids re-sending the same switch
+        # command every 5-minute tick, matching the DHW control pattern
+        # (_apply_thermal_control) elsewhere in this file.
+        self.ev_vehicle_stems = self.registry.find_tesla_vehicle_stems()
+        self.ev_vehicle_last_commanded = {stem: None for stem in self.ev_vehicle_stems}
         self.cheap_rate = float(a.get("cheap_rate_threshold", 0.10))
         self.min_export_pct = float(a.get("min_export_pct", 5.0))
         # Superseded by the LP optimiser, which paces battery use
@@ -2156,6 +2167,44 @@ class GridLock(hass.Hass):
             return kw > 0.05
         return bool(self.ent_ev) and self.get_state(self.ent_ev) == "on"
 
+    def _manage_ev_charge_assist(self):
+        """For each Tesla Fleet vehicle discovered (self.ev_vehicle_stems),
+        take over active charge control if it's the one currently plugged
+        into the shared charger — see core/ev_charge_assist.py's own
+        docstring for the full reasoning. "Plugged in" is read from each
+        vehicle's OWN charging-state sensor (any state other than
+        "disconnected" means a cable is connected — Tesla's real states
+        include "Charging"/"Stopped"/"Complete"/"NoPower" etc, none of
+        which are "disconnected"), not the shared charger's own state,
+        since the charger has no way to tell the two vehicles apart at
+        all. last_commanded per vehicle (reset to None once unplugged)
+        avoids re-sending an unchanged switch command every tick, same
+        pattern as the DHW control's own state["last_commanded"]."""
+        if not self.ev_vehicle_stems:
+            return
+        in_cheap_window = self.get_float_state(
+            self.ent_import_rate, self.default_import) <= self.cheap_rate
+        if self.ent_dispatch and self.get_state(self.ent_dispatch) == "on":
+            in_cheap_window = True
+        for stem in self.ev_vehicle_stems:
+            charging_state = self.get_state(f"sensor.{stem}_charging")
+            plugged_in = bool(charging_state) and charging_state not in (
+                "disconnected", "unavailable", "unknown")
+            if not plugged_in:
+                self.ev_vehicle_last_commanded[stem] = None
+                continue
+            battery_pct = self.get_float_state(f"sensor.{stem}_battery_level", None)
+            charge_limit_pct = self.get_float_state(f"number.{stem}_charge_limit", None)
+            command = core_ev_charge_assist.should_charge(
+                battery_pct, charge_limit_pct, in_cheap_window)
+            if command == self.ev_vehicle_last_commanded.get(stem):
+                continue
+            self.ev_vehicle_last_commanded[stem] = command
+            # target={"entity_id": ...}, not the plain entity_id= kwarg —
+            # matches every other place this codebase commands hardware.
+            self.call_service(f"switch/turn_{'on' if command else 'off'}",
+                               target={"entity_id": f"switch.{stem}_charge"})
+
     # ------------------------------------------------------------------
     # SLOT MODEL / OPTIMISER
     # ------------------------------------------------------------------
@@ -3689,6 +3738,7 @@ class GridLock(hass.Hass):
         cur = slots[0]
         action = core_optimizer.action(cur)
         ev_active = self._ev_is_charging()
+        self._manage_ev_charge_assist()
         session = self.active_saving_session(now)
         storm = self.storm_active()
         off_grid = self.grid_connection_off()

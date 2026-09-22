@@ -111,6 +111,22 @@ class HASensorRegistry:
             return None
         return base_entity.split(".", 1)[1][: -len(suffix)]
 
+    def find_tesla_vehicle_stems(self):
+        """Device slug for every Tesla Fleet vehicle discovered, keyed off
+        `cover.<stem>_charge_port_door` — a concept unique enough to
+        Tesla's own entity naming (no other integration models a charge
+        port door) to use as a reliable anchor without needing HA's
+        device registry, which isn't exposed over the REST API this
+        whole registry is built against. Returns every match, not just
+        one — unlike find(), more than one real vehicle is the normal
+        case here (this project's whole reason for existing: two Teslas
+        sharing one charger), not a sign of ambiguity to warn about."""
+        suffix = "_charge_port_door"
+        return sorted(
+            eid.split(".", 1)[1][: -len(suffix)]
+            for eid in self.find_all(domain="cover", contains=suffix)
+            if eid.endswith(suffix))
+
     # -- EV charger -----------------------------------------------------
     def find_hypervolt_charging(self):
         flat = self._flat()

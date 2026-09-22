@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.41.0 - 2026-09-22
+
+### Improvement
+- New EV Charge Assist — auto-discovers every Tesla Fleet vehicle and directly commands whichever one is actually plugged into the shared charger to charge during cheap/dispatch windows, using its own real battery %/target from Tesla (not the charger, which can't tell vehicles apart or read a Tesla's true state of charge)
+
 ## 3.40.0 - 2026-09-20
 
 ### Fix
