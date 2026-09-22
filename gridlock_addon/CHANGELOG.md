@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.41.1 - 2026-09-22
+
+### Fix
+- EV Charge Assist now actually visible — new `sensor.gridlock_ev_charge_assist` (which car's connected, its real battery %/target, whether it's charging right now) and every command change logs into the existing GridLock Decision Log, instead of silently flipping a switch with no way to see what happened or why
+
 ## 3.41.0 - 2026-09-22
 
 ### Improvement

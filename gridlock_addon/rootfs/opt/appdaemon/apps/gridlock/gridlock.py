@@ -2186,17 +2186,22 @@ class GridLock(hass.Hass):
             self.ent_import_rate, self.default_import) <= self.cheap_rate
         if self.ent_dispatch and self.get_state(self.ent_dispatch) == "on":
             in_cheap_window = True
+        vehicles = {}
         for stem in self.ev_vehicle_stems:
             charging_state = self.get_state(f"sensor.{stem}_charging")
             plugged_in = bool(charging_state) and charging_state not in (
                 "disconnected", "unavailable", "unknown")
+            battery_pct = self.get_float_state(f"sensor.{stem}_battery_level", None) \
+                if plugged_in else None
+            charge_limit_pct = self.get_float_state(f"number.{stem}_charge_limit", None) \
+                if plugged_in else None
+            command = core_ev_charge_assist.should_charge(
+                battery_pct, charge_limit_pct, in_cheap_window) if plugged_in else False
+            vehicles[stem] = {"plugged_in": plugged_in, "battery_pct": battery_pct,
+                               "charge_limit_pct": charge_limit_pct, "charging": command}
             if not plugged_in:
                 self.ev_vehicle_last_commanded[stem] = None
                 continue
-            battery_pct = self.get_float_state(f"sensor.{stem}_battery_level", None)
-            charge_limit_pct = self.get_float_state(f"number.{stem}_charge_limit", None)
-            command = core_ev_charge_assist.should_charge(
-                battery_pct, charge_limit_pct, in_cheap_window)
             if command == self.ev_vehicle_last_commanded.get(stem):
                 continue
             self.ev_vehicle_last_commanded[stem] = command
@@ -2204,6 +2209,18 @@ class GridLock(hass.Hass):
             # matches every other place this codebase commands hardware.
             self.call_service(f"switch/turn_{'on' if command else 'off'}",
                                target={"entity_id": f"switch.{stem}_charge"})
+            self._log_decision(
+                f"EV Charge Assist: {stem} {'charging' if command else 'idle'}",
+                f"{stem} at {battery_pct}% (target {charge_limit_pct}%), "
+                f"{'a cheap/dispatch window is active' if in_cheap_window else 'no cheap/dispatch window right now'}")
+        plugged = [s for s, v in vehicles.items() if v["plugged_in"]]
+        overview = ", ".join(f"{s}: {'charging' if vehicles[s]['charging'] else 'waiting'}"
+                              for s in plugged) if plugged else "no vehicle connected"
+        self.set_state("sensor.gridlock_ev_charge_assist", state=overview,
+                       attributes={"friendly_name": "GridLock EV Charge Assist",
+                                   "icon": "mdi:ev-station",
+                                   "in_cheap_window": in_cheap_window,
+                                   "vehicles": vehicles})
 
     # ------------------------------------------------------------------
     # SLOT MODEL / OPTIMISER
