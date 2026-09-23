@@ -2197,8 +2197,15 @@ class GridLock(hass.Hass):
                 if plugged_in else None
             command = core_ev_charge_assist.should_charge(
                 battery_pct, charge_limit_pct, in_cheap_window) if plugged_in else False
-            vehicles[stem] = {"plugged_in": plugged_in, "battery_pct": battery_pct,
-                               "charge_limit_pct": charge_limit_pct, "charging": command}
+            # _json_safe(), not the raw None — a None reaching HA's state
+            # attributes silently breaks serialisation (confirmed live:
+            # the whole nested vehicle dict came back empty, not just
+            # this one field), the same failure mode _json_safe was
+            # already built to guard plan_table cells against.
+            vehicles[stem] = {"plugged_in": plugged_in,
+                               "battery_pct": self._json_safe(battery_pct),
+                               "charge_limit_pct": self._json_safe(charge_limit_pct),
+                               "charging": command}
             if not plugged_in:
                 self.ev_vehicle_last_commanded[stem] = None
                 continue

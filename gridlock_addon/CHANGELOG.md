@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.41.2 - 2026-09-23
+
+### Fix
+- Fixed `sensor.gridlock_ev_charge_assist` showing both vehicles as empty — a raw `None` for a disconnected car's battery %/target silently wiped the whole nested vehicle entry, the same serialisation failure mode `_json_safe()` already exists to guard against elsewhere
+
 ## 3.41.1 - 2026-09-22
 
 ### Fix
