@@ -227,6 +227,7 @@ def build_status():
     warranties = get("sensor.gridlock_warranties")
     saving_raw = get(status_attrs.get("saving_events_entity")) or {}
     saving_attrs = saving_raw.get("attributes", {})
+    edf_perks = _edf_perks(status_attrs, get)
 
     pv_kw = sum(as_kw(get(e))
                 for e in (status_attrs.get("pv_power_entities") or []))
@@ -346,7 +347,39 @@ def build_status():
         "ssen_postcode": status_attrs.get("ssen_postcode"),
         "saving_joined": saving_attrs.get("joined_events") or [],
         "saving_available": saving_attrs.get("available_events") or [],
+        "supplier": status_attrs.get("supplier_domain"),
+        "edf_perks": edf_perks,
         "entities": _entities_panel(status_attrs),
+    }
+
+
+def _edf_perks(status_attrs, get):
+    """EDF's own loyalty perks for the Alerts tab, read straight from
+    the entities gridlock.py discovered — None when not on EDF, so the
+    page falls back to the Octopus sessions panel."""
+    if status_attrs.get("supplier_domain") != "edf_energy":
+        return None
+
+    def state(key):
+        return (get(status_attrs.get(key)) or {}) if status_attrs.get(key) else {}
+
+    def live(value):
+        return value if value not in (None, "", "unknown", "unavailable") else None
+
+    events = state("edf_power_perks_events_entity").get("attributes", {})
+    bonus = state("edf_flextras_bonus_hours_entity")
+    sunday = state("edf_sunday_saver_start_entity")
+    return {
+        "flextras_registered": state("edf_flextras_registered_entity").get("state") == "on",
+        "power_perks_registered":
+            state("edf_power_perks_registered_entity").get("state") == "on",
+        "bonus_hours": live(bonus.get("state")),
+        "bonus_hours_claimed": bool(bonus.get("attributes", {}).get("claimed")),
+        "free_windows": [w for w in (events.get("free_electricity_windows") or [])
+                         if isinstance(w, dict) and w.get("start") and w.get("end")],
+        "sunday_saver_enrolled": bool(sunday.get("attributes", {}).get("is_enrolled")),
+        "sunday_saver_start": live(sunday.get("state")),
+        "sunday_saver_end": live(state("edf_sunday_saver_end_entity").get("state")),
     }
 
 
@@ -2054,6 +2087,31 @@ function renderProfileComparison(totals, activeMode) {
   }).join('');
   return `<div class="gl-grid">${tiles}</div>`;
 }
+function renderEdfPerks(p) {
+  const yesNo = (on, yes, no) => `<span style="color:${on ? 'var(--green)' : 'var(--dim)'}">${on ? yes : no}</span>`;
+  const tiles = `<div class="gl-grid">
+    <div class="gl-tile"><div class="lbl">Flextras</div><div class="val" style="font-size:16px">${yesNo(p.flextras_registered, 'Joined', 'Not joined')}</div></div>
+    <div class="gl-tile"><div class="lbl">Power Perks</div><div class="val" style="font-size:16px">${yesNo(p.power_perks_registered, 'Registered', 'Not registered')}</div></div>
+    <div class="gl-tile"><div class="lbl">Bonus hours</div><div class="val num">${p.bonus_hours === null ? '—' : esc(String(p.bonus_hours))}${p.bonus_hours_claimed ? ' <span style="color:var(--dim);font-size:12px">claimed</span>' : ''}</div></div>
+    <div class="gl-tile"><div class="lbl">Sunday Saver</div><div class="val" style="font-size:16px">${yesNo(p.sunday_saver_enrolled, 'Enrolled', 'Not enrolled')}</div></div>
+  </div>`;
+  const now = Date.now();
+  const windows = (p.free_windows || []).filter(w => new Date(w.end).getTime() > now);
+  if (p.sunday_saver_enrolled && p.sunday_saver_start && p.sunday_saver_end) {
+    windows.push({ start: p.sunday_saver_start, end: p.sunday_saver_end, label: 'Sunday Saver' });
+  }
+  windows.sort((a, b) => new Date(a.start) - new Date(b.start));
+  const rows = windows.length
+    ? windows.map(w => `
+      <div class="gl-sess-row">
+        <span>${esc(fmtDate(w.start))} – ${esc(fmtTime(w.end))}</span>
+        <span class="code"><span style="color:var(--green);font-weight:700">free electricity</span> <span style="color:var(--dim)">(${esc(w.label || 'Power Perks')})</span></span>
+      </div>`).join('')
+    : '<div style="color:var(--dim)">No upcoming free-electricity windows announced.</div>';
+  const note = p.power_perks_registered ? ''
+    : '<div class="gl-sub">Windows are only planned around once Power Perks registration is confirmed.</div>';
+  return `${tiles}<div style="margin-top:10px">${rows}</div>${note}`;
+}
 function renderSavingSessions(joined, available) {
   const parts = [];
   if (available && available.length) {
@@ -2212,10 +2270,13 @@ async function refresh() {
           <div class="gl-tile"><div class="lbl">Severe weather</div><div class="val" style="font-size:16px;color:${d.ssen_severe ? 'var(--red)' : 'var(--green)'}">${d.ssen_severe ? 'Flagged' : 'Clear'}</div></div>
         </div>` : `<div style="color:var(--dim)">No postcode set — SSEN polling is off until you add one. Set <code>ssen_postcode</code> in apps.yaml, or "SSEN Postcode Override" in the add-on's Configuration tab (e.g. "SW1A 1").</div>`}
       </div>
-      <div class="gl-wrap">
+      ${d.edf_perks ? `<div class="gl-wrap">
+        <div class="gl-h">EDF perks</div>
+        ${renderEdfPerks(d.edf_perks)}
+      </div>` : `<div class="gl-wrap">
         <div class="gl-h">Saving sessions</div>
         ${renderSavingSessions(d.saving_joined, d.saving_available)}
-      </div>
+      </div>`}
     </div>
     <div class="tab-page" data-tab="billing">
       <div class="gl-wrap">

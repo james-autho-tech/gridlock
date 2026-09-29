@@ -191,17 +191,6 @@ class GridLock(hass.Hass):
         # staying with a different supplier than import).
         self.supplier_domain = next(
             (d for d in KRAKEN_FORK_DOMAINS if f".{d}_" in (self.ent_import_rate or "")), None)
-        # Smart-charging dispatch is part of the IMPORT tariff, so an
-        # auto-discovered dispatch entity from a different integration
-        # than the import rate's is a leftover, never a live signal —
-        # an explicitly configured one is still trusted as-is.
-        if (self.supplier_domain and self.ent_dispatch
-                and not (a.get("octopus_dispatch")
-                         or self.overrides.get("octopus_dispatch_override"))
-                and f".{self.supplier_domain}_" not in self.ent_dispatch):
-            self.log(f"Ignoring {self.ent_dispatch} — import is on {self.supplier_domain}, "
-                     "so another integration's dispatch entity no longer applies.")
-            self.ent_dispatch = None
         self.ent_export_rate = (a.get("export_rate")
                                 or self.overrides.get("export_rate_override")
                                 or (self.supplier_domain and self.registry.find(
@@ -236,6 +225,23 @@ class GridLock(hass.Hass):
                                     or self.overrides.get("power_up_events_override")
                                     or self.registry.find(
             prefix="event.octopus_energy_", suffix="_octoplus_power_up_events"))
+
+        # Smart-charging dispatch and demand-flexibility sessions are all
+        # part of the IMPORT supply, so an auto-discovered one from a
+        # different integration than the import rate's is a leftover
+        # from before a supplier switch — still planning around (or
+        # auto-joining) it would chase rewards that can't be paid out.
+        # An explicitly configured one is still trusted as-is.
+        for attr, keys in (("ent_dispatch", ("octopus_dispatch",)),
+                           ("ent_saving_events", ("octopus_saving_events",)),
+                           ("ent_power_up_events", ("power_up_events",))):
+            ent = getattr(self, attr)
+            explicit = any(a.get(k) or self.overrides.get(f"{k}_override") for k in keys)
+            if (self.supplier_domain and ent and not explicit
+                    and f".{self.supplier_domain}_" not in ent):
+                self.log(f"Ignoring {ent} — import is on {self.supplier_domain}, so "
+                         "another integration's import-side programme no longer applies.")
+                setattr(self, attr, None)
 
         # EDF's own "Power Perks" (part of its Flextras loyalty scheme) —
         # a genuinely separate mechanism from Octopus's Power Up: not a
@@ -4059,6 +4065,10 @@ class GridLock(hass.Hass):
                                        self.ent_edf_flextras_registered,
                                    "edf_sunday_saver_start_entity":
                                        self.ent_edf_sunday_saver_start,
+                                   "edf_sunday_saver_end_entity":
+                                       self.ent_edf_sunday_saver_end,
+                                   "edf_flextras_bonus_hours_entity":
+                                       self.ent_edf_flextras_bonus_hours,
                                    "ev_vehicle_stems": self.ev_vehicle_stems or None,
                                    "saving_events_entity": self.ent_saving_events,
                                    "daily_import_cost_entity": self.ent_daily_import_cost,

@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.43.0 - 2026-09-29
+
+### New
+- Alerts tab shows an EDF perks panel in place of Saving sessions when import is on EDF — Flextras / Power Perks / Sunday Saver status, bonus hours, and upcoming free-electricity windows
+
+### Fix
+- A previous supplier's leftover Saving Sessions / Power Up entities are no longer planned around or auto-joined once import has moved to a different supplier
+
 ## 3.42.1 - 2026-09-29
 
 ### Fix
