@@ -15,7 +15,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install dependencies
-        run: pip install pulp pytest
+        run: pip install "pulp>=2.7,<4" pytest
       - name: Run tests (default/CBC solver)
         run: python3 -m pytest tests/ -q
       - name: Install GLPK
