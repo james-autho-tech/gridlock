@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.42.1 - 2026-09-29
+
+### Fix
+- A previous supplier's leftover smart-charging dispatch entity is no longer picked up once import has moved to a different supplier — dispatch is part of the import tariff, so it could only ever be stale
+
 ## 3.42.0 - 2026-09-29
 
 ### New

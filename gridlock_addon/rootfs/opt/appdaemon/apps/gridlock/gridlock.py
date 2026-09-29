@@ -191,6 +191,17 @@ class GridLock(hass.Hass):
         # staying with a different supplier than import).
         self.supplier_domain = next(
             (d for d in KRAKEN_FORK_DOMAINS if f".{d}_" in (self.ent_import_rate or "")), None)
+        # Smart-charging dispatch is part of the IMPORT tariff, so an
+        # auto-discovered dispatch entity from a different integration
+        # than the import rate's is a leftover, never a live signal —
+        # an explicitly configured one is still trusted as-is.
+        if (self.supplier_domain and self.ent_dispatch
+                and not (a.get("octopus_dispatch")
+                         or self.overrides.get("octopus_dispatch_override"))
+                and f".{self.supplier_domain}_" not in self.ent_dispatch):
+            self.log(f"Ignoring {self.ent_dispatch} — import is on {self.supplier_domain}, "
+                     "so another integration's dispatch entity no longer applies.")
+            self.ent_dispatch = None
         self.ent_export_rate = (a.get("export_rate")
                                 or self.overrides.get("export_rate_override")
                                 or (self.supplier_domain and self.registry.find(
