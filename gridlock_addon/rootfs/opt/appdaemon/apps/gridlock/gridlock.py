@@ -182,8 +182,20 @@ class GridLock(hass.Hass):
                                 or self.overrides.get("import_rate_override")
                                 or self.registry.find(
             prefix=_kraken_prefixes("sensor", "electricity_"), suffix="_current_rate", avoid="export"))
+        # Which Kraken-fork integration the import rate actually came
+        # from — a supplier switch commonly leaves the previous
+        # supplier's integration installed with its entities still
+        # reporting, so anything else discovered below tries the import
+        # rate's own integration first and only falls back to any
+        # Kraken fork if that one has no match (e.g. export genuinely
+        # staying with a different supplier than import).
+        self.supplier_domain = next(
+            (d for d in KRAKEN_FORK_DOMAINS if f".{d}_" in (self.ent_import_rate or "")), None)
         self.ent_export_rate = (a.get("export_rate")
                                 or self.overrides.get("export_rate_override")
+                                or (self.supplier_domain and self.registry.find(
+            prefix=f"sensor.{self.supplier_domain}_electricity_",
+            suffix="_export_current_rate"))
                                 or self.registry.find(
             prefix=_kraken_prefixes("sensor", "electricity_"), suffix="_export_current_rate"))
         # Octopus renamed "Saving Sessions" to "Power Down" sessions
@@ -4028,6 +4040,15 @@ class GridLock(hass.Hass):
                                    "export_rate_entity": self.ent_export_rate,
                                    "ev_entity": self.ent_ev,
                                    "dispatch_entity": self.ent_dispatch,
+                                   "supplier_domain": self.supplier_domain,
+                                   "edf_power_perks_events_entity": self.ent_edf_power_perks_events,
+                                   "edf_power_perks_registered_entity":
+                                       self.ent_edf_power_perks_registered,
+                                   "edf_flextras_registered_entity":
+                                       self.ent_edf_flextras_registered,
+                                   "edf_sunday_saver_start_entity":
+                                       self.ent_edf_sunday_saver_start,
+                                   "ev_vehicle_stems": self.ev_vehicle_stems or None,
                                    "saving_events_entity": self.ent_saving_events,
                                    "daily_import_cost_entity": self.ent_daily_import_cost,
                                    "daily_export_value_entity": self.ent_daily_export_value,

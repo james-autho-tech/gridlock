@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.42.0 - 2026-09-29
+
+### New
+- Entities tab now shows which supplier is in use, plus EDF's own Power Perks / Flextras / Sunday Saver entities when on EDF
+- Entities tab now lists every vehicle EV Charge Assist discovered, under EV
+
+### Fix
+- Export rate discovery now tries the import rate's own supplier integration first — a previous supplier's still-installed integration could win the match after a switch
+- Octopus-only rows (IOG dispatch, Saving sessions) no longer show as "not found" on an EDF account
+
 ## 3.41.2 - 2026-09-23
 
 ### Fix

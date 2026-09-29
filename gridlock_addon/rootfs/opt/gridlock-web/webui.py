@@ -346,7 +346,41 @@ def build_status():
         "ssen_postcode": status_attrs.get("ssen_postcode"),
         "saving_joined": saving_attrs.get("joined_events") or [],
         "saving_available": saving_attrs.get("available_events") or [],
-        "entities": {
+        "entities": _entities_panel(status_attrs),
+    }
+
+
+SUPPLIER_NAMES = {"octopus_energy": "Octopus", "edf_energy": "EDF"}
+
+
+def _entities_panel(status_attrs):
+    """Label -> entity_id for the Entities tab. Supplier-specific rows
+    only appear for the supplier actually in use (or where one of its
+    entities was discovered anyway), so a missing perk entity reads as
+    "not found" only when it's genuinely expected to exist."""
+    supplier = status_attrs.get("supplier_domain")
+    entities = _base_entities(status_attrs)
+    entities["Supplier"] = SUPPLIER_NAMES.get(supplier, supplier)
+    edf = {
+        "EDF Power Perks events": status_attrs.get("edf_power_perks_events_entity"),
+        "EDF Power Perks registered": status_attrs.get("edf_power_perks_registered_entity"),
+        "EDF Flextras registered": status_attrs.get("edf_flextras_registered_entity"),
+        "EDF Sunday Saver": status_attrs.get("edf_sunday_saver_start_entity"),
+    }
+    if supplier == "edf_energy" or any(edf.values()):
+        entities.update(edf)
+    if supplier == "edf_energy":
+        # Octopus-only programmes -- only worth a row if one's still there.
+        for label in ("IOG dispatch", "Saving sessions"):
+            if not entities.get(label):
+                entities.pop(label, None)
+    for stem in status_attrs.get("ev_vehicle_stems") or []:
+        entities[f"Vehicle: {stem}"] = f"switch.{stem}_charge"
+    return entities
+
+
+def _base_entities(status_attrs):
+    return {
             "Battery SoC": status_attrs.get("soc_entity"),
             "Import rate": status_attrs.get("import_rate_entity"),
             "Export rate": status_attrs.get("export_rate_entity"),
@@ -367,7 +401,6 @@ def build_status():
             "Discharge cutoff (hardware)": status_attrs.get("discharge_cutoff_entity"),
             "Storm Watch": ", ".join(status_attrs.get("storm_watch_entities") or []) or None,
             "SSEN postcode": status_attrs.get("ssen_postcode"),
-        },
     }
 
 
@@ -1287,15 +1320,16 @@ const ENTITY_CATEGORIES = [
   { name: 'Battery', icon: '🔋', labels: ['Battery SoC', 'Battery power', 'Battery temp', 'Battery SoH', 'Discharge cutoff (hardware)'] },
   { name: 'Inverter', icon: '🧠', labels: ['Inverter temp', 'PV power'] },
   { name: 'Grid', icon: '⚡', labels: ['Grid power', 'Import rate', 'Export rate', 'Daily import cost', 'Daily export value', 'Daily standing charge'] },
-  { name: 'EV', icon: '🚗', labels: ['EV charging', 'EV power'] },
+  { name: 'EV', icon: '🚗', labels: ['EV charging', 'EV power'], prefix: 'Vehicle: ' },
   { name: 'Weather & Alerts', icon: '🌩️', labels: ['Storm Watch', 'SSEN postcode'] },
-  { name: 'Tariff & Home', icon: '🏠', labels: ['IOG dispatch', 'Saving sessions', 'Load power'] },
+  { name: 'Tariff & Home', icon: '🏠', labels: ['Supplier', 'IOG dispatch', 'Saving sessions', 'EDF Power Perks events', 'EDF Power Perks registered', 'EDF Flextras registered', 'EDF Sunday Saver', 'Load power'] },
 ];
 function renderEntityCards(entities, weather) {
   entities = entities || {};
   const cards = ENTITY_CATEGORIES.map(cat => {
     const rows = cat.labels
       .filter(l => l in entities)
+      .concat(cat.prefix ? Object.keys(entities).filter(l => l.startsWith(cat.prefix)) : [])
       .map(l => {
         const eid = entities[l];
         return `<div class="gl-ent-row">
