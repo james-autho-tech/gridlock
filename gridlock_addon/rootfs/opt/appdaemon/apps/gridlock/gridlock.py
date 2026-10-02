@@ -40,7 +40,8 @@ STATE_FILES = ("load_profile.json", "savings_state.json", "savings_history.json"
 # two can never drift out of sync with each other.
 PLAN_TABLE_COLS = ["slot", "import_p", "export_p", "pv_kwh", "load_kwh",
                    "grid_kwh", "charge_kwh", "battery_kwh", "action", "ev_kwh",
-                   "dispatch", "saving_session", "power_up_session", "session_reward_p",
+                   "dispatch", "saving_session", "power_up_session", "free_electricity",
+                   "session_reward_p",
                    "session_baseline_kwh", "session_export_baseline_kwh",
                    "soc_pct", "cost_delta_p", "total_gbp",
                    "import_rank", "export_rank"]
@@ -2521,7 +2522,14 @@ class GridLock(hass.Hass):
             # build_slots() as power_up_baseline_kwh, no separate
             # joined/available distinction to check against.
             in_power_up_session = s.get("power_up_baseline_kwh") is not None
-            power_up_cell = "<span style='color:#4ade80'>⚡🆓</span>" if in_power_up_session else "—"
+            # A genuinely free import window (see build_slots()'s
+            # free_electricity_windows) shares the same column: without
+            # its own marker the only trace of it in the plan is a 0.0p
+            # import rate, easy to read past.
+            in_free_electricity = bool(s.get("free_electricity"))
+            power_up_cell = ("<span style='color:#4ade80'>🆓</span>" if in_free_electricity
+                             else "<span style='color:#4ade80'>⚡🆓</span>" if in_power_up_session
+                             else "—")
             session_reward_p = cost_trace[i].get("session_reward_gbp", 0.0) * 100
             # Whichever programme applies to this slot (mutually
             # exclusive per slot) — shown alongside grid_kwh so a small
@@ -2588,6 +2596,7 @@ class GridLock(hass.Hass):
                 1 if s["dispatch"] else 0,
                 1 if in_saving_session else 0,
                 1 if in_power_up_session else 0,
+                1 if in_free_electricity else 0,
                 round(session_reward_p, 2),
                 round(session_baseline_kwh, 3),
                 round(session_export_baseline_kwh, 3),
@@ -2603,7 +2612,7 @@ class GridLock(hass.Hass):
         html = ("<table class='gridlock-plan'><tr><th>Slot</th><th>Import</th>"
                 "<th>Export</th><th>PV kWh</th><th>Load kWh</th>"
                 "<th>Grid kWh</th><th>Charge kWh</th><th>Battery kWh</th><th>Action</th>"
-                "<th>EV kWh</th><th>Saving session</th><th>Power Up</th><th>SoC</th><th>Grid £</th><th>Total £</th></tr>"
+                "<th>EV kWh</th><th>Saving session</th><th>Free</th><th>SoC</th><th>Grid £</th><th>Total £</th></tr>"
                 + "".join(rows) + "</table>")
         self.set_state("sensor.gridlock_soc_forecast", state=str(trace[0]),
                        attributes={"friendly_name": "GridLock SoC Forecast",
@@ -2614,7 +2623,18 @@ class GridLock(hass.Hass):
                                    "learned_load_profile": learned,
                                    "plan_table": {"columns": PLAN_TABLE_COLS,
                                                   "rows": plan_table,
-                                                  "total_slots": len(slots)}})
+                                                  "total_slots": len(slots)},
+                                   # What the plan itself is treating as
+                                   # free import, and how far ahead it
+                                   # looks — lets the dashboard say per
+                                   # announced window whether it's being
+                                   # planned around yet, rather than
+                                   # leaving that to be inferred.
+                                   "free_electricity_slots": [
+                                       s["start"].isoformat() for s in slots
+                                       if s.get("free_electricity")],
+                                   "plan_horizon_end": (slots[-1]["end"].isoformat()
+                                                        if slots else None)})
         return html
 
     def publish_compare(self, slots, soc0, live_cost, now):

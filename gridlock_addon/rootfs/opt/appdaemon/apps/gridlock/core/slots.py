@@ -68,7 +68,8 @@ def build_slots(now, *, import_windows, export_windows, dispatch_windows,
                  power_down_export_windows=(), power_up_export_windows=(),
                  free_electricity_windows=()):
     """Returns a list of slot dicts:
-    {start, end, imp, exp, pv, load, dispatch, ev_kwh, charge, export,
+    {start, end, imp, exp, pv, load, dispatch, ev_kwh, free_electricity,
+     charge, export,
      power_down_baseline_kwh, power_down_points_per_kwh,
      power_down_export_baseline_kwh, power_up_baseline_kwh,
      power_up_export_baseline_kwh, next_cheap_idx, remaining_deficit}
@@ -91,7 +92,8 @@ def build_slots(now, *, import_windows, export_windows, dispatch_windows,
         s = base + timedelta(minutes=slot_min * i)
         e = s + timedelta(minutes=slot_min)
         imp = rate_at(import_windows, s, live_import_rate if i == 0 else default_import_rate)
-        if any(ws <= s < we for ws, we in free_electricity_windows):
+        in_free = any(ws <= s < we for ws, we in free_electricity_windows)
+        if in_free:
             imp = 0.0
         ev_win = next(((ds, de, kwh) for ds, de, kwh in dispatch_windows if ds <= s < de), None)
         in_disp = ev_win is not None
@@ -110,6 +112,7 @@ def build_slots(now, *, import_windows, export_windows, dispatch_windows,
             "load": load_kwh_fn(s),
             "dispatch": in_disp,
             "ev_kwh": ev_slot_kwh,
+            "free_electricity": in_free,
             "charge": 0.0,
             "export": 0.0,
         })

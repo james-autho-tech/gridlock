@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.44.0 - 2026-10-02
+
+### New
+- Plan table marks free-electricity slots with 🆓 (column renamed "Free", shared with Power Up) — previously the only sign was a 0.0p import rate
+- EDF perks panel says per announced window whether it's in the plan, beyond the plan horizon, or not being planned around
+- Plan CSV export includes a "Free electricity" column
+- EDF perks panel explains that bonus hours are banked hours with no scheduled time, not plannable windows
+
+### Fix
+- EDF perks panel labelled every window "Power Perks" regardless of its real source, and listed a Sunday Saver window twice
+
 ## 3.43.0 - 2026-09-29
 
 ### New

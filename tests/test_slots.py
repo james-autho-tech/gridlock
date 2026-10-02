@@ -81,6 +81,10 @@ def test_free_electricity_window_overrides_import_rate_to_zero():
     assert free_slots, "fixture should include at least one slot inside the free window"
     assert all(s["imp"] == 0.0 for s in free_slots)
     assert all(s["imp"] == 0.20 for s in other_slots)
+    # Flagged per slot too, so the plan can mark them rather than leave
+    # a 0.0p rate as the only sign.
+    assert all(s["free_electricity"] for s in free_slots)
+    assert not any(s["free_electricity"] for s in other_slots)
 
 
 def test_import_rate_falls_back_to_prior_night_past_published_horizon():

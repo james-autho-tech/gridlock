@@ -227,7 +227,7 @@ def build_status():
     warranties = get("sensor.gridlock_warranties")
     saving_raw = get(status_attrs.get("saving_events_entity")) or {}
     saving_attrs = saving_raw.get("attributes", {})
-    edf_perks = _edf_perks(status_attrs, get)
+    edf_perks = _edf_perks(status_attrs, get, forecast.get("attributes", {}))
 
     pv_kw = sum(as_kw(get(e))
                 for e in (status_attrs.get("pv_power_entities") or []))
@@ -353,7 +353,7 @@ def build_status():
     }
 
 
-def _edf_perks(status_attrs, get):
+def _edf_perks(status_attrs, get, forecast_attrs):
     """EDF's own loyalty perks for the Alerts tab, read straight from
     the entities gridlock.py discovered — None when not on EDF, so the
     page falls back to the Octopus sessions panel."""
@@ -380,6 +380,8 @@ def _edf_perks(status_attrs, get):
         "sunday_saver_enrolled": bool(sunday.get("attributes", {}).get("is_enrolled")),
         "sunday_saver_start": live(sunday.get("state")),
         "sunday_saver_end": live(state("edf_sunday_saver_end_entity").get("state")),
+        "planned_free_slots": forecast_attrs.get("free_electricity_slots") or [],
+        "plan_horizon_end": forecast_attrs.get("plan_horizon_end"),
     }
 
 
@@ -769,6 +771,7 @@ const PLAN_CSV_HEADERS = {
   battery_kwh: 'Battery (kWh)',
   action: 'Action', ev_kwh: 'EV (kWh)', dispatch: 'EV dispatch slot',
   saving_session: 'Saving session', power_up_session: 'Power Up session',
+  free_electricity: 'Free electricity',
   session_reward_p: 'Session reward (p)', session_baseline_kwh: 'Session baseline (kWh)',
   session_export_baseline_kwh: 'Session export baseline (kWh)',
   soc_pct: 'SoC (%)',
@@ -1327,7 +1330,7 @@ function renderPlanTable(table, opts) {
       <td>${actionPill(r.action)}</td>
       <td>${Number(r.dispatch) > 0.5 ? `<span style="color:var(--cyan)">⚡ ${Number(r.ev_kwh).toFixed(2)}</span>` : '—'}</td>
       <td>${Number(r.saving_session) > 0.5 ? `<span title="${savingSessionTitle(r)}" style="color:#facc15">💰${Number(r.session_reward_p).toFixed(1) !== '0.0' ? `<br><span class="num" style="font-size:11px">+${Number(r.session_reward_p).toFixed(1)}p</span>` : ''}</span>` : '—'}</td>
-      <td>${Number(r.power_up_session) > 0.5 ? `<span title="Octopus Power Up (Free Electricity) — credits consuming MORE than a predicted baseline this window (based on YOUR OWN historic usage for this half-hour), at your own unit rate. Baseline ~${Number(r.session_baseline_kwh).toFixed(2)}kWh vs ${Number(r.grid_kwh).toFixed(2)}kWh actually imported — credit is proportional to the excess above that. Separate from export: this rewards using extra power (e.g. charging harder), not selling it." style="color:#4ade80">⚡🆓${Number(r.session_reward_p).toFixed(1) !== '0.0' ? `<br><span class="num" style="font-size:11px">+${Number(r.session_reward_p).toFixed(1)}p</span>` : ''}</span>` : '—'}</td>
+      <td>${Number(r.free_electricity) > 0.5 ? `<span title="Free electricity window — every kWh imported this slot costs nothing, so the plan prices import at 0p here." style="color:#4ade80">🆓</span>` : Number(r.power_up_session) > 0.5 ? `<span title="Octopus Power Up (Free Electricity) — credits consuming MORE than a predicted baseline this window (based on YOUR OWN historic usage for this half-hour), at your own unit rate. Baseline ~${Number(r.session_baseline_kwh).toFixed(2)}kWh vs ${Number(r.grid_kwh).toFixed(2)}kWh actually imported — credit is proportional to the excess above that. Separate from export: this rewards using extra power (e.g. charging harder), not selling it." style="color:#4ade80">⚡🆓${Number(r.session_reward_p).toFixed(1) !== '0.0' ? `<br><span class="num" style="font-size:11px">+${Number(r.session_reward_p).toFixed(1)}p</span>` : ''}</span>` : '—'}</td>
       <td>${socMiniBar(r.soc_pct)}</td>
       <td style="color:${Number(r.cost_delta_p) <= 0 ? 'var(--green)' : 'var(--amber)'}">${Number(r.cost_delta_p) > 0 ? '+' : ''}${Number(r.cost_delta_p).toFixed(1)}p</td>
       <td>£${Number(r.total_gbp).toFixed(2)}</td>
@@ -1339,7 +1342,7 @@ function renderPlanTable(table, opts) {
         <th>Action</th>
         <th>EV kWh</th>
         <th title="Rewards importing LESS than a predicted baseline — not exporting more. These are separate decisions; ECO with 0 grid import is already earning the full credit available.">Saving</th>
-        <th title="Credits consuming MORE than a predicted baseline, at your own unit rate — not exporting more. Separate from the export decision.">Power Up</th>
+        <th title="🆓 a genuinely free import window (0p for the whole slot). ⚡🆓 Octopus Power Up — credits consuming MORE than a predicted baseline, at your own unit rate; not exporting more, and separate from the export decision.">Free</th>
         <th>SoC</th>
         <th>Grid £</th><th>Total £</th></tr>
     ${trs}
@@ -2092,22 +2095,40 @@ function renderEdfPerks(p) {
   const tiles = `<div class="gl-grid">
     <div class="gl-tile"><div class="lbl">Flextras</div><div class="val" style="font-size:16px">${yesNo(p.flextras_registered, 'Joined', 'Not joined')}</div></div>
     <div class="gl-tile"><div class="lbl">Power Perks</div><div class="val" style="font-size:16px">${yesNo(p.power_perks_registered, 'Registered', 'Not registered')}</div></div>
-    <div class="gl-tile"><div class="lbl">Bonus hours</div><div class="val num">${p.bonus_hours === null ? '—' : esc(String(p.bonus_hours))}${p.bonus_hours_claimed ? ' <span style="color:var(--dim);font-size:12px">claimed</span>' : ''}</div></div>
+    <div class="gl-tile" title="Hours banked with EDF as a joining bonus. They carry no start or end time, so they are not windows the plan can schedule around — only announced windows listed below are."><div class="lbl">Bonus hours</div><div class="val num">${p.bonus_hours === null ? '—' : esc(String(p.bonus_hours))}${p.bonus_hours_claimed ? ' <span style="color:var(--dim);font-size:12px">claimed</span>' : ''}</div></div>
     <div class="gl-tile"><div class="lbl">Sunday Saver</div><div class="val" style="font-size:16px">${yesNo(p.sunday_saver_enrolled, 'Enrolled', 'Not enrolled')}</div></div>
   </div>`;
   const now = Date.now();
-  const windows = (p.free_windows || []).filter(w => new Date(w.end).getTime() > now);
-  if (p.sunday_saver_enrolled && p.sunday_saver_start && p.sunday_saver_end) {
+  const ms = iso => new Date(iso).getTime();
+  // free_windows is the integration's rolling history as well as what's
+  // still to come — only the latter belongs in this list.
+  const windows = (p.free_windows || []).filter(w => ms(w.end) > now)
+    .map(w => ({ ...w, label: w.source === 'sunday_saver' ? 'Sunday Saver' : 'Power Perks' }));
+  if (p.sunday_saver_enrolled && p.sunday_saver_start && p.sunday_saver_end
+      && !windows.some(w => ms(w.start) === ms(p.sunday_saver_start))) {
     windows.push({ start: p.sunday_saver_start, end: p.sunday_saver_end, label: 'Sunday Saver' });
   }
-  windows.sort((a, b) => new Date(a.start) - new Date(b.start));
+  windows.sort((a, b) => ms(a.start) - ms(b.start));
+  const plannedSlots = (p.planned_free_slots || []).map(ms);
+  const horizonEnd = p.plan_horizon_end ? ms(p.plan_horizon_end) : null;
+  // Whether the plan is actually pricing this window as free yet — an
+  // announced window isn't the same thing as a planned-around one.
+  const planStatus = w => {
+    if (plannedSlots.some(s => s >= ms(w.start) && s < ms(w.end))) {
+      return '<span style="color:var(--green)">in plan</span>';
+    }
+    if (horizonEnd !== null && ms(w.start) >= horizonEnd) {
+      return '<span style="color:var(--dim)">beyond the plan horizon — joins it nearer the time</span>';
+    }
+    return '<span style="color:var(--amber)">not in plan</span>';
+  };
   const rows = windows.length
     ? windows.map(w => `
       <div class="gl-sess-row">
         <span>${esc(fmtDate(w.start))} – ${esc(fmtTime(w.end))}</span>
-        <span class="code"><span style="color:var(--green);font-weight:700">free electricity</span> <span style="color:var(--dim)">(${esc(w.label || 'Power Perks')})</span></span>
+        <span class="code"><span style="color:var(--green);font-weight:700">free electricity</span> <span style="color:var(--dim)">(${esc(w.label)})</span> · ${planStatus(w)}</span>
       </div>`).join('')
-    : '<div style="color:var(--dim)">No upcoming free-electricity windows announced.</div>';
+    : '<div style="color:var(--dim)">No upcoming free-electricity windows announced — nothing for the plan to use yet.</div>';
   const note = p.power_perks_registered ? ''
     : '<div class="gl-sub">Windows are only planned around once Power Perks registration is confirmed.</div>';
   return `${tiles}<div style="margin-top:10px">${rows}</div>${note}`;
