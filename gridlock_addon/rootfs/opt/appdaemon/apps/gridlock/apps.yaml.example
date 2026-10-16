@@ -372,8 +372,7 @@ gridlock:
   # load_mgmt_warn_pct: 0.80     # start throttling the charge rate above this % of the fuse rating
   # load_mgmt_critical_pct: 0.90  # the real ceiling charging throttles toward — never charge past this
 
-  # --- GridWarm: heat pump thermal model + anticipatory plan (Phase 1,
-  #     advisory only) ---
+  # --- GridWarm: heat pump thermal model + anticipatory plan ---
   # For each zone, looks ahead at the outdoor temperature forecast and
   # eases the target down before a forecast warm-up (passive warming
   # will do some of the work, so less active heating is needed) or
@@ -388,9 +387,10 @@ gridlock:
   # little more now if cold is coming. Heat output stays "low and slow"
   # (heat_min_power, gentle and continuous) unless a zone is genuinely
   # far behind — see boost_threshold_degrees below — rather than
-  # cycling to full power like a boiler. **Never writes to any
-  # climate/heating entity** — this is a recommended schedule, not one
-  # applied automatically. No auto-discovery here — a heat-pump
+  # cycling to full power like a boiler. Prediction never writes to any
+  # climate/heating entity — it's a recommended schedule. A zone only
+  # ever gets commanded if it explicitly sets control_entity (see the
+  # per-zone notes below). No auto-discovery here — a heat-pump
   # controller's exact entity names are specific to the installed
   # hardware, so list your own zones explicitly.
   #
@@ -429,6 +429,49 @@ gridlock:
   #       anticipation_lookahead_hours: 3.0   # how far ahead to look for a trend (default shown)
   #       anticipation_sensitivity: 0.3       # °C of target adjustment per °C of anticipated swing (default shown)
   #       anticipation_max_adjust: 2.0        # caps the adjustment either way (default shown)
+  #       # --- Space heating control (opt-in, off unless control_entity is set) ---
+  #       # GridWarm can run the house's space heating itself: it switches
+  #       # the heat pump's space-heating power on/off each tick from its
+  #       # own model (room temperature vs target, anticipation-aware),
+  #       # with a hard frost/comfort floor it will never withhold heat
+  #       # below. Gated by the same READ-ONLY / ACTIVE master switch and
+  #       # per-zone pause helper as tank control. Written against the
+  #       # Midea-based "Heatpump Controller" ESPHome integration; the
+  #       # entity names below are that controller's -- check your own.
+  #       # control_entity: switch.loft_heatpump_controller_water_flow_temperature_control_zone_1
+  #       # control_safety_min_temp: 16   # room default (a tank's is 45) -- heat regardless of plan below this
+  #       # control_max_off_hours: 0      # room default: no cap (a tank's is 6h) -- a mild day legitimately needs no heat; the floor above is the safety net
+  #       # No thermostat you trust? Leave target_temp_entity out and set
+  #       # a constant instead. GridLock then owns the target itself via
+  #       # input_number.gridlock_gridwarm_target_<zone> (create it as a
+  #       # real helper, 5-30 °C step 0.5, to be able to change it from
+  #       # the GridWarm tab's ✏️; otherwise it's a fixed virtual entity).
+  #       # target_temp_constant: 20
+  #       # Preconditions on the device itself, checked before every
+  #       # write. A heat pump controller has installer-level settings
+  #       # that silently override its own power switch -- no fault code,
+  #       # no log line, the switch just reverts or the unit sits in
+  #       # "Heating / Idle" for ever. While any of these is unmet GridWarm
+  #       # shows the zone as Blocked (with the reason) instead of
+  #       # commanding into a wall. Confirmed on real hardware for the
+  #       # Midea controller: "supports room thermostat" ON hands heating
+  #       # on/off to the thermostat terminals and the unit reverts the
+  #       # zone 1 switch within seconds; weather compensation left ON
+  #       # with a curve asking for a flow temperature below the unit's
+  #       # own 35 °C radiator minimum never starts the compressor.
+  #       # control_requires:
+  #       #   - entity: switch.loft_heatpump_controller_parameter_setting_1_supports_room_thermostat
+  #       #     state: "off"
+  #       #   - entity: switch.loft_heatpump_controller_weather_compensation_zone_1
+  #       #     state: "off"
+  #       #   - entity: select.loft_heatpump_controller_operational_mode
+  #       #     state: Heat
+  #       # heating_entity above is read as "on" == heating. For a sensor
+  #       # whose heating state is some other word (the controller's own
+  #       # active-state text sensor, say -- better than the compressor
+  #       # flag, which is also on during hot water runs), name it:
+  #       # heating_entity: sensor.loft_heatpump_controller_active_state
+  #       # heating_entity_state: Heating
   #     - name: "Hot Water Tank"
   #       internal_temp_entity: sensor.loft_heatpump_controller_water_tank_temperature_t5
   #       target_temp_entity: number.loft_heatpump_controller_set_dhw_tank_temperature_t5s

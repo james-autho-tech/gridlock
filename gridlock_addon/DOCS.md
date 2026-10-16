@@ -85,8 +85,9 @@ shortcut once enabled. Tabs:
 - **Circuits** — only shown once at least one power circuit is
   detected (see below); live draw and daily energy history per
   circuit.
-- **GridWarm** — only shown once a heat pump zone is configured (see
-  below); predicted temperature and heating cost per zone, plus COP.
+- **GridWarm** — the house's space heating, configured and controlled
+  from the tab itself (see below), plus any extra zones from `apps.yaml`;
+  predicted temperature and heating cost per zone, plus COP.
 - **Tariffs** — how today's plan compares against other EV/off-peak
   products from E.ON, Utility Warehouse, Ecotricity, Outfox Energy,
   ScottishPower, and Good Energy (see `compare_tariffs` in `apps.yaml` —
@@ -295,11 +296,13 @@ input — shown on its own **GridWarm** tab alongside the heat pump's COP.
 That tab only appears once at least one zone is configured (see below), the
 same on-demand pattern the Circuits tab already uses. **Prediction never
 writes to any climate or heating entity** — it's safe to try even on a heat
-pump GridLock knows nothing else about. A hot water tank zone can
-additionally opt into active control (see "Active control" below), which
-does write to one specific switch you configure — off by default, and kept
-deliberately separate from prediction, which always stays advisory-only
-regardless.
+pump GridLock knows nothing else about. A zone can additionally opt
+into active control (see "Active control" below), which does write to one
+specific switch you configure — off by default, and kept deliberately
+separate from prediction, which always stays advisory-only regardless. The
+house's own space heating zone is configured entirely from the GridWarm
+tab, no `apps.yaml` needed (see "Space heating, configured from the
+dashboard").
 
 A plain weather-compensation curve only ever reacts to the *current*
 outdoor temperature. GridWarm looks ahead instead, using the same
@@ -398,19 +401,41 @@ rough guess, not a measurement) — compare the dashboard's predicted vs.
 actual temperature line over a few days and adjust the numbers that look
 most off, the same way you'd tune any forecast.
 
-**Room zones stay advisory-only for now.** Writing to a live thermostat in a
-lived-in house is a different risk category from a hot water tank — wrong
-comfort decisions affect people living there, not just cost — so active
-control is deliberately limited to DHW for the moment, not bundled in for
-rooms from the start.
+### Space heating, configured from the dashboard
 
-### Active control (hot water tank only)
+The house's own space heating zone doesn't need `apps.yaml` at all. The
+GridWarm tab has a **⚙️ Space heating settings** form covering everything:
+the room thermometer that counts as "the house", the target temperature,
+the safety floor, the heat pump's heating switch to command, the "heating
+now" sensor and the value that means heating, outdoor/weather entities,
+the heat pump preconditions (below), and the thermal-model numbers under
+an "advanced" fold. Saved settings are picked up by the engine on its next
+tick — no restart. The zone appears pre-filled for the reference install
+this was built against (a Midea air-to-water heat pump on the Mosibi
+"Heatpump Controller" ESPHome integration, one radiator loop); every
+field is editable, and "Show this zone" unticked hides it entirely.
 
-A tank zone can set `control_entity` to a switch that forces the heat pump
-to heat the tank on or off — GridWarm will then actually command it each
-tick based on its own plan, instead of just predicting. This is **off
-unless `control_entity` is explicitly set** — nothing else about GridWarm
-changes behaviour just because this exists.
+**GridLock owns the target.** There's deliberately no thermostat in the
+loop for this zone — the target is a number you set from the tab (the ✏️
+next to it, or the form), and GridWarm regulates the heat pump's
+space-heating power switch against the room reading directly. If that
+room reading goes unavailable (dead battery, wrong entity), the zone shows
+"no reading" and, while control is active, is **held ON**: with nothing to
+regulate against, heating is the safe failure mode, never off.
+
+`apps.yaml` zones still work exactly as before and can also set
+`control_entity` on a room now — the same code path, with the defaults
+below — for anyone who prefers the file.
+
+### Active control (hot water tank or space heating)
+
+A zone can set `control_entity` to a switch that turns the heat pump's
+heating of that zone on or off — a tank's force-heat switch, or the unit's
+own space-heating power switch — and GridWarm will then actually command
+it each tick based on its own plan, instead of just predicting. This is
+**off unless `control_entity` is set** (in `apps.yaml`, or the dashboard
+form's "Heating switch to command") — nothing else about GridWarm changes
+behaviour just because this exists.
 
 On top of that, there's a global master switch — the **READ-ONLY / ACTIVE**
 toggle on the GridWarm tab (`input_select.gridlock_gridwarm_mode`, auto-
@@ -445,19 +470,74 @@ like a heat pump, not a resistive element, before adding it to
 
 Two safety bounds apply on top of whatever the plan wants, both biased
 toward heating rather than withholding it (commanding heat on is always
-the safe failure mode here):
+the safe failure mode here). Their defaults differ by zone kind:
 
-- `control_safety_min_temp` (default 45°C) — a hard floor; heating is
-  forced on below this regardless of the plan, full stop.
-- `control_max_off_hours` (default 6) — caps how long this can hold
-  heating off continuously. This exists because GridWarm has no visibility
-  into your heat pump's own internal cycles (anti-legionella disinfection
-  in particular) — better to occasionally heat "unnecessarily" than risk
-  silently suppressing a safety cycle for an extended, indefinite stretch.
-  This is a conservative margin, not a confirmed interaction — the
-  disinfection function itself is never touched by this feature at all,
-  but whether it can still run its own schedule while this switch holds
-  heating off hasn't been verified against real hardware behaviour.
+- `control_safety_min_temp` — a hard floor; heating is forced on below
+  this regardless of the plan, full stop. Default 45°C for a tank, 16°C
+  (a frost/comfort floor) for a room.
+- `control_max_off_hours` — caps how long this can hold heating off
+  continuously. Default 6 for a tank: GridWarm has no visibility into
+  the heat pump's own internal cycles (anti-legionella disinfection in
+  particular) — better to occasionally heat "unnecessarily" than risk
+  silently suppressing a safety cycle for an extended, indefinite
+  stretch. This is a conservative margin, not a confirmed interaction —
+  the disinfection function itself is never touched by this feature at
+  all, but whether it can still run its own schedule while this switch
+  holds heating off hasn't been verified against real hardware
+  behaviour. Default 0 (no cap) for a room — there's no hidden cycle to
+  protect, a mild day legitimately needs no heat, and the floor above is
+  the safety net.
+
+### Heat pump preconditions (`control_requires`) and the read-back check
+
+A heat pump controller has installer-level settings that silently
+override its own power switch — no fault code, no log line. Found on real
+hardware (the Midea "Heatpump Controller"), both costing an afternoon of
+history digging:
+
+- **"Supports room thermostat" ON** (`parameter_setting_1_supports_room_thermostat`)
+  hands heating on/off to the unit's thermostat terminals. Any write to
+  the zone 1 space-heating switch is accepted and then reverted by the
+  unit within about three seconds. The sibling "room thermostat" bit is
+  only the thermostat *mode* sub-option and is not the gate.
+- **Weather compensation ON with a curve below the unit's minimum**
+  (`weather_compensation_zone_1`): the default user curve asked for a 25°C
+  flow at 13°C outdoors, under the unit's own 35°C radiator minimum, so it
+  sat in "Heating / Idle" with only the external pump relay energised and
+  never started the internal pump or compressor. Off, the fixed zone 1
+  flow setpoint applies and heating starts within about 90 seconds.
+
+So a zone can list preconditions — entity plus the state it must be in —
+checked before every write. While any is unmet nothing is written (the
+unit would ignore it anyway) and the zone shows **⛔ Blocked** with the
+reason and a one-click **Fix** button per unmet item (confirm first: it
+changes a setting on the unit itself; GridWarm re-checks on its next
+tick). The dashboard zone ships with the two Midea gates above plus
+"operational mode must be Heat" as its defaults; edit or add rows in the
+form. In `apps.yaml` it's a list under the zone:
+
+```yaml
+control_requires:
+  - entity: switch.loft_heatpump_controller_parameter_setting_1_supports_room_thermostat
+    state: "off"
+  - entity: switch.loft_heatpump_controller_weather_compensation_zone_1
+    state: "off"
+```
+
+Independently of that, every controlled zone gets a **read-back check**:
+if the switch GridWarm last commanded now reads the opposite, the zone
+shows **⚠️ Reverted**, the command is re-sent each tick, and one
+notification explains what to look at — so an overridden switch can't
+masquerade as "heating on". Once the cause is found, add it as a
+precondition so it's caught up front next time. (Only a definite
+opposite reading counts: an unavailable controller mid-reboot isn't a
+rejection.)
+
+A zone's `heating_entity` is normally read as "on" means heating; set
+`heating_entity_state` to another word to read a text sensor instead —
+the Midea controller's own `active_state` sensor says "Heating", and
+unlike its compressor flag isn't also on during a hot water run, so it
+doesn't mislead the model's learning.
 
 A real HA helper, `input_boolean.gridlock_gridwarm_control_<zone name>`, is
 auto-created as a manual pause switch — flip it (from Settings → Helpers,
@@ -466,10 +546,9 @@ to instantly stop GridWarm touching the switch and hand control back to the
 heat pump's own normal logic. Every command GridWarm actually sends is
 also visible in the Log tab, same as every other decision it makes.
 
-**Given this is the first thing in GridLock that writes to a heating
-device at all, watch it closely for the first day or two** — confirm hot
-water is actually available when needed, and pause it immediately via the
-helper above if anything looks wrong.
+**Watch it closely for the first day or two** — confirm hot water is
+actually available when needed and the house is warm when it should be,
+and pause it immediately via the helper above if anything looks wrong.
 
 ### Heat pump diagnostics (`gridwarm.diagnostics`)
 

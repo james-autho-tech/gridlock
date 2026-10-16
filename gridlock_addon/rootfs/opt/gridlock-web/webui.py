@@ -15,6 +15,7 @@ import urllib.request
 # so the two can never quietly drift apart.
 sys.path.insert(0, "/opt/appdaemon/apps/gridlock")
 from core.warranty import parse_install_date  # noqa: E402 — needs the path insert above first
+from core.space_heating import merge_settings as merge_space_heating_settings  # noqa: E402
 
 SUPERVISOR_TOKEN = os.environ["SUPERVISOR_TOKEN"]
 PORT = 8099
@@ -70,6 +71,27 @@ def save_warranty_entries(entries):
 
 # EV Agile smart-charging settings, same "no apps.yaml edit or add-on
 # restart needed" pattern as warranties above.
+# The dashboard-configured GridWarm space heating zone -- same
+# "written here, re-read by the engine on change" arrangement as the EV
+# schedule settings below; the shape and defaults live in
+# core/space_heating.py so the engine and this UI can't drift apart.
+GRIDWARM_SETTINGS_PATH = "/opt/appdaemon/apps/gridlock/gridwarm_settings.json"
+
+
+def load_gridwarm_settings():
+    try:
+        with open(GRIDWARM_SETTINGS_PATH) as f:
+            raw = json.load(f)
+        return raw if isinstance(raw, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_gridwarm_settings(settings):
+    with open(GRIDWARM_SETTINGS_PATH, "w") as f:
+        json.dump(settings, f)
+
+
 EV_SCHEDULE_SETTINGS_PATH = "/opt/appdaemon/apps/gridlock/ev_schedule_settings.json"
 
 
@@ -181,6 +203,21 @@ def ha_call_service(domain_service, entity_id, **data):
     payload = json.dumps({"entity_id": entity_id, **data}).encode()
     req = urllib.request.Request(
         f"http://supervisor/core/api/services/{domain_service}",
+        data=payload, method="POST",
+        headers={"Authorization": f"Bearer {SUPERVISOR_TOKEN}",
+                 "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return resp.status
+
+
+def ha_set_state(entity_id, state, attributes):
+    """POST a state straight onto an entity -- the only way to change
+    one of GridLock's own virtual (set_state-created, non-helper)
+    entities from here, since no input_number service exists for them.
+    Used only as the fallback when input_number/set_value is refused."""
+    payload = json.dumps({"state": state, "attributes": attributes}).encode()
+    req = urllib.request.Request(
+        f"http://supervisor/core/api/states/{entity_id}",
         data=payload, method="POST",
         headers={"Authorization": f"Bearer {SUPERVISOR_TOKEN}",
                  "Content-Type": "application/json"})
@@ -305,6 +342,11 @@ def build_status():
         "circuit_history": circuits.get("attributes", {}).get("history") or [],
         "thermal_zones": thermal_zones,
         "thermal_plan_summary": thermal.get("attributes", {}).get("plan_summary") or "",
+        # The engine publishes its merged view once it has ticked; before
+        # that (or on an engine that hasn't got this far) fall back to
+        # merging the file here so the form is never empty.
+        "space_heating_settings": (thermal.get("attributes", {}).get("space_heating_settings")
+                                   or merge_space_heating_settings(load_gridwarm_settings())),
         # None (not empty lists) when never configured, so the dashboard
         # knows to hide the card entirely rather than show an empty one.
         "heatpump_diagnostics": ({
@@ -585,6 +627,11 @@ PAGE = r"""<!doctype html>
                font-size:11px; padding:3px 9px; border-radius:6px; cursor:pointer;
                font-family:inherit; margin-left:6px; }
   .gl-btn-sm:hover { background:rgba(255,255,255,.12); }
+  .gl-inp { background:#0b1220; border:1px solid var(--line); color:var(--ink); border-radius:6px;
+            padding:6px 8px; font-family:inherit; font-size:12px; }
+  .gl-sh-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:10px; }
+  .gl-sh-grid .lbl { font-size:10px; margin-bottom:3px; }
+  .gl-sh-grid input { width:100%; box-sizing:border-box; }
   .gl-weather { display:flex; align-items:center; gap:12px; font-size:12px; color:var(--dim); }
   .gl-weather .temp { font-size:15px; font-weight:700; color:var(--ink); }
   .gl-weather-icon { font-size:18px; }
@@ -757,6 +804,7 @@ PAGE = r"""<!doctype html>
 <script>
 let currentTab = 'overview';
 let latestPlanTable = { columns: [], rows: [] };
+let latestStatus = null;
 function csvCell(v) {
   if (v === null || v === undefined) return '';
   const s = String(v);
@@ -889,6 +937,176 @@ async function setGridwarmMode(mode) {
     });
   } catch (e) { /* surfaced on next refresh() if the engine never picks it up */ }
   setTimeout(() => { gridwarmModeBusy = false; refresh(); }, 1500);
+}
+let zoneTargetBusy = false;
+async function setZoneTarget(current) {
+  if (zoneTargetBusy) return;
+  const next = window.prompt('Target temperature for the house (°C):', Number(current).toFixed(1));
+  if (next === null) return;  // cancelled
+  const value = parseFloat(next);
+  if (!isFinite(value)) { window.alert('Enter a number.'); return; }
+  zoneTargetBusy = true;
+  try {
+    const r = await fetch('api/gridwarm-target', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value }),
+    });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); window.alert(j.error || 'Could not set target'); }
+  } catch (e) { /* surfaced on next refresh() */ }
+  setTimeout(() => { zoneTargetBusy = false; refresh(); }, 1500);
+}
+let fixRequirementBusy = false;
+async function fixRequirement(entity, state) {
+  if (fixRequirementBusy) return;
+  if (!window.confirm(`Set ${entity} to "${state}" on the heat pump now?\n\nThis changes a setting on the unit itself (an installer-level one, possibly). GridWarm re-checks on its next tick, within 5 minutes.`)) return;
+  fixRequirementBusy = true;
+  try {
+    const r = await fetch('api/gridwarm-fix-requirement', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entity, state }),
+    });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); window.alert(j.error || 'Could not change it'); }
+  } catch (e) { /* surfaced on next refresh() */ }
+  setTimeout(() => { fixRequirementBusy = false; refresh(); }, 2000);
+}
+// ---- Space heating settings form (GridWarm tab) ----
+// refresh() rebuilds the whole page every 30s, so unsaved edits live in
+// shDraft and are re-applied on every render until Save/Reset clears
+// them -- otherwise half-typed entity ids would vanish mid-edit.
+let shDraft = null;
+let shOpen = false;
+let gridwarmEntities = null;
+function shVal(s, key) {
+  return (shDraft && Object.prototype.hasOwnProperty.call(shDraft, key)) ? shDraft[key] : s[key];
+}
+function shEdit(el) {
+  shDraft = shDraft || {};
+  const key = el.dataset.key;
+  if (el.type === 'checkbox') shDraft[key] = el.checked;
+  else shDraft[key] = el.value;
+}
+function shReqs(s) {
+  const reqs = (shDraft && shDraft.control_requires) ? shDraft.control_requires : (s.control_requires || []);
+  return reqs.map(r => ({ entity: r.entity || '', state: r.state || '' }));
+}
+function shEditReq(idx, field, value, s) {
+  shDraft = shDraft || {};
+  const reqs = shReqs(s);
+  reqs[idx] = { ...reqs[idx], [field]: value };
+  shDraft.control_requires = reqs;
+}
+function shAddReq() {
+  shDraft = shDraft || {};
+  const s = (latestStatus && latestStatus.space_heating_settings) || {};
+  shDraft.control_requires = shReqs(s).concat([{ entity: '', state: '' }]);
+  rerenderSpaceHeating();
+}
+function shRemoveReq(idx) {
+  shDraft = shDraft || {};
+  const s = (latestStatus && latestStatus.space_heating_settings) || {};
+  const reqs = shReqs(s); reqs.splice(idx, 1);
+  shDraft.control_requires = reqs;
+  rerenderSpaceHeating();
+}
+function rerenderSpaceHeating() {
+  const host = document.getElementById('gl-sh-host');
+  const s = (latestStatus && latestStatus.space_heating_settings) || null;
+  if (host && s) { host.innerHTML = renderSpaceHeatingSettings(s); fillGridwarmDatalists(); }
+}
+let shSaveBusy = false;
+async function saveSpaceHeating(reset) {
+  if (shSaveBusy) return;
+  if (reset && !window.confirm('Reset every space heating setting back to the defaults?')) return;
+  const s = (latestStatus && latestStatus.space_heating_settings) || {};
+  let body;
+  if (reset) body = { reset: true };
+  else {
+    body = { ...s, ...(shDraft || {}) };
+    body.control_requires = shReqs(s).filter(r => r.entity.trim() && r.state.trim());
+  }
+  shSaveBusy = true;
+  try {
+    const r = await fetch('api/gridwarm-settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); window.alert(j.error || 'Could not save'); }
+    else shDraft = null;
+  } catch (e) { window.alert('Could not reach GridLock to save.'); }
+  shSaveBusy = false;
+  refresh();
+}
+async function loadGridwarmEntities() {
+  if (gridwarmEntities) return;
+  try {
+    const r = await fetch('api/gridwarm-entities');
+    gridwarmEntities = await r.json();
+    fillGridwarmDatalists();
+  } catch (e) { gridwarmEntities = null; }
+}
+function fillGridwarmDatalists() {
+  if (!gridwarmEntities) return;
+  const fill = (id, ids) => { const dl = document.getElementById(id); if (dl) dl.innerHTML = ids.map(e => `<option value="${esc(e)}">`).join(''); };
+  fill('gl-dl-temp', gridwarmEntities.temperature || []);
+  fill('gl-dl-switch', gridwarmEntities.switch || []);
+  fill('gl-dl-sensor', gridwarmEntities.sensor || []);
+  fill('gl-dl-weather', gridwarmEntities.weather || []);
+  fill('gl-dl-any', gridwarmEntities.any || []);
+}
+function renderSpaceHeatingSettings(s) {
+  const inp = (key, label, extra = '', list = '') =>
+    `<div><div class="lbl">${label}</div><input class="gl-inp" data-key="${key}" value="${esc(String(shVal(s, key) ?? ''))}" oninput="shEdit(this)" ${extra} ${list ? `list="${list}"` : ''}></div>`;
+  const reqs = shReqs(s);
+  const reqRows = reqs.map((r, i) => `
+    <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+      <input class="gl-inp" style="flex:1" placeholder="entity, e.g. switch.heatpump_setting" value="${esc(r.entity)}" list="gl-dl-any" oninput="shEditReq(${i}, 'entity', this.value, latestStatus.space_heating_settings)">
+      <span style="color:var(--dim);font-size:11px">must be</span>
+      <input class="gl-inp" style="width:90px" placeholder="state" value="${esc(r.state)}" oninput="shEditReq(${i}, 'state', this.value, latestStatus.space_heating_settings)">
+      <button class="gl-btn-sm" title="Remove" onclick="shRemoveReq(${i})">✕</button>
+    </div>`).join('');
+  const dirty = !!shDraft;
+  return `
+    <details ${shOpen ? 'open' : ''} ontoggle="shOpen = this.open; if (this.open) loadGridwarmEntities();">
+      <summary style="cursor:pointer;color:var(--ink);font-weight:600;margin-top:14px">⚙️ Space heating settings${dirty ? ' <span style="color:var(--amber);font-weight:400;font-size:12px">(unsaved changes)</span>' : ''}</summary>
+      <div class="gl-sub" style="margin-top:6px">Everything about GridWarm's control of the house heating, configured here — no apps.yaml, no restart; the engine picks changes up on its next tick (within 5 minutes). GridLock owns the target itself: there is deliberately no thermostat in the loop. Nothing is commanded until the mode above is ACTIVE and the zone isn't paused.</div>
+      <div class="gl-sh-grid" style="margin-top:10px">
+        <div><div class="lbl">Show this zone</div><label style="font-size:12px;color:var(--ink)"><input type="checkbox" data-key="configured" ${shVal(s, 'configured') ? 'checked' : ''} onchange="shEdit(this)"> predicted and shown on this tab</label></div>
+        ${inp('name', 'Zone name')}
+        ${inp('internal_temp_entity', 'Room temperature (the one thermometer that is "the house")', '', 'gl-dl-temp')}
+        ${inp('target_temp', 'Target °C', 'type="number" step="0.5" min="5" max="30"')}
+        ${inp('control_safety_min_temp', 'Safety floor °C — heat regardless of plan below this', 'type="number" step="0.5" min="5" max="25"')}
+        ${inp('control_entity', 'Heating switch to command (blank = predict only, never command)', '', 'gl-dl-switch')}
+        ${inp('heating_entity', '"Heating now" sensor', '', 'gl-dl-any')}
+        ${inp('heating_entity_state', '…and the value that means heating (e.g. on / Heating)')}
+        ${inp('external_temp_entity', 'Outdoor temperature sensor', '', 'gl-dl-temp')}
+        ${inp('weather_entity', 'Weather entity (forecast for the lookahead)', '', 'gl-dl-weather')}
+        ${inp('cop_entity', 'Live COP sensor (optional)', '', 'gl-dl-sensor')}
+      </div>
+      <div style="margin-top:12px"><div class="lbl">Heat pump preconditions — settings on the unit that silently override its heating switch</div>
+        <div class="gl-sub" style="margin:4px 0 0">Checked before every write. While any is unmet the zone shows ⛔ Blocked with a one-click Fix instead of commanding a switch the unit will revert. The defaults are the two found on a Midea unit: its room-thermostat-present flag (reverts the switch within seconds) and weather compensation (its curve asked for a flow temperature under the unit's own minimum, so it idled for ever).</div>
+        ${reqRows}
+        <button class="gl-btn-sm" style="margin-top:6px" onclick="shAddReq()">+ Add precondition</button>
+      </div>
+      <details style="margin-top:12px"><summary style="cursor:pointer;color:var(--dim);font-size:12px">Thermal model numbers (advanced — the heat-loss ones self-refine over time)</summary>
+        <div class="gl-sh-grid" style="margin-top:8px">
+          ${inp('heat_loss_degrees', 'Heat loss °C/h per °C inside–outside', 'type="number" step="0.001" min="0"')}
+          ${inp('heat_loss_watts', 'Fixed background loss, W', 'type="number" step="10" min="0"')}
+          ${inp('heat_gain_static', 'Passive gain (people, electronics), W', 'type="number" step="10" min="0"')}
+          ${inp('heat_max_power', 'Heat pump max thermal output, W', 'type="number" step="100" min="0"')}
+          ${inp('heat_min_power', 'Thermal output when modulating near target, W', 'type="number" step="100" min="0"')}
+          ${inp('heating_cop', 'Assumed COP (when no live sensor)', 'type="number" step="0.05" min="0.5"')}
+          ${inp('heat_volume', 'Heated volume, m³ (for thermal mass)', 'type="number" step="1" min="1"')}
+          ${inp('hysteresis', 'Start heating this far below target, °C', 'type="number" step="0.1" min="0"')}
+          ${inp('hysteresis_off', 'Stop heating this far above target, °C', 'type="number" step="0.1" min="0"')}
+          ${inp('control_max_off_hours', 'Max continuous hours off (0 = no cap)', 'type="number" step="1" min="0"')}
+        </div>
+      </details>
+      <div style="display:flex;gap:8px;margin-top:12px;align-items:center">
+        <button class="gl-btn-sm" onclick="saveSpaceHeating(false)" ${dirty ? '' : 'disabled'}>Save</button>
+        <button class="gl-btn-sm" onclick="shDraft = null; rerenderSpaceHeating();" ${dirty ? '' : 'disabled'}>Discard changes</button>
+        <button class="gl-btn-sm" onclick="saveSpaceHeating(true)">Reset to defaults</button>
+      </div>
+      <datalist id="gl-dl-temp"></datalist><datalist id="gl-dl-switch"></datalist><datalist id="gl-dl-sensor"></datalist><datalist id="gl-dl-weather"></datalist><datalist id="gl-dl-any"></datalist>
+    </details>`;
 }
 let zoneRenameBusy = false;
 async function renameZone(realName, currentDisplayName) {
@@ -1658,12 +1876,24 @@ function renderGridwarmControlCell(control) {
     return `<span class="gl-pill gl-pill-eco">⏸️ Paused</span>
       <button class="gl-btn-sm" onclick="setGridwarmPause('${control.pause_helper}', false)">Resume</button>`;
   }
+  const pauseBtn = `<button class="gl-btn-sm" onclick="setGridwarmPause('${control.pause_helper}', true)">Pause</button>`;
+  if (control.blocked && control.blocked.length) {
+    // A precondition on the device itself isn't met -- nothing is being
+    // written, because the device would ignore it anyway (see
+    // control_requires in DOCS.md).
+    const fixes = (control.blocked_items || []).map(b =>
+      `<button class="gl-btn-sm" title="${esc(b.entity)} is ${esc(String(b.actual))} — set it to ${esc(b.state)}" onclick="fixRequirement('${esc(b.entity)}', '${esc(b.state)}')">Fix: ${esc(b.entity.split('.').pop().replace(/^loft_heatpump_controller_/, '').replace(/_/g, ' '))} → ${esc(b.state)}</button>`).join(' ');
+    return `<span class="gl-pill gl-pill-bypass" style="cursor:help" title="Not commanding — the device would ignore it until this is fixed:&#10;${esc(control.blocked.join('\n'))}">⛔ Blocked</span> ${fixes} ${pauseBtn}`;
+  }
   const statePill = control.commanded === null || control.commanded === undefined
     ? '<span style="color:var(--dim)">—</span>'
     : control.commanded
       ? '<span class="gl-pill gl-pill-charge">🔥 Heating</span>'
       : '<span class="gl-pill gl-pill-eco">Off</span>';
-  return `${statePill} <button class="gl-btn-sm" onclick="setGridwarmPause('${control.pause_helper}', true)">Pause</button>`;
+  const rejected = control.rejected
+    ? ` <span class="gl-pill gl-pill-storm" style="cursor:help" title="The device reverted GridWarm's last command (${control.commanded ? 'on' : 'off'}) — it is being re-sent each tick, but something on the unit itself is overriding its switch. On a Midea-style controller check the room-thermostat and weather-compensation settings (see DOCS.md).">⚠️ Reverted</span>`
+    : '';
+  return `${statePill}${rejected} ${pauseBtn}`;
 }
 function renderThermalZoneTable(zones) {
   const anyControlled = zones.some(z => z.control);
@@ -1671,8 +1901,8 @@ function renderThermalZoneTable(zones) {
   const rows = zones.map(z => `
     <tr>
       <td><span class="gl-legend-dot" style="background:${z._color}"></span>${esc(z.name)}${z.heating_on ? ' 🔥' : ''}${z.learned_heat_loss_degrees != null ? ` <span style="color:var(--dim);cursor:help" title="Learned from ${z.thermal_learning_observations || 0} real cooling-period observation${z.thermal_learning_observations === 1 ? '' : 's'}:&#10;heat_loss_degrees ${Number(z.learned_heat_loss_degrees).toFixed(4)} (started ${Number(z.config_heat_loss_degrees).toFixed(4)})&#10;heat_loss_watts ${Number(z.learned_heat_loss_watts).toFixed(1)} (started ${Number(z.config_heat_loss_watts).toFixed(1)})&#10;Refines gradually — a single observation can't swing it. Needs 8+ observations spanning a real spread of conditions before both figures are fitted independently; below that, only heat_loss_degrees refines.">🧠</span>` : ''} <span style="color:var(--dim);cursor:pointer" title="Rename zone" onclick="renameZoneFromEl(this)" data-real-name="${encodeURIComponent(z.real_name)}" data-display-name="${encodeURIComponent(z.name)}">✏️</span></td>
-      <td class="num">${Number(z.current_temp).toFixed(1)}°C</td>
-      <td class="num">${Number(z.target_temp).toFixed(1)}°C</td>
+      <td class="num">${z.current_temp === null || z.current_temp === undefined ? '<span style="color:var(--amber)" title="No usable reading from the room temperature entity — a controlled zone is held ON until one comes back">no reading</span>' : `${Number(z.current_temp).toFixed(1)}°C`}</td>
+      <td class="num">${z.target_temp === null || z.target_temp === undefined ? '—' : `${Number(z.target_temp).toFixed(1)}°C`}${z.target_editable ? ` <span style="color:var(--dim);cursor:pointer" title="Set target temperature" onclick="setZoneTarget(${Number(z.target_temp)})">✏️</span>` : ''}</td>
       <td class="num">${Number(z.cop).toFixed(2)}</td>
       <td class="num">£${Number(z.predicted_cost_today).toFixed(2)}</td>
       <td class="num" style="color:var(--dim)">£${Number(z.predicted_cost_today_baseline).toFixed(2)} fixed</td>
@@ -1733,7 +1963,7 @@ function renderThermalCombinedChart(zones) {
 }
 function renderThermalZones(zones) {
   if (!zones || !zones.length) {
-    return '<div style="color:var(--dim)">GridWarm isn\'t configured yet — add a <code>gridwarm</code> block to apps.yaml to enable it (see DOCS.md). Advisory only: this never controls your heating, it only predicts and displays.</div>';
+    return '<div style="color:var(--dim)">No zones shown — tick "Show this zone" in the space heating settings below, or add a <code>gridwarm</code> block to apps.yaml for extra zones (a hot water tank, say — see DOCS.md).</div>';
   }
   // Group by temperature range, not an explicit "kind" config -- a hot
   // water tank (40-65C) plotted on the same axis as rooms (15-25C) would
@@ -1741,13 +1971,16 @@ function renderThermalZones(zones) {
   // chart instead. No real room reaches 35C, so that's a safe split point.
   const colored = zones.map((z, i) => ({ ...z, _color: GRIDWARM_COLORS[i % GRIDWARM_COLORS.length] }));
   const isHighTemp = z => Math.max(z.current_temp, ...z.forecast_data.map(p => p.internal_temp)) > 35;
-  const rooms = colored.filter(z => !isHighTemp(z));
-  const tanks = colored.filter(isHighTemp);
+  const charted = colored.filter(z => (z.forecast_data || []).length);  // a "no reading" zone has nothing to plot
+  const rooms = charted.filter(z => !isHighTemp(z));
+  const tanks = charted.filter(isHighTemp);
   return `
     ${renderThermalZoneTable(colored)}
     ${rooms.length ? `<div style="margin-top:14px"><div class="lbl" style="margin-bottom:6px">Rooms</div>${renderThermalCombinedChart(rooms)}</div>` : ''}
     ${tanks.length ? `<div style="margin-top:14px"><div class="lbl" style="margin-bottom:6px">Hot water</div>${renderThermalCombinedChart(tanks)}</div>` : ''}
-    <div style="color:var(--dim);font-size:12px;margin-top:10px">Recommended schedule only — not applied automatically. Never controls your heating.</div>`;
+    <div style="color:var(--dim);font-size:12px;margin-top:10px">${zones.some(z => z.control)
+      ? 'Zones with a Control column are commanded by GridWarm while the mode above is ACTIVE (and not paused); every other zone is a recommended schedule only.'
+      : 'Recommended schedule only — not applied automatically. Never controls your heating.'}</div>`;
 }
 function heatpumpStateColor(state) {
   const s = String(state).toLowerCase();
@@ -2171,6 +2404,7 @@ async function refresh() {
     clearTimeout(t);
     d = await resp.json();
     latestPlanTable = d.plan_table || { columns: [], rows: [] };
+    latestStatus = d;
   } catch (e) {
     document.getElementById('app').innerHTML =
       `<div class="gl">Could not reach GridLock (${esc(e.message || e)}) — check the add-on log, or it may still be starting up.</div>`;
@@ -2335,9 +2569,10 @@ async function refresh() {
           <div class="gl-h">GridWarm</div>
           ${renderGridwarmModeToggle(d.gridwarm_control_mode)}
         </div>
-        <div class="gl-sub">Looks ahead at the outdoor temperature forecast for each zone — easing off before a forecast warm-up, adding a little heat ahead of a forecast cold snap — instead of only reacting to the current outdoor temperature. READ-ONLY (the default) only predicts and displays, never writes anywhere. ACTIVE lets any zone with its own <code>control_entity</code> configured actually be commanded — this tab only shows up once a heat pump is configured (see <code>gridwarm</code> in apps.yaml).</div>
+        <div class="gl-sub">Looks ahead at the outdoor temperature forecast for each zone — easing off before a forecast warm-up, adding a little heat ahead of a forecast cold snap — instead of only reacting to the current outdoor temperature. READ-ONLY (the default) only predicts and displays, never writes anywhere. ACTIVE lets any zone with a heating switch configured actually be commanded. The house's space heating is set up in the ⚙️ form below — no apps.yaml needed.</div>
         ${d.thermal_plan_summary ? `<div class="gl-sub" style="color:var(--ink)">${esc(d.thermal_plan_summary)}</div>` : ''}
         ${renderThermalZones(d.thermal_zones)}
+        <div id="gl-sh-host">${d.space_heating_settings ? renderSpaceHeatingSettings(d.space_heating_settings) : ''}</div>
       </div>
       ${renderHeatpumpDiagnostics(d.heatpump_diagnostics)}
     </div>
@@ -2384,7 +2619,8 @@ async function refresh() {
   }
   // GridWarm tab only makes sense once a heat pump zone is actually
   // configured — same on-demand nav visibility pattern as Circuits above.
-  const hasGridwarm = !!(d.thermal_zones && d.thermal_zones.length);
+  const hasGridwarm = !!(d.thermal_zones && d.thermal_zones.length) || !!d.space_heating_settings;
+  fillGridwarmDatalists();
   document.getElementById('gl-nav-gridwarm').style.display = hasGridwarm ? '' : 'none';
   if (!hasGridwarm && currentTab === 'gridwarm') {
     currentTab = 'overview';
@@ -2405,6 +2641,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(200, PAGE.encode(), "text/html; charset=utf-8")
         elif path.endswith("/api/status"):
             self._send(200, json.dumps(build_status()).encode(), "application/json")
+        elif path.endswith("/api/gridwarm-entities"):
+            self._handle_gridwarm_entities()
         else:
             self._send(404, b"not found", "text/plain")
 
@@ -2418,6 +2656,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_gridwarm_mode()
         elif path.endswith("/api/gridwarm-rename-zone"):
             self._handle_gridwarm_rename_zone()
+        elif path.endswith("/api/gridwarm-target"):
+            self._handle_gridwarm_target()
+        elif path.endswith("/api/gridwarm-settings"):
+            self._handle_gridwarm_settings()
+        elif path.endswith("/api/gridwarm-fix-requirement"):
+            self._handle_gridwarm_fix_requirement()
         elif path.endswith("/api/warranty-add"):
             self._handle_warranty_add()
         elif path.endswith("/api/warranty-delete"):
@@ -2457,7 +2701,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send(400, json.dumps({"error": "not a GridWarm pause helper"}).encode(),
                            "application/json")
                 return
-            ha_call_service(f"input_boolean/turn_{'off' if paused else 'on'}", entity)
+            try:
+                ha_call_service(f"input_boolean/turn_{'off' if paused else 'on'}", entity)
+            except urllib.error.HTTPError:
+                # Not a real helper -- the engine's set_state fallback for
+                # a zone whose helper was never created in HA. Write the
+                # state directly so Pause still works out of the box.
+                current = (ha_get_all_states().get(entity) or {}).get("attributes") or {}
+                ha_set_state(entity, "off" if paused else "on", current)
             self._send(200, json.dumps({"ok": True}).encode(), "application/json")
         except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
             self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
@@ -2474,6 +2725,102 @@ class Handler(http.server.BaseHTTPRequestHandler):
             ha_call_service("input_select/select_option",
                             "input_select.gridlock_gridwarm_mode", option=mode)
             self._send(200, json.dumps({"ok": True, "mode": mode}).encode(), "application/json")
+        except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
+            self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
+
+    def _handle_gridwarm_target(self):
+        """The dashboard zone's target lives in gridwarm_settings.json --
+        GridLock owns it, no HA helper involved."""
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+            try:
+                value = float(body.get("value"))
+            except (TypeError, ValueError):
+                self._send(400, json.dumps({"error": "value must be a number"}).encode(),
+                           "application/json")
+                return
+            # Sanity bounds for a room setpoint -- a typo like 200 must
+            # not reach a heating device, and anything below a frost
+            # floor is a mistake, not a preference.
+            if not 5.0 <= value <= 30.0:
+                self._send(400, json.dumps({"error": "target must be between 5 and 30 °C"}).encode(),
+                           "application/json")
+                return
+            saved = load_gridwarm_settings()
+            saved["target_temp"] = value
+            save_gridwarm_settings(merge_space_heating_settings(saved))
+            self._send(200, json.dumps({"ok": True, "value": value}).encode(), "application/json")
+        except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
+            self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
+
+    def _handle_gridwarm_settings(self):
+        """Save the whole space heating form. {"reset": true} wipes back
+        to the defaults. Validation/clamping is core.space_heating's --
+        the same merge the engine applies when it reads the file, so what
+        the UI shows after a save is exactly what the engine will run."""
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+            if not isinstance(body, dict):
+                self._send(400, json.dumps({"error": "expected an object"}).encode(), "application/json")
+                return
+            if body.get("reset"):
+                merged = merge_space_heating_settings({})
+            else:
+                merged = merge_space_heating_settings(body)
+            save_gridwarm_settings(merged)
+            self._send(200, json.dumps({"ok": True, "settings": merged}).encode(), "application/json")
+        except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
+            self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
+
+    def _handle_gridwarm_entities(self):
+        """Entity ids grouped for the form's datalists -- fetched once
+        when the form is opened, not on every status poll (a controller's
+        raw register dump alone can be a few hundred entities)."""
+        try:
+            states = ha_get_all_states()
+            ids = sorted(states)
+            temperature = sorted(e for e, st in states.items()
+                                 if e.startswith("climate.")
+                                 or (st.get("attributes") or {}).get("device_class") == "temperature")
+            out = {"any": ids,
+                   "temperature": temperature,
+                   "switch": [e for e in ids if e.split(".")[0] in ("switch", "input_boolean")],
+                   "sensor": [e for e in ids if e.startswith("sensor.")],
+                   "weather": [e for e in ids if e.startswith("weather.")]}
+            self._send(200, json.dumps(out).encode(), "application/json")
+        except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
+            self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
+
+    def _handle_gridwarm_fix_requirement(self):
+        """Put one of the zone's own preconditions right -- the exact
+        write the user would otherwise do by hand in HA. Restricted to
+        entities actually listed in the saved preconditions (never an
+        arbitrary entity from the payload), and to the domains whose
+        "set to this state" is unambiguous."""
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+            entity = str(body.get("entity", ""))
+            wanted = str(body.get("state", "")).strip()
+            allowed = {r["entity"]: r["state"]
+                       for r in merge_space_heating_settings(load_gridwarm_settings())["control_requires"]}
+            if entity not in allowed or allowed[entity].strip().lower() != wanted.lower():
+                self._send(400, json.dumps({"error": "not one of this zone's preconditions"}).encode(),
+                           "application/json")
+                return
+            domain = entity.split(".")[0]
+            if domain in ("switch", "input_boolean") and wanted.lower() in ("on", "off"):
+                ha_call_service(f"{domain}/turn_{wanted.lower()}", entity)
+            elif domain in ("select", "input_select"):
+                ha_call_service(f"{domain}/select_option", entity, option=wanted)
+            else:
+                self._send(400, json.dumps(
+                    {"error": f"can't set a {domain} entity to '{wanted}' from here — do it in HA"}).encode(),
+                    "application/json")
+                return
+            self._send(200, json.dumps({"ok": True}).encode(), "application/json")
         except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
             self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
 

@@ -24,6 +24,7 @@ from core.inverter import SigenergyAdapter
 from core.tariff import KrakenTariffProvider
 from core.forecast import SolcastForecastProvider, LearnedLoadForecastProvider
 from core import thermal as core_thermal
+from core import space_heating as core_space_heating
 from core import diagnostics as core_diagnostics
 from core import warranty as core_warranty
 from core.ev_schedule import find_cheapest_window
@@ -611,6 +612,11 @@ class GridLock(hass.Hass):
                               if gridwarm_cfg.get("active", True) else [])
         self._thermal_forecast_warned = set()
         self._thermal_control_state = {}
+        # The dashboard-configured space heating zone (gridwarm_settings.json,
+        # see core/space_heating.py) -- built lazily on the first tick and
+        # rebuilt whenever the file changes, so a dashboard edit takes
+        # effect on the next tick with no restart. (mtime, zone, settings).
+        self._ui_zone_cache = (None, None, None)
         # heat_loss_degrees learning -- refines the config's own starting
         # figure against real cooling periods (heating off) over time,
         # same EMA-blend pattern as the load forecast's learned profile.
@@ -923,6 +929,23 @@ class GridLock(hass.Hass):
     def _load_json(self, filename, default):
         try:
             with open(self._state_path(filename)) as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return default
+
+    def _dashboard_path(self, filename):
+        """Files the web UI writes (warranty_entries.json,
+        ev_schedule_settings.json, gridwarm_settings.json) are NOT
+        per-site state and must not go through _state_path's site
+        namespacing -- the web UI knows nothing about sites and writes
+        the plain filename next to this file. Reading them through
+        _state_path looked for "<site>__<file>" and silently never found
+        a dashboard edit at all (fixed in 3.45.0)."""
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+
+    def _load_dashboard_json(self, filename, default):
+        try:
+            with open(self._dashboard_path(filename)) as f:
                 return json.load(f)
         except (OSError, ValueError):
             return default
@@ -1572,7 +1595,7 @@ class GridLock(hass.Hass):
         config_entries = [dict(w, source="config") for w in self.warranties_cfg]
         config_names = {w.get("name") for w in self.warranties_cfg}
         dashboard_entries = [dict(w, source="dashboard")
-                             for w in self._load_json("warranty_entries.json", [])
+                             for w in self._load_dashboard_json("warranty_entries.json", [])
                              if w.get("name") not in config_names]
         return config_entries + dashboard_entries
 
@@ -1995,7 +2018,7 @@ class GridLock(hass.Hass):
         present. Re-read fresh every call, same pattern as
         _all_warranties(), so a dashboard change shows up on the next
         poll rather than only after a restart."""
-        dash = self._load_json("ev_schedule_settings.json", {})
+        dash = self._load_dashboard_json("ev_schedule_settings.json", {})
         try:
             hours = float(dash.get("daily_charge_hours", self.ev_charge_hours_cfg) or 0)
         except (TypeError, ValueError):
@@ -2851,8 +2874,12 @@ class GridLock(hass.Hass):
     # heating switch (control_entity) is a separate, explicit opt-in per
     # zone — off unless configured, gated by a per-zone pause helper,
     # and bounded by a hard safety floor + a cap on continuous off-time
-    # (see core.thermal.decide_dhw_command). This is the one thing in
-    # GridLock that writes to a heating device at all.
+    # (see core.thermal.decide_heating_command), with preconditions on
+    # the device itself checked first and a read-back check after. This
+    # is the one thing in GridLock that writes to a heating device at
+    # all -- a hot water tank's force-heat switch, or the heat pump's
+    # own space-heating power switch. Zones come from apps.yaml or from
+    # the dashboard (core/space_heating.py); same code path downstream.
     # ------------------------------------------------------------------
     def _build_thermal_zone(self, z):
         """Turn one gridwarm.zones apps.yaml entry into its ThermalParams
@@ -2879,6 +2906,11 @@ class GridLock(hass.Hass):
             hysteresis=float(z.get("hysteresis", 0.5)),
             hysteresis_off=float(z.get("hysteresis_off", 0.1)),
             boost_threshold_degrees=float(z.get("boost_threshold_degrees", 2.0)))
+        # tank_litres is what makes a zone a tank rather than a room --
+        # the control defaults below differ by kind (a tank's floor is a
+        # hot-water figure with a cap for anti-legionella cycles; a
+        # room's is a frost/comfort floor with no cap at all).
+        is_tank = "tank_litres" in z
         return {"name": z.get("name", "Zone"),
                 "internal_temp_entity": z.get("internal_temp_entity"),
                 "internal_temp_attribute": z.get("internal_temp_attribute"),
@@ -2888,6 +2920,18 @@ class GridLock(hass.Hass):
                 "external_temp_constant": z.get("external_temp_constant"),
                 "weather_entity": z.get("weather_entity"),
                 "heating_entity": z.get("heating_entity"),
+                # The heating_entity state that means "heating" -- "on" for
+                # a binary/switch, or a text sensor's own word (the Midea
+                # controller's active-state sensor says "Heating", and
+                # unlike its compressor flag isn't also on during a hot
+                # water run).
+                "heating_entity_state": str(z.get("heating_entity_state", "on")),
+                # A fixed target for a zone with no target entity (a room
+                # with no thermostat worth trusting -- the dashboard zone
+                # always works this way, its target set from the UI).
+                "target_temp_constant": (float(z["target_temp_constant"])
+                                         if z.get("target_temp_constant") is not None else None),
+                "is_tank": is_tank,
                 "cop_entity": z.get("cop_entity"),
                 "anticipation_lookahead_steps": int(
                     float(z.get("anticipation_lookahead_hours", 3.0)) * 60 / THERMAL_STEP_MIN),
@@ -2908,8 +2952,15 @@ class GridLock(hass.Hass):
                 # regardless; this is the one specific switch GridWarm is
                 # allowed to actually command.
                 "control_entity": z.get("control_entity"),
-                "control_safety_min_temp": float(z.get("control_safety_min_temp", 45.0)),
-                "control_max_off_hours": float(z.get("control_max_off_hours", 6.0)),
+                "control_safety_min_temp": float(z.get("control_safety_min_temp",
+                                                       45.0 if is_tank else 16.0)),
+                "control_max_off_hours": float(z.get("control_max_off_hours",
+                                                     6.0 if is_tank else 0.0)),
+                # Preconditions on the device itself (see
+                # core.thermal.unmet_requirements) -- checked before every
+                # write; unmet means Blocked, not a command into the void.
+                "control_requires": core_space_heating.clean_requirements(
+                    z.get("control_requires")),
                 # Usable-hot-water estimate — tank zones only (tank_litres
                 # is what makes it a tank rather than a room in the first
                 # place, see the mass branch above).
@@ -2948,7 +2999,7 @@ class GridLock(hass.Hass):
     def _thermal_target_temp(self, zone):
         ent = zone["target_temp_entity"]
         if not ent:
-            return None
+            return zone.get("target_temp_constant")
         attr = zone["target_temp_attribute"]
         if attr:
             v = self.get_state(ent, attribute=attr)
@@ -3127,7 +3178,7 @@ class GridLock(hass.Hass):
         if target_temp is None:
             target_temp = internal_temp
         external_now = self._thermal_external_temp(zone)
-        heating_on = bool(zone["heating_entity"]) and self.get_state(zone["heating_entity"]) == "on"
+        heating_on = self._thermal_heating_on(zone)
         self._update_thermal_learning(zone, now, internal_temp, external_now, heating_on)
 
         external_curve = (self._thermal_weather_curve(
@@ -3188,6 +3239,11 @@ class GridLock(hass.Hass):
                 "target_temp": round(target_temp, 2),
                 "external_temp": round(external_now, 2),
                 "heating_on": heating_on,
+                "no_reading": False,
+                "is_tank": zone["is_tank"],
+                # Only the dashboard zone's target is GridLock's own to
+                # change; a yaml zone's comes from its target entity.
+                "target_editable": zone.get("source") == "dashboard",
                 # The model's own first-step decision (already reflects
                 # the anticipation-adjusted plan_curve and its hysteresis
                 # band) -- this is what active control, if enabled for
@@ -3214,73 +3270,240 @@ class GridLock(hass.Hass):
         slug = re.sub(r"[^a-z0-9]+", "_", zone_name.lower()).strip("_")
         return f"input_boolean.gridlock_gridwarm_control_{slug}"
 
+    def _thermal_heating_on(self, zone):
+        """Is the zone's heat source running right now, per its
+        heating_entity -- compared against heating_entity_state ("on" by
+        default), case-insensitively, so a text sensor's "Heating" works
+        the same as a switch's "on"."""
+        if not zone["heating_entity"]:
+            return False
+        live = self.get_state(zone["heating_entity"])
+        return (live is not None
+                and str(live).strip().lower() == str(zone["heating_entity_state"]).strip().lower())
+
+    def _ui_space_heating_zone(self):
+        """The dashboard-configured space heating zone, from
+        gridwarm_settings.json (written by the web UI -- see
+        core/space_heating.py for the settings shape and the reference
+        install's defaults). Re-read whenever the file changes, same
+        no-restart pattern as _ev_schedule_settings(), but cached on
+        mtime since building a zone and re-applying its learned
+        parameters every tick is pointless churn. Returns (zone, settings)
+        -- zone None when the user has hidden it ("configured: false")."""
+        path = self._dashboard_path("gridwarm_settings.json")
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            mtime = None
+        cached_mtime, cached_zone, cached_settings = self._ui_zone_cache
+        if cached_settings is not None and mtime == cached_mtime:
+            return cached_zone, cached_settings
+        settings = core_space_heating.merge_settings(
+            self._load_dashboard_json("gridwarm_settings.json", {}))
+        zone = None
+        if settings["configured"]:
+            zone = self._build_thermal_zone(core_space_heating.to_zone_cfg(settings))
+            zone["source"] = "dashboard"
+            # Same learned-parameter restore as the apps.yaml zones get at
+            # startup -- a settings edit (or restart) mustn't reset what
+            # the model has learned about the house back to the defaults.
+            saved = self.thermal_learning_state.get(zone["name"], {})
+            if saved.get("heat_loss_degrees") is not None:
+                zone["params"].heat_loss_degrees = saved["heat_loss_degrees"]
+            if saved.get("heat_loss_watts") is not None:
+                zone["params"].heat_loss_watts = saved["heat_loss_watts"]
+            if zone["control_entity"]:
+                pause_helper = self._thermal_pause_helper(zone["name"])
+                if not self.entity_exists(pause_helper):
+                    # Virtual fallback, defaults to "not paused" -- the
+                    # dashboard's Pause button writes it directly if no
+                    # real helper exists, so this one is usable as-is.
+                    self.set_state(pause_helper, state="on",
+                                   attributes={"friendly_name": f"GridLock GridWarm control: {zone['name']}"})
+            self.log(f"GridWarm: dashboard space heating zone '{zone['name']}' loaded "
+                     f"(control_entity={zone['control_entity']}, target={settings['target_temp']}°C)")
+        self._ui_zone_cache = (mtime, zone, settings)
+        return zone, settings
+
+    def _thermal_stub_result(self, zone):
+        """What a controlled zone publishes when it has no usable room
+        reading (sensor unavailable, dead battery, wrong entity) -- it
+        still has to appear on the dashboard with its control status,
+        and _control_thermal_zone still has to run for it (holding
+        heating ON, the safe failure mode), rather than silently vanish
+        along with whatever state its switch was last left in."""
+        target = self._thermal_target_temp(zone)
+        return {"name": zone["name"],
+                "current_temp": None,
+                "target_temp": round(target, 2) if target is not None else None,
+                "external_temp": round(self._thermal_external_temp(zone), 2),
+                "heating_on": self._thermal_heating_on(zone),
+                "no_reading": True,
+                "is_tank": zone["is_tank"],
+                "target_editable": zone.get("source") == "dashboard",
+                "desired_heating_on": True,
+                "cop": zone["params"].heating_cop,
+                "predicted_kwh_today": 0.0, "predicted_kwh_today_baseline": 0.0,
+                "predicted_cost_today": 0.0, "predicted_cost_today_baseline": 0.0,
+                "usable_hot_water_litres": None, "showers_available": None,
+                "learned_heat_loss_degrees": round(zone["params"].heat_loss_degrees, 4),
+                "config_heat_loss_degrees": round(zone["config_heat_loss_degrees"], 4),
+                "learned_heat_loss_watts": round(zone["params"].heat_loss_watts, 1),
+                "config_heat_loss_watts": round(zone["config_heat_loss_watts"], 1),
+                "thermal_learning_observations": self.thermal_learning_state.get(
+                    zone["name"], {}).get("observation_count", 0),
+                "forecast_data": []}
+
     def _control_thermal_zone(self, zone, now, result):
         """The one place anything in GridLock writes to a heating device
-        — off by default, only runs at all if control_entity is set for
-        this zone. Gated by a per-zone pause helper (auto-created, same
-        pattern as input_boolean.gridlock_enable) so it can be switched
-        off instantly from the UI without editing apps.yaml or
-        restarting. See core.thermal.decide_dhw_command for the actual
-        safety-floor / max-continuous-off-time logic this defers to —
-        this method is just the HA read/write glue around it."""
+        -- off by default, only runs at all if control_entity is set for
+        this zone (a hot water tank's force-heat switch, or the heat
+        pump's own space-heating power switch). Gated by the global
+        READ-ONLY/ACTIVE master switch and a per-zone pause helper
+        (auto-created, same pattern as input_boolean.gridlock_enable) so
+        it can be stopped instantly from the UI. Layered on top of the
+        plan's own decision, all biased toward heating rather than
+        withholding it:
+        - core.thermal.decide_heating_command's safety floor / max-off cap
+        - control_requires: preconditions on the device itself. While any
+          is unmet nothing is written -- the device would ignore it (on
+          the Midea unit this was built against the switch reverts within
+          seconds, no fault, no log line) -- and the zone shows Blocked
+          with the reason, so the fix is a known click, not an afternoon
+          of history digging.
+        - a read-back check: if the device reverts a command it's re-sent
+          every tick and flagged Reverted, so an overridden switch can't
+          masquerade as "heating on".
+        A zone with no usable room reading (a stub result) is held ON:
+        with nothing to regulate against, heating is the safe failure
+        mode, never off."""
         entity = zone["control_entity"]
         if not entity:
             result["control"] = None
             return
-        pause_helper = self._thermal_pause_helper(zone["name"])
+        name = zone["name"]
+        pause_helper = self._thermal_pause_helper(name)
         state = self._thermal_control_state.setdefault(
-            zone["name"], {"off_since": None, "last_commanded": None})
+            name, {"off_since": None, "last_commanded": None, "rejected": False,
+                   "rejected_notified": False, "blocked_key": None})
         # The global master switch (defaults read_only) always wins over
         # a zone's own per-zone pause helper -- both have to say "go"
         # for anything to actually be written.
         read_only = self.get_state(self.ent_gridwarm_mode) != "active"
         paused = read_only or self.get_state(pause_helper) == "off"
+        requirements = zone["control_requires"]
+        live = {r["entity"]: self.get_state(r["entity"]) for r in requirements}
+        unmet = core_thermal.unmet_requirements(requirements, live.get)
+        blocked_items = [{"entity": r["entity"], "state": r["state"], "actual": live.get(r["entity"])}
+                         for r in requirements if core_thermal.unmet_requirements([r], live.get)]
+        live_state = self.get_state(entity)
         # Always published, even while paused/before the first real
         # decision -- the dashboard needs somewhere to show control
         # status regardless of whether a write is about to happen.
         result["control"] = {"entity": entity, "pause_helper": pause_helper,
-                              "paused": paused, "commanded": state["last_commanded"]}
+                              "paused": paused, "commanded": state["last_commanded"],
+                              "blocked": unmet, "blocked_items": blocked_items,
+                              "rejected": state["rejected"], "live_state": live_state}
         if paused:
+            state["blocked_key"] = None
             return
+        if unmet:
+            key = tuple(unmet)
+            if state["blocked_key"] != key:
+                state["blocked_key"] = key
+                self._log_decision(f"GridWarm: {name} BLOCKED",
+                                   "Not commanding — the device would ignore it until this is fixed: "
+                                   + "; ".join(unmet))
+                self._notify(f"GridLock: GridWarm can't control {name}",
+                             "A setting on the heat pump itself is overriding its heating switch, so "
+                             f"GridWarm isn't commanding it: {'; '.join(unmet)}. Fix it from the GridWarm "
+                             "tab (Blocked → Fix) or on the unit's own controller.")
+            return
+        state["blocked_key"] = None
+        no_reading = result.get("no_reading", False)
         off_duration_hours = ((now - state["off_since"]).total_seconds() / 3600.0
                               if state["off_since"] else 0.0)
-        command = core_thermal.decide_dhw_command(
-            result["desired_heating_on"], result["current_temp"],
-            zone["control_safety_min_temp"], off_duration_hours, zone["control_max_off_hours"])
+        if no_reading:
+            command = True
+        else:
+            command = core_thermal.decide_heating_command(
+                result["desired_heating_on"], result["current_temp"],
+                zone["control_safety_min_temp"], off_duration_hours, zone["control_max_off_hours"])
         state["off_since"] = None if command else (state["off_since"] or now)
         result["control"]["commanded"] = command
+        service = f"switch/turn_{'on' if command else 'off'}"
         if command == state["last_commanded"]:
+            if core_thermal.command_matches_state(command, live_state):
+                state["rejected"] = False
+                result["control"]["rejected"] = False
+                return
+            # Sent last tick (or earlier), and the device now reads the
+            # opposite -- it reverted us. Re-send, flag it, say so once.
+            state["rejected"] = True
+            result["control"]["rejected"] = True
+            self.call_service(service, target={"entity_id": entity})
+            self._log_decision(f"GridWarm: {name} {'ON' if command else 'OFF'} re-sent",
+                               "The device reverted the last command — something on the unit itself is "
+                               "overriding its switch (check its room-thermostat / weather-compensation "
+                               "settings, see DOCS.md)")
+            if not state["rejected_notified"]:
+                state["rejected_notified"] = True
+                self._notify(f"GridLock: {name} heating command reverted by the device",
+                             f"GridWarm switched {entity} {'on' if command else 'off'} but the unit set it "
+                             "back. It's being re-sent each tick. A setting on the unit is overriding its "
+                             "switch — add it to this zone's requirements on the GridWarm tab once found, "
+                             "so it's checked up front next time.")
             return
         state["last_commanded"] = command
+        state["rejected"] = False
+        state["rejected_notified"] = False
+        result["control"]["rejected"] = False
         # target={"entity_id": ...}, not the plain entity_id= kwarg --
         # matches the one other place in this codebase that actually
         # commands hardware (core/inverter.py's SigenergyAdapter).
-        self.call_service(f"switch/turn_{'on' if command else 'off'}", target={"entity_id": entity})
-        # decide_dhw_command only ever forces ON, never OFF -- so "off"
+        self.call_service(service, target={"entity_id": entity})
+        # decide_heating_command only ever forces ON, never OFF -- so "off"
         # can only mean the plan itself wanted off, no override needed.
-        if not command:
+        if no_reading:
+            reason = "No usable room temperature reading — holding heating on until one comes back"
+        elif not command:
             reason = "GridWarm plan — heating off"
         elif result["current_temp"] <= zone["control_safety_min_temp"]:
             reason = "Safety floor reached — heating forced on regardless of plan"
-        elif off_duration_hours >= zone["control_max_off_hours"]:
+        elif zone["control_max_off_hours"] > 0 and off_duration_hours >= zone["control_max_off_hours"]:
             reason = ("Held off long enough to hit the safety cap — heating on to give the "
                       "heat pump's own cycles a chance to run")
         else:
             reason = "GridWarm plan — heating on"
-        self._log_decision(f"GridWarm: {zone['name']} {'ON' if command else 'OFF'}", reason)
+        self._log_decision(f"GridWarm: {name} {'ON' if command else 'OFF'}", reason)
 
     def _publish_thermal_forecast(self, now):
-        if not self.thermal_zones:
+        ui_zone, ui_settings = self._ui_space_heating_zone()
+        zones = list(self.thermal_zones) + ([ui_zone] if ui_zone else [])
+        if not zones:
+            # Still publish the settings so the dashboard's space heating
+            # form has something to show (a hidden zone can be un-hidden).
+            self.set_state("sensor.gridlock_gridwarm", state="unknown",
+                           attributes={"friendly_name": "GridLock GridWarm",
+                                       "icon": "mdi:heat-pump",
+                                       "zones": [],
+                                       "control_mode": self.get_state(self.ent_gridwarm_mode) or "read_only",
+                                       "space_heating_settings": ui_settings})
             return
         rate_curve = self._thermal_rate_curve(self.build_slots(now))
         zones_out = []
-        for zone in self.thermal_zones:
+        for zone in zones:
             try:
                 result = self._run_thermal_forecast(zone, now, rate_curve)
             except Exception as exc:  # noqa: BLE001 — one bad zone shouldn't drop the rest
                 self.log(f"Thermal forecast for zone '{zone['name']}' failed: {exc!r}",
                          level="WARNING")
                 result = None
+            if result is None and zone["control_entity"]:
+                # A controlled zone must never just disappear -- its
+                # switch is still out there in whatever state it was
+                # last left; see _thermal_stub_result.
+                result = self._thermal_stub_result(zone)
             if result:
                 zones_out.append(result)
                 try:
@@ -3299,8 +3522,9 @@ class GridLock(hass.Hass):
             f"across {len(zones_out)} zone{'s' if len(zones_out) != 1 else ''} vs £{baseline_cost:.2f} "
             f"reacting only to the current temperature "
             f"({'saving' if saving >= 0 else 'costing'} £{abs(saving):.2f}).")
+        with_reading = [z for z in zones_out if z["current_temp"] is not None]
         self.set_state("sensor.gridlock_gridwarm",
-                       state=f"{zones_out[0]['current_temp']:.1f}",
+                       state=f"{with_reading[0]['current_temp']:.1f}" if with_reading else "unknown",
                        attributes={"friendly_name": "GridLock GridWarm",
                                    "unit_of_measurement": "°C",
                                    "icon": "mdi:heat-pump",
@@ -3308,6 +3532,7 @@ class GridLock(hass.Hass):
                                    "predicted_cost_today_total": round(total_cost, 2),
                                    "predicted_cost_today_baseline_total": round(baseline_cost, 2),
                                    "control_mode": self.get_state(self.ent_gridwarm_mode) or "read_only",
+                                   "space_heating_settings": ui_settings,
                                    "zones": zones_out})
 
     def _refresh_diagnostic_entities(self):

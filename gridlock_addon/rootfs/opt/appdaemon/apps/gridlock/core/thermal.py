@@ -1,8 +1,10 @@
 """Thermal model — predicts a heated zone's temperature trajectory and the
 electrical cost of keeping it there, from a simple heat-loss/heat-input
-physics model. Phase 1: advisory only. Nothing in this module, or anything
-that calls it, ever writes to a climate/heating entity — it only forecasts,
-for display alongside the actual measured temperature.
+physics model. Nothing in this module writes to any entity — it only
+forecasts, and (at the very bottom) turns a forecast plus a few safety
+bounds into a plain on/off decision the caller may or may not act on.
+Prediction is always advisory; whether anything is actually commanded is
+the caller's explicit, per-zone opt-in (see decide_heating_command).
 
 One zone shape, `simulate()`, covers two real uses:
 - A room, heated by a shared heat pump whose thermal output varies with
@@ -247,27 +249,81 @@ def fit_heat_loss_params(observations, thermal_mass_wh_per_c):
     return heat_loss_degrees, heat_loss_watts
 
 
-def decide_dhw_command(desired_on, current_temp, safety_min_temp, off_duration_hours,
-                        max_off_hours):
+def decide_heating_command(desired_on, current_temp, safety_min_temp, off_duration_hours,
+                           max_off_hours):
     """The actual on/off command to send to real hardware, layering two
     safety overrides on top of the model's own desired_on decision
     (simulate()'s first-step heating_on, already anticipation-aware).
     Both overrides bias toward heating rather than withholding it, since
     commanding heat ON is always the safe failure mode here -- holding
-    it OFF is not:
+    it OFF is not. Same logic for a hot water tank and for a room's
+    space heating; only the numbers differ (a tank floor is ~45C, a
+    room's is a frost/comfort floor nearer 16C):
 
     - safety_min_temp: a hard floor -- never withhold heat below this,
       regardless of what the model or plan wants.
     - max_off_hours: caps how long this can continuously hold heating
       off, as a conservative margin against unconfirmed interactions
       with the heat pump's own internal cycles (e.g. anti-legionella
-      disinfection, which runs on its own separate schedule/logic this
-      model has no visibility into) -- better to occasionally heat
+      disinfection on a tank, which runs on its own separate schedule
+      this model has no visibility into) -- better to occasionally heat
       "unnecessarily" than to risk silently suppressing a safety cycle
-      for an extended, indefinite stretch.
+      for an extended, indefinite stretch. Zero or negative disables the
+      cap entirely -- the right default for space heating, where there
+      is no hidden cycle to protect and the floor above is the safety
+      net (a room legitimately goes a whole mild day without heat).
     """
     if current_temp <= safety_min_temp:
         return True
-    if not desired_on and off_duration_hours >= max_off_hours:
+    if not desired_on and max_off_hours > 0 and off_duration_hours >= max_off_hours:
         return True
     return desired_on
+
+
+# Original name, kept so existing callers/tests keep working -- the
+# logic was never DHW-specific, only its defaults were.
+decide_dhw_command = decide_heating_command
+
+
+def unmet_requirements(requirements, lookup):
+    """Preconditions a heating device has to satisfy before a command to
+    it can mean anything -- checked by the caller before every write, so
+    a command that would be silently ignored is reported as blocked
+    instead of sent into the void. A heat pump controller typically has
+    installer-level settings that override its own power switch: on the
+    Midea unit this was built against, a "room thermostat present" flag
+    hands heating on/off to the thermostat terminals and the unit
+    reverts the space-heating switch within seconds of any write, with
+    no fault code and no log line; a weather-compensation curve asking
+    for a flow temperature below the unit's own minimum leaves it in
+    "Heating / Idle" forever. Neither is an error anywhere -- they're
+    just states the user has to know to check.
+
+    requirements: list of {"entity": entity_id, "state": wanted_state}.
+    lookup: callable(entity_id) -> current state string (or None).
+    Returns a list of human-readable strings, one per unmet requirement
+    (empty when everything is satisfied). Comparison is case-insensitive
+    on both sides so "Heat" vs "heat" from a select entity doesn't count
+    as a mismatch."""
+    unmet = []
+    for req in requirements or []:
+        entity = req.get("entity")
+        wanted = req.get("state")
+        if not entity or wanted is None:
+            continue
+        actual = lookup(entity)
+        if actual is None:
+            unmet.append(f"{entity} is unavailable (needs {wanted})")
+        elif str(actual).strip().lower() != str(wanted).strip().lower():
+            unmet.append(f"{entity} is {actual} (needs {wanted})")
+    return unmet
+
+
+def command_matches_state(command, observed_state):
+    """Did the hardware actually take the last command? Only a definite
+    opposite answer counts as a mismatch -- an unavailable/unknown
+    reading says nothing either way, and treating it as a rejection
+    would just spam re-sends during a controller reboot."""
+    if observed_state not in ("on", "off"):
+        return True
+    return (observed_state == "on") == bool(command)

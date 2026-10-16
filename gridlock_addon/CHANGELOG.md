@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.45.0 - 2026-10-16
+
+### New
+- GridWarm can now run space heating, not just the hot water tank: a room zone with `control_entity` set is switched on/off each tick from its own model, behind the same READ-ONLY / ACTIVE master switch and per-zone pause helper
+- Room-appropriate control defaults — a 16 °C safety floor (tank: 45 °C) and no continuous-off cap (tank: 6 h), both overridable per zone
+- `target_temp_constant` — a zone with no thermostat worth trusting gets a GridLock-owned target (`input_number.gridlock_gridwarm_target_<zone>`), adjustable from the GridWarm tab's ✏️
+- `control_requires` — preconditions on the heat pump itself (installer flags, weather compensation, operating mode) checked before every write; the zone shows ⛔ Blocked with the reason instead of commanding a switch the unit will ignore
+- Read-back check — if the device reverts a command, the zone shows ⚠️ Reverted, the command is re-sent each tick, and a notification explains what to look at
+- `heating_entity_state` — read a text sensor's own "Heating" (or similar) as the heating-on signal instead of a binary on/off, so a shared compressor flag isn't mistaken for space heating during a hot water run
+- Docs: the two silent gates found on the Midea "Heatpump Controller" that stop space heating starting with no fault code (room-thermostat-present flag, weather-compensation curve below the unit's minimum flow temperature)
+
+### Fix
+- Settings saved from the dashboard (EV charging hours, added warranties) were written un-namespaced but read back through the per-site state path, so the engine never saw a dashboard edit — all dashboard-written files now read from the plain path the web UI writes
+- GridWarm's Pause button now works for a zone whose pause helper was never created as a real HA helper (falls back to writing the engine's virtual entity directly)
+
 ## 3.44.0 - 2026-10-02
 
 ### New

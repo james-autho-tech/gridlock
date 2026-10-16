@@ -1,7 +1,9 @@
 from core.thermal import (ThermalParams, simulate, thermal_mass_from_volume,
                            thermal_mass_from_litres, AIR_WH_PER_M3_PER_C,
                            WATER_WH_PER_LITRE_PER_C, anticipatory_target_curve,
-                           decide_dhw_command, usable_hot_water_litres,
+                           decide_dhw_command, decide_heating_command,
+                           unmet_requirements, command_matches_state,
+                           usable_hot_water_litres,
                            showers_available, implied_heat_loss_degrees,
                            blend_learned_value, fit_heat_loss_params)
 
@@ -289,3 +291,45 @@ def test_fit_heat_loss_params_returns_none_when_diffs_are_too_clustered():
     # be about the same temperature difference).
     observations = [{"diff": 5.0 + i * 0.01, "rate": 0.035 * (5.0 + i * 0.01)} for i in range(10)]
     assert fit_heat_loss_params(observations, 500.0) is None
+
+
+def test_decide_heating_command_is_the_same_function_as_the_dhw_name():
+    assert decide_dhw_command is decide_heating_command
+
+
+def test_decide_heating_command_zero_max_off_hours_disables_the_cap():
+    # A room on a mild day can legitimately go all day without heat --
+    # with the cap disabled, only the safety floor can force it on.
+    assert decide_heating_command(False, 19.0, safety_min_temp=16.0,
+                                  off_duration_hours=30.0, max_off_hours=0) is False
+    assert decide_heating_command(False, 15.9, safety_min_temp=16.0,
+                                  off_duration_hours=0.0, max_off_hours=0) is True
+
+
+def test_unmet_requirements_reports_each_failing_precondition_only():
+    states = {"switch.a": "on", "select.mode": "Heat", "switch.b": "off"}
+    unmet = unmet_requirements(
+        [{"entity": "switch.a", "state": "off"},
+         {"entity": "select.mode", "state": "heat"},   # case-insensitive match
+         {"entity": "switch.b", "state": "off"},
+         {"entity": "switch.missing", "state": "off"}],
+        states.get)
+    assert unmet == ["switch.a is on (needs off)",
+                     "switch.missing is unavailable (needs off)"]
+
+
+def test_unmet_requirements_is_empty_with_no_requirements_or_all_met():
+    assert unmet_requirements(None, lambda e: None) == []
+    assert unmet_requirements([], lambda e: None) == []
+    assert unmet_requirements([{"entity": "switch.a", "state": "on"}],
+                              {"switch.a": "on"}.get) == []
+
+
+def test_command_matches_state_only_a_definite_opposite_counts_as_a_mismatch():
+    assert command_matches_state(True, "on") is True
+    assert command_matches_state(False, "off") is True
+    assert command_matches_state(True, "off") is False
+    assert command_matches_state(False, "on") is False
+    # unavailable / unknown says nothing either way
+    assert command_matches_state(True, "unavailable") is True
+    assert command_matches_state(False, None) is True
