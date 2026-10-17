@@ -172,7 +172,11 @@ HOT_WATER_DEFAULTS = {
     "cop_entity": "sensor.loft_heatpump_controller_coefficient_of_performance",
     "external_temp_entity": "sensor.loft_heatpump_controller_outdoor_ambient_temperature",
     "weather_entity": None,            # auto: any weather entity that serves forecasts
-    "control_safety_min_temp": 40.0,   # force a run below this, whatever the plan
+    "control_safety_min_temp": 20.0,   # effectively off -- the ready-by times and daily guarantee do the work
+    # A needed run (tank below the unit's start point) must have finished
+    # before the next of these local times: hot tank for the morning,
+    # enough for showers by the evening. Blank list = daily guarantee only.
+    "ready_by_times": ["06:30", "18:30"],
     "run_minutes": 60.0,               # length of the window the circuit is powered for
     "max_interval_hours": 24.0,        # never longer than this between windows
     "flow_margin": 5.0,                # DHW flow runs about this far above the tank setpoint (for the COP estimate)
@@ -233,7 +237,29 @@ def merge_hot_water(saved):
                 pass
     if "control_requires" in saved:
         out["control_requires"] = clean_requirements(saved["control_requires"])
+    if "ready_by_times" in saved:
+        out["ready_by_times"] = clean_times(saved["ready_by_times"])
     return out
+
+
+def clean_times(raw):
+    """A list of HH:MM strings (or one comma-separated string from the
+    form) -> sorted, validated ["HH:MM", ...]."""
+    if isinstance(raw, str):
+        raw = raw.split(",")
+    out = []
+    for item in raw or []:
+        t = str(item).strip()
+        if not t:
+            continue
+        parts = t.split(":")
+        try:
+            h, m = int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
+        except (ValueError, IndexError):
+            continue
+        if 0 <= h < 24 and 0 <= m < 60:
+            out.append(f"{h:02d}:{m:02d}")
+    return sorted(set(out))
 
 
 def to_hot_water_zone_cfg(hw):
@@ -264,6 +290,7 @@ def to_hot_water_zone_cfg(hw):
         "hysteresis_off": hw["hysteresis_off"],
         "active": False,   # no anticipation curve for a tank
         "dhw": {"start_hysteresis_entity": hw["start_hysteresis_entity"],
+                "ready_by_times": hw.get("ready_by_times", []),
                 "run_minutes": hw["run_minutes"],
                 "max_interval_hours": hw["max_interval_hours"],
                 "flow_margin": hw["flow_margin"],

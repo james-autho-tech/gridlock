@@ -566,9 +566,12 @@ gets power*:
   is up — otherwise a flat tariff would run it back to back. Once a
   window starts it's committed, so a re-plan can't abandon a half-done
   run.
-- **Guard rails.** A floor (default 40°C) forces a run regardless of
-  plan; a maximum interval (default 24 h) means a window can't be
-  postponed for ever chasing a cheaper tomorrow.
+- **Ready by.** Two local times (default 06:30 and 18:30): whenever a
+  run is needed, it's scheduled to finish before the next of them, in the
+  cheapest window before then — a hot tank for the morning, enough for
+  showers by the evening. A floor (default 20°C, effectively off) forces
+  a run regardless of plan; a maximum interval (default 24 h) means a
+  window can't be postponed for ever chasing a cheaper tomorrow.
 - **It learns your usage.** While the tank isn't heating, any temperature
   drop beyond its standing loss is hot water being drawn; that energy is
   logged against the half-hour of the day and blended into a learned

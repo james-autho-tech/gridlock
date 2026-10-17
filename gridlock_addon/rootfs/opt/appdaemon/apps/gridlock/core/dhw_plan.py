@@ -16,6 +16,7 @@ be postponed for ever chasing a cheaper tomorrow.
 """
 
 import math
+from datetime import timedelta
 
 from core import flow_control as core_flow
 
@@ -62,6 +63,26 @@ def deadline_slots(hours_since_last_run, max_interval_hours, slot_hours):
     since = hours_since_last_run if hours_since_last_run is not None else 0.0
     remaining = max(0.0, max_interval_hours - since)
     return max(1, math.ceil(remaining / slot_hours))
+
+
+def slots_until_ready_by(local_now, ready_by_times, slot_minutes):
+    """Slots from now until the next of the configured HH:MM local
+    times (wrapping to tomorrow), so a needed run can be made to finish
+    before it. None when no times are configured."""
+    if not ready_by_times:
+        return None
+    best = None
+    for t in ready_by_times:
+        try:
+            h, m = (int(x) for x in str(t).split(":")[:2])
+        except ValueError:
+            continue
+        target = local_now.replace(hour=h, minute=m, second=0, microsecond=0)
+        if target <= local_now:
+            target = target + timedelta(days=1)
+        slots = int((target - local_now).total_seconds() // (slot_minutes * 60))
+        best = slots if best is None else min(best, slots)
+    return max(1, best) if best is not None else None
 
 
 def unit_will_heat(tank_temp, setpoint, start_hysteresis):

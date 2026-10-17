@@ -53,7 +53,14 @@ def save_zone_name(zone_key, display_name):
 # gridlock.py in its own state directory, the same place every other
 # piece of GridLock's persisted state already lives -- an absolute
 # path since this script runs from a different directory.
-WARRANTY_ENTRIES_PATH = "/opt/appdaemon/apps/gridlock/warranty_entries.json"
+# The engine runs from the add-on's config dir (the start script copies
+# gridlock.py to /config/apps/gridlock and AppDaemon loads it there), so
+# that's where it reads dashboard-written files -- NOT the image copy
+# under /opt, which is where these used to be written: every dashboard
+# save silently went to a directory the engine never looks at.
+ENGINE_DIR = next((d for d in ("/config/apps/gridlock", "/opt/appdaemon/apps/gridlock")
+                   if os.path.isfile(os.path.join(d, "gridlock.py"))), "/config/apps/gridlock")
+WARRANTY_ENTRIES_PATH = os.path.join(ENGINE_DIR, "warranty_entries.json")
 
 
 def load_warranty_entries():
@@ -75,7 +82,7 @@ def save_warranty_entries(entries):
 # "written here, re-read by the engine on change" arrangement as the EV
 # schedule settings below; the shape and defaults live in
 # core/space_heating.py so the engine and this UI can't drift apart.
-GRIDWARM_SETTINGS_PATH = "/opt/appdaemon/apps/gridlock/gridwarm_settings.json"
+GRIDWARM_SETTINGS_PATH = os.path.join(ENGINE_DIR, "gridwarm_settings.json")
 
 
 def load_gridwarm_settings():
@@ -92,7 +99,7 @@ def save_gridwarm_settings(settings):
         json.dump(settings, f)
 
 
-EV_SCHEDULE_SETTINGS_PATH = "/opt/appdaemon/apps/gridlock/ev_schedule_settings.json"
+EV_SCHEDULE_SETTINGS_PATH = os.path.join(ENGINE_DIR, "ev_schedule_settings.json")
 
 
 def load_ev_schedule_settings():
@@ -1280,7 +1287,8 @@ function renderHotWaterSettings(hw) {
         ${hwEntitySelect(hw, 'control_entity', 'DHW circuit power switch', ['switch'], 'The switch the unit\'s own timer drives — never a "forced tank heating" switch (immersion heater).')}
         ${hwEntitySelect(hw, 'heating_entity', '"Heating hot water now" sensor', ['sensor', 'switch'])}
         ${txt('heating_entity_state', '…and the value that means heating', 'e.g. DHW')}
-        ${num('control_safety_min_temp', 'Floor °C — force a run below this', 1)}
+        ${num('control_safety_min_temp', 'Floor °C — force a run below this', 1, '20 = effectively off; the ready-by times and the daily guarantee do the work.')}
+        ${txt('ready_by_times', 'Ready by (times, comma-separated)', 'A needed run finishes before the next of these — e.g. 06:30 for the morning, 18:30 for the evening. Blank = only the daily guarantee.')}
         ${num('run_minutes', 'Window length, minutes', 5, 'How long the circuit is powered for per run.')}
         ${num('max_interval_hours', 'Run at least every … hours', 1, '0 = no guarantee, only the floor and learned usage.')}
         ${num('flow_margin', 'DHW flow above setpoint, °C', 1, 'For the COP estimate per slot.')}

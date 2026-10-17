@@ -68,3 +68,10 @@ def test_hot_water_settings_merge_and_zone_cfg():
     assert cfg["control_max_off_hours"] == 0.0
     assert cfg["dhw"]["run_minutes"] == 15.0
     assert cfg["active"] is False
+
+
+def test_hot_water_ready_by_times_are_cleaned_and_default_to_morning_and_evening():
+    from core.space_heating import merge_settings, clean_times
+    assert merge_settings({})["hot_water"]["ready_by_times"] == ["06:30", "18:30"]
+    assert clean_times("7:00, 19:15, nonsense, 25:00") == ["07:00", "19:15"]
+    assert merge_settings({"hot_water": {"ready_by_times": ""}})["hot_water"]["ready_by_times"] == []

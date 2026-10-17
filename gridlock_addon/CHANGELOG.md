@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.53.0 - 2026-10-17
+
+### New
+- Hot water "ready by" times (default 06:30 and 18:30): whenever the tank is below the point the unit starts a run at, the run is scheduled to finish before the next of these — a hot tank for the morning, enough for showers by the evening — in the cheapest window before then. The floor now defaults to 20 °C (effectively off); the daily guarantee stays
+
+### Fix
+- Nothing saved from the dashboard ever reached the engine: the web UI wrote its settings files under `/opt/appdaemon/apps/gridlock/` while the engine runs from `/config/apps/gridlock/`. The UI now writes where the engine reads (GridWarm settings, hot water settings, EV hours, warranties)
+
 ## 3.52.3 - 2026-10-17
 
 ### Fix

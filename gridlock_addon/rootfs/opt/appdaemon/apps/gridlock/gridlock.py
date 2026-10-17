@@ -3210,6 +3210,12 @@ class GridLock(hass.Hass):
         ready = core_dhw.ready_by_slot(expected, d.get("draw_threshold_wh", 300.0), lead_slots=1)
         if ready is not None:
             deadline = min(deadline, max(run_slots, ready))
+        # The configured ready-by times (hot tank for the morning, showers
+        # by the evening) bound the deadline whenever a run is actually
+        # needed -- the tank is below the point the unit starts at.
+        by = core_dhw.slots_until_ready_by(now.astimezone(), d.get("ready_by_times") or [], SLOT_MIN)
+        if by is not None and core_dhw.unit_will_heat(tank_temp, setpoint, hyst):
+            deadline = min(deadline, max(run_slots, by))
         window = core_dhw.cheapest_window(scores, run_slots, deadline)
         # A window only starts when there's something to heat: the tank
         # is below the point the unit would start a run at, or the daily

@@ -78,3 +78,13 @@ def test_tank_can_cover_is_conservative():
     assert tank_can_cover(52.0, 53.0, 10.0, mass, 500.0, 60.0, 6.0) is True     # needs ~860*1.25
     assert tank_can_cover(52.0, 53.0, 10.0, mass, 1200.0, 60.0, 6.0) is False
     assert tank_can_cover(None, 53.0, 10.0, mass, 0.0, 60.0, 6.0) is False
+
+
+def test_slots_until_ready_by_wraps_to_tomorrow_and_takes_the_nearest():
+    from core.dhw_plan import slots_until_ready_by
+    from datetime import datetime
+    now = datetime(2026, 10, 17, 20, 30)
+    assert slots_until_ready_by(now, ["06:30", "18:30"], 30) == 20   # 06:30 tomorrow is 10 h away
+    assert slots_until_ready_by(datetime(2026, 10, 17, 12, 0), ["06:30", "18:30"], 30) == 13
+    assert slots_until_ready_by(now, [], 30) is None
+    assert slots_until_ready_by(now, ["garbage"], 30) is None
