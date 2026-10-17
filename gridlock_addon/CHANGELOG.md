@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.47.1 - 2026-10-17
+
+### Fix
+- GridWarm charts have real axes now: °C on the left, kWh per half-hour (or p/kWh for hot water) on the right, gridlines, and time labels rendered as HTML so they're no longer stretched by the SVG; slot times align to the tariff half-hours instead of "now + 30 minutes"
+- The flow setpoint is shown under the time axis rather than as text inside the chart
+- The old simulation line charts are no longer repeated beneath a zone that has its own plan chart
+- House panel tiles say "off" / "No heat needed — room is above target" instead of "—" and "0.0 kW" when idle
+
 ## 3.47.0 - 2026-10-17
 
 ### New

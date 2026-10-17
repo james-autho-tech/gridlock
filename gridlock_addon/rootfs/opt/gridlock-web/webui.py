@@ -638,7 +638,15 @@ PAGE = r"""<!doctype html>
   .gl-sh-grid input[type=number] { max-width:140px; }
   .gl-sh-section { margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
   .gl-sh-section > .gl-sh-title { color:var(--ink); font-weight:600; font-size:13px; margin-bottom:2px; }
-  .gl-hero { display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:10px; margin-top:12px; }
+  .gl-hero { display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:10px; margin-top:12px; }
+  .gl-chart { display:grid; grid-template-columns:38px 1fr 44px; align-items:stretch; }
+  .gl-chart-axis { position:relative; font-size:10px; color:var(--dim); }
+  .gl-chart-axis span { position:absolute; transform:translateY(-50%); white-space:nowrap; }
+  .gl-chart-axis.left span { right:6px; }
+  .gl-chart-axis.right span { left:6px; }
+  .gl-chart-x { display:grid; grid-template-columns:38px 1fr 44px; }
+  .gl-chart-x .gl-bar-axis { margin-top:2px; }
+  .gl-chart-sub { font-size:10px; color:var(--amber); opacity:.85; }
   .gl-hero .gl-tile .val { font-size:22px; }
   .gl-hero .sub { color:var(--dim); font-size:11px; margin-top:3px; }
   .gl-stepper { display:inline-flex; gap:4px; margin-left:8px; vertical-align:middle; }
@@ -1307,33 +1315,67 @@ function renderHotWaterHero(d) {
     <div class="gl-hero">${tankTile}${runTile}${usageTile}</div>
     ${w.slots && w.slots.length ? `<div style="margin-top:12px"><div class="lbl" style="margin-bottom:6px">Next 24 hours — cost of a kWh of hot water per half-hour (price ÷ COP), planned window highlighted; learned usage below</div>${renderDhwChart(w)}</div>` : ''}`;
 }
+// A chart with axes: gridlines inside the SVG, tick labels as HTML on
+// either side (an SVG scaled with preserveAspectRatio=none stretches
+// its text, which is why the old charts looked smeared), and an x-axis
+// row aligned to the same columns as the bars.
+function chartFrame(svgInner, H, leftTicks, rightTicks, xRow) {
+  const PAD_T = 8, PAD_B = 6;
+  const yPct = frac => `${(PAD_T + (1 - frac) * (H - PAD_T - PAD_B)) / H * 100}%`;
+  const axis = (ticks, side) => `<div class="gl-chart-axis ${side}">${(ticks || []).map(t => `<span style="top:${yPct(t.frac)}">${esc(t.label)}</span>`).join('')}</div>`;
+  const grid = (leftTicks || []).map(t => {
+    const y = PAD_T + (1 - t.frac) * (H - PAD_T - PAD_B);
+    return `<line x1="0" x2="${VB_W}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="var(--line)" stroke-width="1" />`;
+  }).join('');
+  return `<div class="gl-chart">${axis(leftTicks, 'left')}<svg class="gl-triad-chart" viewBox="0 0 ${VB_W} ${H}" preserveAspectRatio="none" style="height:${H}px">${grid}${svgInner}</svg>${axis(rightTicks, 'right')}</div>
+    ${xRow ? `<div class="gl-chart-x"><div></div><div>${xRow}</div><div></div></div>` : ''}`;
+}
+function yScale(lo, hi, H, padT = 8, padB = 6) {
+  return v => padT + (1 - ((v - lo) / ((hi - lo) || 1))) * (H - padT - padB);
+}
+function niceTicks(lo, hi, count = 3) {
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const v = lo + (hi - lo) * i / (count - 1);
+    out.push({ frac: i / (count - 1), label: v.toFixed(Math.abs(hi - lo) < 5 ? 1 : 0) });
+  }
+  return out;
+}
+const hhmm = iso => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 function renderDhwChart(w) {
   const slots = w.slots;
   const n = slots.length;
-  const H = 110;
+  const H = 120;
   const colW = VB_W / n;
-  const maxS = Math.max(...slots.map(s => s.score), 0.01);
+  const scores = slots.map(s => s.score);
+  const lo = 0, hi = Math.max(...scores, 0.1) * 1.1;
+  const y = yScale(lo, hi, H);
   const ws = w.window_start ? new Date(w.window_start).getTime() : null;
   const we = w.window_end ? new Date(w.window_end).getTime() : null;
   const bars = slots.map((s, i) => {
     const tms = new Date(s.x).getTime();
     const inWin = ws !== null && tms >= ws - 1000 && tms < we;
-    const h = (s.score / maxS) * (H - 30);
-    return `<rect x="${(i * colW + 1).toFixed(1)}" y="${(H - 18 - h).toFixed(1)}" width="${Math.max(1, colW - 2).toFixed(1)}" height="${h.toFixed(1)}" fill="${inWin ? 'var(--green)' : 'var(--cyan)'}" opacity="${inWin ? 0.9 : 0.35}"><title>${esc(new Date(s.x).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}: ${s.price.toFixed(1)}p ÷ COP ${s.cop.toFixed(2)} = ${s.score.toFixed(1)}p per kWh of heat</title></rect>`;
+    const top = y(s.score), base = y(0);
+    return `<rect x="${(i * colW + 1).toFixed(1)}" y="${top.toFixed(1)}" width="${Math.max(1, colW - 2).toFixed(1)}" height="${(base - top).toFixed(1)}" fill="${inWin ? 'var(--green)' : 'var(--cyan)'}" opacity="${inWin ? 0.9 : 0.35}"><title>${esc(hhmm(s.x))}: ${s.price.toFixed(1)}p ÷ COP ${s.cop.toFixed(2)} = ${s.score.toFixed(1)}p per kWh of hot water</title></rect>`;
   }).join('');
-  const labels = slots.map((s, i) => i % 8 === 0 ? `<text x="${(i * colW + 2).toFixed(1)}" y="${H - 5}" fill="var(--dim)" font-size="10">${esc(new Date(s.x).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}</text>` : '').join('');
+  const xRow = barAxisLabels(n, 4, i => hhmm(slots[i].x));
+  const main = chartFrame(bars, H, niceTicks(lo, hi).map(t => ({ ...t, label: `${t.label}p` })), null, xRow);
   const prof = w.usage_profile_wh || [];
   let usage = '';
   if (prof.length) {
-    const maxP = Math.max(...prof, 1);
-    const startBucket = (() => { const d0 = new Date(slots[0].x); return Math.floor((d0.getHours() * 60 + d0.getMinutes()) / 30); })();
-    usage = `<svg class="gl-triad-chart" viewBox="0 0 ${VB_W} 40" preserveAspectRatio="none" style="margin-top:2px">${prof.map((_, i) => {
+    const maxP = Math.max(...prof, 50);
+    const d0 = new Date(slots[0].x);
+    const startBucket = Math.floor((d0.getHours() * 60 + d0.getMinutes()) / 30);
+    const UH = 44;
+    const uy = yScale(0, maxP, UH, 4, 4);
+    const ubars = prof.map((_, i) => {
       const v = prof[(startBucket + i) % 48];
-      const h = (v / maxP) * 36;
-      return `<rect x="${(i * (VB_W / 48) + 1).toFixed(1)}" y="${(38 - h).toFixed(1)}" width="${(VB_W / 48 - 2).toFixed(1)}" height="${h.toFixed(1)}" fill="var(--amber)" opacity="0.6"><title>${(v / 1000).toFixed(2)} kWh typically drawn in this half-hour</title></rect>`;
-    }).join('')}</svg>`;
+      const top = uy(v), base = uy(0);
+      return `<rect x="${(i * (VB_W / 48) + 1).toFixed(1)}" y="${top.toFixed(1)}" width="${(VB_W / 48 - 2).toFixed(1)}" height="${(base - top).toFixed(1)}" fill="var(--amber)" opacity="0.6"><title>${(v / 1000).toFixed(2)} kWh typically drawn in this half-hour</title></rect>`;
+    }).join('');
+    usage = `<div class="lbl" style="margin:8px 0 2px">Learned hot water use by half-hour (same timeline)</div>${chartFrame(ubars, UH, [{ frac: 1, label: `${(maxP / 1000).toFixed(1)} kWh` }, { frac: 0, label: '0' }], null, null)}`;
   }
-  return `<svg class="gl-triad-chart" viewBox="0 0 ${VB_W} ${H}" preserveAspectRatio="none">${bars}${labels}</svg>${usage}`;
+  return main + usage;
 }
 function renderHouseHero(d) {
   const z = (d.thermal_zones || []).find(x => x.target_editable && !x.dhw);
@@ -1347,11 +1389,13 @@ function renderHouseHero(d) {
     : `<div class="gl-tile"><div class="lbl">Room</div><div class="val num">${n1(z.current_temp, 1, '°C')}</div><div class="sub">outside ${n1(z.external_temp, 1, '°C')}${z.reading_from_fallback ? ` · <span style="color:var(--amber)">from fallback sensor (${esc(String(z.reading_from_fallback).split('.').pop())}) — primary unavailable</span>` : ''}</div></div>`;
   const targetTile = `<div class="gl-tile"><div class="lbl">Target</div><div class="val num">${n1(z.target_temp, 1, '°C')}<span class="gl-stepper"><button title="−0.5 °C" onclick="setZoneTargetTo(${(Number(z.target_temp) - 0.5).toFixed(1)})">−</button><button title="+0.5 °C" onclick="setZoneTargetTo(${(Number(z.target_temp) + 0.5).toFixed(1)})">+</button></span></div><div class="sub">may drift ${n1(d.space_heating_settings && d.space_heating_settings.comfort_below, 1)}° below / ${n1(d.space_heating_settings && d.space_heating_settings.comfort_above, 1)}° above for cheaper slots</div></div>`;
   const flowTile = c.flow_entity
-    ? `<div class="gl-tile"><div class="lbl">Flow setpoint</div><div class="val num">${n1(c.flow_setpoint, 0, '°C')}</div><div class="sub">unit has ${n1(hp.flow_setpoint_live, 0, '°C')} · water out ${n1(hp.flow_temp, 0, '°C')} / back ${n1(hp.return_temp, 0, '°C')}${f ? ` · plan wants ${n1(f.flow_setpoint_wanted, 0, '°C')}` : ''}</div></div>`
+    ? `<div class="gl-tile"><div class="lbl">Flow setpoint</div><div class="val num">${c.commanded === false ? '<span style="font-size:16px;color:var(--dim)">off</span>' : n1(c.flow_setpoint, 0, '°C')}</div><div class="sub">unit set to ${n1(hp.flow_setpoint_live, 0, '°C')} · water out ${n1(hp.flow_temp, 0, '°C')} / back ${n1(hp.return_temp, 0, '°C')}${f && c.commanded !== false ? ` · plan wants ${n1(f.flow_setpoint_wanted, 0, '°C')}` : ''}</div></div>`
     : '';
   const hpTile = `<div class="gl-tile"><div class="lbl">Heat pump</div><div class="val" style="font-size:16px"><span class="gl-legend-dot" style="background:${z.heating_on ? 'var(--green)' : 'var(--dim)'}"></span>${z.heating_on ? 'Heating' : 'Not heating'}</div><div class="sub">${hp.compressor_hz !== undefined && hp.compressor_hz !== null ? `compressor ${n1(hp.compressor_hz, 0, ' Hz')} · ` : ''}${n1(hp.thermal_kw, 1, ' kW')} out · COP ${n1(hp.live_cop, 2)}</div></div>`;
   const planTile = f
-    ? `<div class="gl-tile"><div class="lbl">Plan</div><div class="val num">${n1(f.required_kw, 1, ' kW')}</div><div class="sub">needed now · predicted COP ${n1(f.predicted_cop, 2)} · today ${n1(f.plan_elec_kwh_today, 1, ' kWh')} ≈ £${n1(f.plan_cost_today, 2)}${f.plan_status === 'fallback' ? ' · <span style="color:var(--amber)">solver unavailable, steady-state plan</span>' : ''}</div></div>`
+    ? (Number(f.required_kw) < 0.05
+        ? `<div class="gl-tile"><div class="lbl">Plan</div><div class="val" style="font-size:16px">No heat needed</div><div class="sub">room is above target · today ${n1(f.plan_elec_kwh_today, 1, ' kWh')} ≈ £${n1(f.plan_cost_today, 2)} if the forecast holds</div></div>`
+        : `<div class="gl-tile"><div class="lbl">Plan</div><div class="val num">${n1(f.required_kw, 1, ' kW')}</div><div class="sub">needed now · predicted COP ${n1(f.predicted_cop, 2)} · today ${n1(f.plan_elec_kwh_today, 1, ' kWh')} ≈ £${n1(f.plan_cost_today, 2)}${f.plan_status === 'fallback' ? ' · <span style="color:var(--amber)">solver unavailable, steady-state plan</span>' : ''}</div></div>`)
     : '';
   const fixes = (c.blocked_items || []).map(b =>
     `<button class="gl-btn-sm" onclick="fixRequirement('${esc(b.entity)}', '${esc(b.state)}')">Fix: ${esc(b.entity.split('.').pop().replace(/^loft_heatpump_controller_/, '').replace(/_/g, ' '))} → ${esc(b.state)}</button>`).join(' ');
@@ -1370,20 +1414,22 @@ function renderHouseHero(d) {
     </div>
     ${c.blocked && c.blocked.length ? `<div class="gl-sub" style="color:var(--amber);margin-top:4px">${esc(c.blocked.join(' · '))}</div>` : ''}
     <div class="gl-hero">${roomTile}${targetTile}${flowTile}${hpTile}${planTile}</div>
-    ${f && f.plan && f.plan.length ? `<div style="margin-top:14px"><div class="lbl" style="margin-bottom:6px">Next 24 hours — planned heat per half-hour (coloured by price), room temperature against target</div>${renderHeatPlanChart(z, d)}</div>` : ''}
+    ${f && f.plan && f.plan.length ? `<div style="margin-top:14px"><div class="lbl" style="margin-bottom:6px">Next 24 hours — planned heat per half-hour, room temperature against target</div>${renderHeatPlanChart(z, d)}</div>` : ''}
     ${learned}`;
 }
 function renderHeatPlanChart(z, d) {
   const plan = z.flow.plan;
   const n = plan.length;
-  const H = 150;
+  const H = 160;
   const temps = plan.flatMap(p => [p.temp, p.target]);
   if (z.current_temp !== null && z.current_temp !== undefined) temps.push(Number(z.current_temp));
   const s = d.space_heating_settings || {};
   const below = Number(s.comfort_below || 0), above = Number(s.comfort_above || 0);
-  const lo = Math.min(...temps) - Math.max(below, 0.5) - 0.3, hi = Math.max(...temps) + Math.max(above, 0.5) + 0.3;
-  const y = v => H - 22 - ((v - lo) / ((hi - lo) || 1)) * (H - 40);
-  const maxKwh = Math.max(...plan.map(p => p.heat_kwh), 0.01);
+  const lo = Math.floor(Math.min(...temps) - Math.max(below, 0.5) - 0.5), hi = Math.ceil(Math.max(...temps) + Math.max(above, 0.5) + 0.5);
+  const y = yScale(lo, hi, H);
+  const maxKwh = Math.max(...plan.map(p => p.heat_kwh), 0.05);
+  const kwhTop = Math.ceil(maxKwh * 4) / 4;
+  const yk = yScale(0, kwhTop * 1.15, H);
   const prices = plan.map(p => p.price);
   const pmin = Math.min(...prices), pmax = Math.max(...prices);
   const priceColor = p => {
@@ -1393,29 +1439,32 @@ function renderHeatPlanChart(z, d) {
   };
   const colW = VB_W / n;
   const bars = plan.map((p, i) => {
-    const h = (p.heat_kwh / maxKwh) * (H - 40);
-    return `<rect x="${(i * colW + 1).toFixed(1)}" y="${(H - 22 - h).toFixed(1)}" width="${Math.max(1, colW - 2).toFixed(1)}" height="${h.toFixed(1)}" fill="${priceColor(p.price)}" opacity="0.35"><title>${esc(new Date(p.x).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}: ${p.heat_kwh.toFixed(2)} kWh heat @ ${p.price.toFixed(1)}p, COP ${p.cop.toFixed(2)}${p.flow ? `, flow ${p.flow}°C` : ''}</title></rect>`;
+    if (p.heat_kwh <= 0.0005) return '';
+    const top = yk(p.heat_kwh), base = yk(0);
+    return `<rect x="${(i * colW + 1).toFixed(1)}" y="${top.toFixed(1)}" width="${Math.max(1, colW - 2).toFixed(1)}" height="${(base - top).toFixed(1)}" fill="${priceColor(p.price)}" opacity="0.35"><title>${esc(hhmm(p.x))}: ${p.heat_kwh.toFixed(2)} kWh heat @ ${p.price.toFixed(1)}p, COP ${p.cop.toFixed(2)}${p.flow ? `, flow ${p.flow}°C` : ''}</title></rect>`;
   }).join('');
-  const band = plan.map((p, i) => `<rect x="${(i * colW).toFixed(1)}" y="${y(p.target + above).toFixed(1)}" width="${colW.toFixed(1)}" height="${Math.max(0, y(p.target - below) - y(p.target + above)).toFixed(1)}" fill="var(--cyan)" opacity="0.06" />`).join('');
+  const band = plan.map((p, i) => `<rect x="${(i * colW).toFixed(1)}" y="${y(p.target + above).toFixed(1)}" width="${colW.toFixed(1)}" height="${Math.max(0, y(p.target - below) - y(p.target + above)).toFixed(1)}" fill="var(--cyan)" opacity="0.07" />`).join('');
   const tempLine = plan.map((p, i) => `${((i + 0.5) * colW).toFixed(1)},${y(p.temp).toFixed(1)}`).join(' ');
   const targetLine = plan.map((p, i) => `${((i + 0.5) * colW).toFixed(1)},${y(p.target).toFixed(1)}`).join(' ');
-  const labels = plan.map((p, i) => i % 8 === 0 ? `<text x="${(i * colW + 2).toFixed(1)}" y="${H - 8}" fill="var(--dim)" font-size="10">${esc(new Date(p.x).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}</text>` : '').join('');
-  const flowLabels = plan.map((p, i) => (i % 8 === 0 && p.flow) ? `<text x="${(i * colW + 2).toFixed(1)}" y="12" fill="var(--amber)" font-size="10">${p.flow}°C</text>` : '').join('');
+  const nowDot = (z.current_temp !== null && z.current_temp !== undefined)
+    ? `<circle cx="${(0.5 * colW).toFixed(1)}" cy="${y(Number(z.current_temp)).toFixed(1)}" r="3.5" fill="var(--ink)"><title>now: ${Number(z.current_temp).toFixed(1)}°C</title></circle>` : '';
+  const inner = `${band}${bars}
+      <polyline points="${targetLine}" fill="none" stroke="var(--dim)" stroke-width="1" stroke-dasharray="4,3" />
+      <polyline points="${tempLine}" fill="none" stroke="var(--cyan)" stroke-width="2" />${nowDot}`;
+  const leftTicks = niceTicks(lo, hi, 4).map(t => ({ ...t, label: `${t.label}°` }));
+  const rightTicks = [{ frac: 1 / 1.15, label: `${kwhTop.toFixed(2)} kWh` }, { frac: 0, label: '0' }];
+  const xRow = barAxisLabels(n, 4, i => hhmm(plan[i].x))
+    + `<div class="gl-bar-axis gl-chart-sub">${plan.map((p, i) => `<div class="gl-bar-axis-col">${i % 4 === 0 && p.flow ? `${p.flow}°` : ''}</div>`).join('')}</div>`;
   return `
     <div class="gl-combo-legend" style="margin-bottom:4px">
       <span><span class="gl-legend-dot" style="background:var(--cyan)"></span>Room (planned)</span>
-      <span><span class="gl-legend-dot" style="background:var(--dim)"></span>Target</span>
+      <span><span class="gl-legend-dot" style="background:var(--dim)"></span>Target &amp; comfort band</span>
       <span><span class="gl-legend-dot" style="background:var(--green);opacity:.5"></span>Heat in cheap slots</span>
       <span><span class="gl-legend-dot" style="background:var(--amber);opacity:.5"></span>mid</span>
       <span><span class="gl-legend-dot" style="background:var(--crimson);opacity:.5"></span>expensive</span>
-      <span style="color:var(--amber)">flow °C labels along the top</span>
+      <span style="color:var(--amber)">flow setpoint under the time axis</span>
     </div>
-    <svg class="gl-triad-chart" viewBox="0 0 ${VB_W} ${H}" preserveAspectRatio="none">
-      ${band}${bars}
-      <polyline points="${targetLine}" fill="none" stroke="var(--dim)" stroke-width="1" stroke-dasharray="4,3" />
-      <polyline points="${tempLine}" fill="none" stroke="var(--cyan)" stroke-width="2" />
-      ${flowLabels}${labels}
-    </svg>`;
+    ${chartFrame(inner, H, leftTicks, rightTicks, xRow)}`;
 }
 let zoneRenameBusy = false;
 async function renameZone(realName, currentDisplayName) {
@@ -2282,7 +2331,10 @@ function renderThermalZones(zones) {
   // chart instead. No real room reaches 35C, so that's a safe split point.
   const colored = zones.map((z, i) => ({ ...z, _color: GRIDWARM_COLORS[i % GRIDWARM_COLORS.length] }));
   const isHighTemp = z => Math.max(z.current_temp, ...z.forecast_data.map(p => p.internal_temp)) > 35;
-  const charted = colored.filter(z => (z.forecast_data || []).length);  // a "no reading" zone has nothing to plot
+  // A zone with its own plan chart above (flow-controlled house, scheduled
+  // hot water) doesn't need the plain simulation plotted again; a "no
+  // reading" zone has nothing to plot.
+  const charted = colored.filter(z => (z.forecast_data || []).length && !z.flow && !z.dhw);
   const rooms = charted.filter(z => !isHighTemp(z));
   const tanks = charted.filter(isHighTemp);
   return `

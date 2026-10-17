@@ -3218,9 +3218,15 @@ class GridLock(hass.Hass):
                 "usage_profile_wh": [round(v, 0) for v in (profile or [])],
                 "usage_days_learned": int(learn.get("dhw_profile_days", 0)),
                 "expected_24h_kwh": round(sum(expected[:48]) / 1000.0, 2),
-                "slots": [{"x": (now + timedelta(minutes=SLOT_MIN * i)).isoformat(),
+                "slots": [{"x": (self._slot_floor(now) + timedelta(minutes=SLOT_MIN * i)).isoformat(),
                            "price": round(rates[i], 2), "cop": round(cops[i], 2),
                            "score": round(scores[i], 2)} for i in range(min(48, len(scores)))]}
+
+    @staticmethod
+    def _slot_floor(now):
+        """The start of the tariff half-hour containing now -- what slot 0
+        of every per-slot curve here actually covers."""
+        return now.replace(minute=(now.minute // SLOT_MIN) * SLOT_MIN, second=0, microsecond=0)
 
     def _plan_flow(self, zone, now, internal_temp, external_curve, plan_curve, rate_curve):
         """The flow-temperature plan for one tick (see core/flow_control.py):
@@ -3266,7 +3272,7 @@ class GridLock(hass.Hass):
                 "plan_heat_kwh_today": round(heat_kwh, 2),
                 "plan_elec_kwh_today": round(elec_kwh, 2),
                 "plan_cost_today": round(sum(p["cost"] for p in today), 2),
-                "plan": [{"x": (now + timedelta(minutes=SLOT_MIN * (i + 1))).isoformat(),
+                "plan": [{"x": (self._slot_floor(now) + timedelta(minutes=SLOT_MIN * i)).isoformat(),
                           "heat_kwh": round(p["heat_kwh"], 3), "temp": round(p["temp"], 2),
                           "target": round(tgt[i], 2), "external": round(ext[i], 1),
                           "price": round(p["price"], 2), "cop": round(p["cop"], 2),
