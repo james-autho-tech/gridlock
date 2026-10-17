@@ -87,6 +87,7 @@ def engine(tmp_path, monkeypatch):
     g.registry = None
     g._control_listeners = {}
     g._last_plan = None
+    g.load_provider = types.SimpleNamespace(planned_circuit_kwh={}, slot_key=lambda dt: int(dt.timestamp()) // 1800)
     g.cheap_rate = 0.10
     g.degradation = 0.01
     g.cfg = types.SimpleNamespace(efficiency=0.9)
@@ -321,3 +322,24 @@ def test_battery_plan_pricing_flattens_the_heating_price_where_the_battery_cover
     # battery covers again at its own cost.
     assert plan[5]["price"] == pytest.approx(30.0, abs=0.05) and plan[5]["grid_price"] == pytest.approx(30.0, abs=0.05)
     assert plan[25]["price"] == pytest.approx(batt_p, abs=0.05) and plan[25]["grid_price"] == pytest.approx(30.0, abs=0.05)
+
+
+def test_heat_pump_plan_is_handed_to_the_battery_load_forecast(engine):
+    g, gridlock = engine
+    _seed_house(g)
+    _seed_tank(g)
+    g.states["sensor.loft_heatpump_controller_active_state"]["state"] = "Heating"
+    g.states["sensor.loft_heatpump_controller_ability_of_hydraulic_module"]["state"] = "5.0"
+    g.states["sensor.loft_heatpump_controller_total_water_outlet_temperature_t1"]["state"] = "40.0"
+    now = g.get_now()
+    g._publish_thermal_forecast(now)
+    planned = g.load_provider.planned_circuit_kwh[gridlock.HEATPUMP_POWER_ENTITY]
+    assert planned, "space heating + hot water electricity should be planned per slot"
+    first = min(planned)
+    assert first == g.load_provider.slot_key(now)
+    # Cold room, cold tank: the first slot carries both the heating and the DHW run.
+    assert planned[first] > 0.5
+    pub = g.published[gridlock.HEATPUMP_POWER_ENTITY]
+    assert pub["attributes"]["device_class"] == "power"
+    # 5 kW thermal at 40 °C flow, 4 °C outside -> roughly 1.5-2 kW electrical
+    assert 1000 < float(pub["state"]) < 2500

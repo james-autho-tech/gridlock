@@ -88,6 +88,11 @@ class LearnedLoadForecastProvider(LoadForecastProvider):
         self.ev_entity = ev_entity
         self.ev_power_entity = ev_power_entity
         self.circuit_power_entities = circuit_power_entities or []
+        # A circuit whose future is PLANNED rather than learned -- the
+        # heat pump, whose electricity GridWarm schedules slot by slot.
+        # {entity_id: {slot_key: kwh}} where slot_key is slot_key();
+        # for a slot with no planned figure the learned profile applies.
+        self.planned_circuit_kwh = {}
         self.daily_house_kwh = daily_house_kwh
         self.load_hourly_weights = load_hourly_weights
         self.house_profile, self.circuit_profiles = self._load()
@@ -200,6 +205,19 @@ class LearnedLoadForecastProvider(LoadForecastProvider):
             self._accum_circuit_kwh[eid] = self._accum_circuit_kwh.get(eid, 0.0) + circuit_kw * (5 / 60)
         self._accum_house_kwh += kw * (5 / 60)
 
+    @staticmethod
+    def slot_key(dt):
+        """Timezone-proof identity of a half-hour slot: epoch half-hours."""
+        return int(dt.timestamp()) // 1800
+
+    def _circuit_kwh(self, eid, slot_idx, slot_start):
+        planned = self.planned_circuit_kwh.get(eid)
+        if planned:
+            v = planned.get(self.slot_key(slot_start))
+            if v is not None:
+                return float(v)
+        return self.circuit_profiles.get(eid, {}).get(slot_idx, 0.0)
+
     def load_kwh(self, slot_start):
         slot_idx = str(slot_start.hour * 2 + (1 if slot_start.minute >= 30 else 0))
         # Only currently-tracked circuits, not every entity ever persisted
@@ -212,7 +230,7 @@ class LearnedLoadForecastProvider(LoadForecastProvider):
         # persistent double-count) would otherwise keep contributing its
         # last-learned figure to every future forecast forever, since
         # nothing else ever prunes this dict.
-        circuits_kwh = sum(self.circuit_profiles.get(eid, {}).get(slot_idx, 0.0)
+        circuits_kwh = sum(self._circuit_kwh(eid, slot_idx, slot_start)
                             for eid in self.circuit_power_entities)
         learned = self.house_profile.get(slot_idx)
         if learned is not None:

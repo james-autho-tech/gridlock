@@ -78,6 +78,15 @@ def _kraken_prefixes(entity_domain, suffix_after_prefix=""):
 THERMAL_STEP_MIN = 5
 THERMAL_HORIZON_STEPS = SLOT_MIN * HORIZON_SLOTS // THERMAL_STEP_MIN
 
+# GridWarm's estimate of the heat pump's electrical draw, published as a
+# power sensor so the whole-house load learning subtracts it (like any
+# other circuit) and the battery plan's load forecast takes GridWarm's
+# OWN plan for it slot by slot instead of a learned average -- the
+# battery then charges for, and reserves for, the heating it knows is
+# coming. The unit's lifetime kWh counters can't give a per-tick figure,
+# so this is thermal output divided by the modelled COP.
+HEATPUMP_POWER_ENTITY = "sensor.gridlock_heatpump_power"
+
 # Confirmed in production (2026-07-30): a value equal to exactly 0/0.0
 # nested inside a set_state() attributes payload — a dict key or a list
 # element — goes missing by the time it comes back out of Home
@@ -3071,10 +3080,11 @@ class GridLock(hass.Hass):
                 obs = core_flow.implied_emitter_rating(thermal_w, mean, internal_temp)
                 if obs is not None and 500.0 <= obs <= 100000.0:
                     zone["emitter_rated_w_at_dt50"] = core_flow.blend(zone["emitter_rated_w_at_dt50"], obs)
-            if hp["live_cop"] is not None and hp["flow_temp"] is not None:
-                eta = core_flow.implied_eta(hp["live_cop"], hp["flow_temp"], external_temp)
-                if eta is not None:
-                    zone["cop_eta"] = min(0.8, max(0.2, core_flow.blend(zone["cop_eta"], eta)))
+            # The controller's COP sensor is a lifetime average (total kWh
+            # out / total kWh in), not a live figure -- learning the Carnot
+            # factor from it per tick would just learn a constant. eta
+            # stays at its configured value until a real per-run COP
+            # source exists.
             run = state.get("heat_run")
             if run is None or not prior_on or elapsed_h is None or elapsed_h > 0.3:
                 run = {"start_ts": now.isoformat(), "start_temp": internal_temp, "wh": 0.0, "loss_wh": 0.0}
@@ -4021,6 +4031,7 @@ class GridLock(hass.Hass):
                              level="ERROR")
         if not zones_out:
             return
+        self._publish_heatpump_load(zones, zones_out, now)
         total_cost = sum(z["predicted_cost_today"] for z in zones_out)
         baseline_cost = sum(z["predicted_cost_today_baseline"] for z in zones_out)
         saving = baseline_cost - total_cost
@@ -4043,6 +4054,59 @@ class GridLock(hass.Hass):
                                    "space_heating_settings": ui_settings,
                                    "hot_water_settings": ui_settings["hot_water"],
                                    "zones": zones_out})
+
+    def _publish_heatpump_load(self, zones, zones_out, now):
+        """Tell the battery plan what the heat pump will draw (see
+        HEATPUMP_POWER_ENTITY): the space heating plan's electricity per
+        slot plus the hot water run's, keyed by slot; and the live
+        estimate as a power sensor for the load learning to subtract."""
+        planned = {}
+        live_w = 0.0
+        by_name = {z["name"]: z for z in zones}
+        for r in zones_out:
+            zone = by_name.get(r["name"])
+            if zone is None:
+                continue
+            flow = r.get("flow")
+            if flow and flow.get("plan"):
+                for p in flow["plan"]:
+                    try:
+                        key = self.load_provider.slot_key(self._iso(p["x"]))
+                    except (ValueError, TypeError):
+                        continue
+                    planned[key] = planned.get(key, 0.0) + p["heat_kwh"] / max(p["cop"], 0.5)
+            dhw = r.get("dhw")
+            if dhw and dhw.get("window_start") and dhw.get("window_end"):
+                try:
+                    start, end = self._iso(dhw["window_start"]), self._iso(dhw["window_end"])
+                except (ValueError, TypeError):
+                    start = end = None
+                if start and end and end > start:
+                    tank = r.get("current_temp")
+                    setpoint = dhw.get("setpoint") or 53.0
+                    hyst = dhw.get("start_hysteresis") or 10.0
+                    from_temp = tank if tank is not None else setpoint - hyst
+                    heat_kwh = max(0.0, setpoint - from_temp) * zone["params"].thermal_mass_wh_per_c / 1000.0
+                    if dhw.get("will_heat") or dhw.get("committed"):
+                        elec = heat_kwh / max(dhw.get("window_cop") or zone["params"].heating_cop, 0.5)
+                        n_slots = max(1, int((end - start).total_seconds() // 1800))
+                        for i in range(n_slots):
+                            key = self.load_provider.slot_key(start + timedelta(minutes=SLOT_MIN * i))
+                            planned[key] = planned.get(key, 0.0) + elec / n_slots
+            hp = r.get("hp") or {}
+            if r.get("heating_on") and hp.get("thermal_kw"):
+                flow_t = hp.get("flow_temp") if hp.get("flow_temp") is not None else 45.0
+                ext = r.get("external_temp") if r.get("external_temp") is not None else 10.0
+                cop = core_flow.cop_estimate(flow_t, ext, zone.get("cop_eta", 0.45))
+                live_w += hp["thermal_kw"] * 1000.0 / max(cop, 0.5)
+        self.load_provider.planned_circuit_kwh[HEATPUMP_POWER_ENTITY] = planned
+        self.set_state(HEATPUMP_POWER_ENTITY, state=f"{live_w:.0f}",
+                       attributes={"friendly_name": "GridLock heat pump power (estimated)",
+                                   "unit_of_measurement": "W", "device_class": "power",
+                                   "state_class": "measurement", "icon": "mdi:heat-pump",
+                                   "planned_kwh_next_24h": round(sum(
+                                       v for k, v in planned.items()
+                                       if 0 <= k - self.load_provider.slot_key(now) < 48), 2)})
 
     def _refresh_diagnostic_entities(self):
         """Re-resolve the watched entity list from the static "entities:"
@@ -4513,6 +4577,8 @@ class GridLock(hass.Hass):
         # unconditionally rather than trusting the label.
         if self.ent_ev_power:
             all_circuits = [c for c in all_circuits if c != self.ent_ev_power]
+        if self.entity_exists(HEATPUMP_POWER_ENTITY) and HEATPUMP_POWER_ENTITY not in all_circuits:
+            all_circuits.append(HEATPUMP_POWER_ENTITY)
         self.load_provider.circuit_power_entities = all_circuits
         self.load_provider.sample(now)
         self.publish_circuits(labeled_circuits, now)

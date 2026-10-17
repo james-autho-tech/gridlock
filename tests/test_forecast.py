@@ -210,3 +210,28 @@ def test_sample_accumulates_real_ticks_instead_of_extrapolating_each_one(tmp_pat
         "a single brief spike must not pull the learned slot total anywhere "
         "close to '12kW sustained for the whole half hour' (6.0kWh)"
     )
+
+
+
+def test_planned_circuit_kwh_overrides_the_learned_profile_per_slot(tmp_path):
+    from datetime import datetime, timezone
+    from core.forecast import LearnedLoadForecastProvider
+
+    class App:
+        def get_state(self, *a, **k):
+            return None
+
+    prov = LearnedLoadForecastProvider(App(), str(tmp_path / "lp.json"), load_power_entity="sensor.x",
+                                       circuit_power_entities=["sensor.hp"])
+    prov.house_profile = {str(i): 0.5 for i in range(48)}
+    prov.circuit_profiles = {"sensor.hp": {str(i): 0.3 for i in range(48)}}
+    t0 = datetime(2026, 10, 17, 14, 0, tzinfo=timezone.utc)
+    assert prov.load_kwh(t0) == 0.8
+    prov.planned_circuit_kwh["sensor.hp"] = {LearnedLoadForecastProvider.slot_key(t0): 1.2}
+    assert prov.load_kwh(t0) == 1.7                      # planned wins for that slot
+    t1 = datetime(2026, 10, 17, 14, 30, tzinfo=timezone.utc)
+    assert prov.load_kwh(t1) == 0.8                      # no plan for this slot -> learned
+    # The key is timezone-proof: the same instant in another zone matches.
+    from datetime import timedelta
+    t0_bst = t0.astimezone(timezone(timedelta(hours=1)))
+    assert prov.load_kwh(t0_bst) == 1.7

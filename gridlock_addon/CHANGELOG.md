@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.49.0 - 2026-10-17
+
+### New
+- The battery plan now knows the heating is coming: GridWarm hands its planned heat pump electricity (space heating per half-hour, plus the hot water run) to the load forecast slot by slot, so the battery charges for and reserves for it instead of guessing from a learned average; the live draw is published as `sensor.gridlock_heatpump_power` (thermal output ÷ modelled COP) and subtracted from the whole-house load learning like any other circuit
+
+### Fix
+- The controller's COP sensor is a lifetime average, not a live reading — the COP factor is no longer "learned" from it (that would only ever learn a constant); the panel labels it as lifetime COP
+
 ## 3.48.0 - 2026-10-17
 
 ### New
