@@ -65,6 +65,18 @@ template:
           resolved_label_id: "{{ label_id('GridLock Power') }}"
 
 input_select:
+  # GridWarm's master control switch (READ-ONLY / ACTIVE on the GridWarm
+  # tab). A real helper so the dashboard's toggle can use the normal
+  # input_select service; the engine creates a virtual stand-in if this
+  # package hasn't been loaded yet. Resets to read_only on an HA
+  # restart -- the safe default for anything that commands heating.
+  gridlock_gridwarm_mode:
+    name: GridLock GridWarm Control Mode
+    icon: mdi:heat-pump
+    options:
+      - read_only
+      - active
+    initial: read_only
   gridlock_mode_override:
     name: GridLock Mode Override
     icon: mdi:tune-vertical

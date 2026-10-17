@@ -420,12 +420,65 @@ loop for this zone — the target is a number you set from the tab (the ✏️
 next to it, or the form), and GridWarm regulates the heat pump's
 space-heating power switch against the room reading directly. If that
 room reading goes unavailable (dead battery, wrong entity), the zone shows
-"no reading" and, while control is active, is **held ON**: with nothing to
-regulate against, heating is the safe failure mode, never off.
+"no reading" and, while control is active, falls back to **plain weather
+compensation**: the heat the house would need at its target in the current
+outdoor temperature, from the learned loss model, switched off in mild
+weather and with the flow temperature capped low. Never "just on" — a
+heating loop with no thermometer and nothing to stop it is how a house
+ends up at 26°C overnight. A working room thermometer is the real fix.
 
 `apps.yaml` zones still work exactly as before and can also set
 `control_entity` on a room now — the same code path, with the defaults
 below — for anyone who prefers the file.
+
+### Dynamic flow temperature (the COP part)
+
+With a flow setpoint entity set ("Flow temperature setpoint" in the form —
+the heat pump's zone 1 `T1S` number on the Midea controller), GridWarm
+stops treating heating as on/off and runs it the way an efficient
+controller should:
+
+- **Plan.** Every tick it solves a small linear programme over the next 48
+  half-hours: how much heat to deliver in each slot to keep the room
+  inside a comfort band around the target at least cost, given the
+  forecast outdoor temperature, the house's learned heat loss and thermal
+  mass, the tariff, and a COP that falls as the flow temperature rises.
+  Heat in each slot is split into a cheap low-flow portion and a dearer
+  high-flow portion, so it only pre-heats in a cheap slot when the saving
+  beats the COP it gives up. A comfort cost per degree of deviation keeps
+  it tracking the target on a flat tariff instead of parking the house at
+  the bottom of the band. If the solver isn't available it falls back to
+  a steady-state hold.
+- **Act.** The plan's first slot says how much heat the house needs now.
+  The radiator curve (output ∝ (mean water − room)^1.3, rated at ΔT50)
+  turns that into the lowest flow temperature that delivers it; the
+  setpoint is written to the unit before the heating switch is turned on.
+  Demand hysteresis stops the compressor being started for a trickle it
+  can't modulate down to (on at half the unit's minimum output, off below
+  a fifth), and setpoint moves are rate-limited per tick.
+- **Learn.** From the unit's own readings while heating: the radiator
+  rating from measured thermal output vs mean water temperature above the
+  room, the COP factor (fraction of Carnot) from the live COP sensor, and
+  the house's thermal mass from heat delivered over a continuous run vs
+  how much the room rose. All blend in gradually, like the heat-loss
+  learning. The panel shows each learned figure against where it started.
+
+**How low can the flow go?** Only as low as the unit allows. The Midea
+controller reports its heating setpoint range in
+`sensor.<device>_temperature_lower/upper_limit_of_t1s_heating_zone_1` —
+35 to 65°C with the installer setting "T1S heating high/low temperature"
+on HIGH (the radiator range); anything written below the lower limit is
+snapped straight back to it within seconds. The LOW range (25 to 55°C) is
+an installer-menu setting on the unit's wired controller; on the unit
+this was built against, writing that parameter bit over Modbus was
+silently reverted too, so it has to be changed on the controller itself.
+Set "Lowest flow °C" in the form to whatever the unit then reports.
+
+The house panel at the top of the tab shows room, target (−/+), flow
+setpoint (commanded, what the unit has, actual outlet/return water),
+heat pump state, what the plan needs now with its predicted COP, and the
+24-hour plan chart. With no flow entity the zone falls back to on/off
+control at whatever the unit's own setpoint is.
 
 ### Active control (hot water tank or space heating)
 

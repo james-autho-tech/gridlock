@@ -71,9 +71,44 @@ DEFAULTS = {
     "heat_max_power": 7000.0,
     "heat_min_power": 2000.0,
     "heating_cop": 4.15,
-    "heat_volume": 123.0,
+    # Effective thermal mass of the whole house (fabric, not just air) --
+    # a typical UK house is several kWh per °C. Learned from real heating
+    # runs (measured heat in vs. temperature rise), so this is only where
+    # it starts. Together with heat_loss_degrees this gives a heat-loss
+    # coefficient of 0.035 * 8000 = 280 W/K, about 4 kW at 15 °C of lift.
+    "thermal_mass_wh_per_c": 8000.0,
     "hysteresis": 0.5,
     "hysteresis_off": 0.1,
+    # --- Dynamic flow temperature (core/flow_control.py) ---
+    # The heat pump's space-heating flow setpoint. With this set GridWarm
+    # modulates the flow temperature every tick to the lowest that meets
+    # the plan, instead of just switching heating on and off at whatever
+    # the unit's fixed setpoint is -- that's where the COP comes from.
+    "flow_entity": "number.loft_heatpump_controller_set_water_temperature_t1s_zone_1",
+    # The unit's own heating-mode T1S range is 35-65 °C; 50 is plenty for
+    # radiators, and the plan should rarely need anything near it.
+    "flow_min": 35.0,
+    "flow_max": 50.0,
+    "flow_max_step": 3.0,      # °C per 5-min tick, rate limit on setpoint moves
+    "flow_fallback": 38.0,     # flow CAP while there's no room reading (weather compensation only)
+    "water_dt": 5.0,           # design flow/return split, °C
+    # Radiator output at ΔT50 (what datasheets quote), total for the
+    # loop. Learned from the unit's measured thermal output while
+    # running -- this is only the starting point.
+    "emitter_rated_w_at_dt50": 10000.0,
+    "cop_eta": 0.45,           # fraction of Carnot the unit achieves; learned from the live COP
+    # How far the tariff-aware plan may let the room drift either side
+    # of the target to shift heat into cheaper slots.
+    "comfort_below": 1.0,
+    "comfort_above": 1.0,
+    "tariff_optimise": True,
+    # Live readings for learning the emitter curve, COP factor and
+    # thermal mass (all optional -- without them the starting values
+    # above just stay put).
+    "thermal_power_entity": "sensor.loft_heatpump_controller_ability_of_hydraulic_module",
+    "flow_temp_entity": "sensor.loft_heatpump_controller_total_water_outlet_temperature_t1",
+    "return_temp_entity": "sensor.loft_heatpump_controller_water_inlet_temperature",
+    "compressor_entity": "sensor.loft_heatpump_controller_compressor_operating_frequency",
 }
 
 # (min, max) clamps for the numeric fields — a typo must never reach a
@@ -88,13 +123,25 @@ NUMERIC_BOUNDS = {
     "heat_max_power": (0.0, 50000.0),
     "heat_min_power": (0.0, 50000.0),
     "heating_cop": (0.5, 10.0),
-    "heat_volume": (1.0, 5000.0),
+    "thermal_mass_wh_per_c": (500.0, 50000.0),
     "hysteresis": (0.0, 5.0),
     "hysteresis_off": (0.0, 5.0),
+    "flow_min": (20.0, 60.0),
+    "flow_max": (25.0, 70.0),
+    "flow_max_step": (0.5, 20.0),
+    "flow_fallback": (25.0, 60.0),
+    "water_dt": (2.0, 15.0),
+    "emitter_rated_w_at_dt50": (500.0, 100000.0),
+    "cop_eta": (0.2, 0.8),
+    "comfort_below": (0.0, 5.0),
+    "comfort_above": (0.0, 5.0),
 }
 
 ENTITY_FIELDS = ("internal_temp_entity", "external_temp_entity", "weather_entity",
-                 "control_entity", "heating_entity", "cop_entity")
+                 "control_entity", "heating_entity", "cop_entity", "flow_entity",
+                 "thermal_power_entity", "flow_temp_entity", "return_temp_entity",
+                 "compressor_entity")
+BOOL_FIELDS = ("configured", "tariff_optimise")
 
 
 def _clean_entity(value):
@@ -126,8 +173,9 @@ def merge_settings(saved):
     default, never to zero)."""
     out = copy.deepcopy(DEFAULTS)
     saved = saved if isinstance(saved, dict) else {}
-    if "configured" in saved:
-        out["configured"] = bool(saved["configured"])
+    for key in BOOL_FIELDS:
+        if key in saved:
+            out[key] = bool(saved[key])
     name = saved.get("name")
     if isinstance(name, str) and name.strip():
         out["name"] = name.strip()[:60]
@@ -145,6 +193,8 @@ def merge_settings(saved):
                 pass
     if "control_requires" in saved:
         out["control_requires"] = clean_requirements(saved["control_requires"])
+    if out["flow_max"] < out["flow_min"]:
+        out["flow_max"] = out["flow_min"]
     return out
 
 
@@ -172,7 +222,22 @@ def to_zone_cfg(settings):
         "heat_min_power": settings["heat_min_power"],
         "heat_share": 1.0,
         "heating_cop": settings["heating_cop"],
-        "heat_volume": settings["heat_volume"],
+        "thermal_mass_wh_per_c": settings["thermal_mass_wh_per_c"],
         "hysteresis": settings["hysteresis"],
         "hysteresis_off": settings["hysteresis_off"],
+        "flow_entity": settings["flow_entity"],
+        "flow_min": settings["flow_min"],
+        "flow_max": settings["flow_max"],
+        "flow_max_step": settings["flow_max_step"],
+        "flow_fallback": settings["flow_fallback"],
+        "water_dt": settings["water_dt"],
+        "emitter_rated_w_at_dt50": settings["emitter_rated_w_at_dt50"],
+        "cop_eta": settings["cop_eta"],
+        "comfort_below": settings["comfort_below"],
+        "comfort_above": settings["comfort_above"],
+        "tariff_optimise": settings["tariff_optimise"],
+        "thermal_power_entity": settings["thermal_power_entity"],
+        "flow_temp_entity": settings["flow_temp_entity"],
+        "return_temp_entity": settings["return_temp_entity"],
+        "compressor_entity": settings["compressor_entity"],
     }

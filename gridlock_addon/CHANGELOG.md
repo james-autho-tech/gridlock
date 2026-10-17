@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.46.0 - 2026-10-17
+
+### New
+- GridWarm runs space heating the efficient way: a dynamic flow-temperature controller sets the heat pump's zone 1 flow setpoint every tick to the lowest that meets a least-cost heat plan for the next 48 hours, re-planned from the room temperature, weather forecast and tariff — long low-flow runs for COP, heat shifted into cheap half-hours when the house's thermal mass makes that pay after the COP penalty, demand hysteresis so the compressor isn't cycled for a trickle, rate-limited setpoint moves
+- The plan is a small linear programme (same solver as the battery plan) with a comfort band around the target, a comfort cost per degree of deviation so it tracks the target on a flat tariff, and a safe steady-state fallback if the solver is unavailable
+- Self-learning from the heat pump's own readings: radiator output curve from measured thermal output, COP factor from the live COP sensor, house thermal mass from continuous heating runs — on top of the existing heat-loss learning
+- House heating panel at the top of the GridWarm tab: room, target with −/+ buttons, flow setpoint (commanded / on the unit / actual water temperatures), heat pump state with compressor and COP, what the plan needs now, and a 24-hour chart of planned heat per half-hour coloured by price against the room temperature and target band
+- Space heating settings use dropdowns of your real Home Assistant entities (friendly names shown), grouped into Room & weather / What GridWarm commands / Flow temperature & comfort / Heat pump readings / Preconditions / Thermal model
+- Heat pump activity card hides Modbus register noise (reserved bits, capability flags, slave-unit status) by default, with a toggle
+- Engine version shown on the GridWarm tab and published on the status sensor
+- `packages/gridlock.yaml` now ships the GridWarm mode selector as a real helper
+
+### Fix
+- A controlled zone with no usable room reading was held ON indefinitely (3.45.0); it now runs on weather compensation computed from the loss model — off in mild weather, flow capped at the "no reading" cap (default 38 °C) — and the panel says so
+- The READ-ONLY / ACTIVE toggle did nothing on an install without the real helper — the engine's virtual selector has no select service; the dashboard now writes its state directly in that case
+- The dashboard zone's default thermal mass was a single room's figure (from the apps.yaml example), which would have told the planner the whole house needs a few hundred watts; it now starts from a whole-house figure and learns from there
+
 ## 3.45.0 - 2026-10-16
 
 ### New

@@ -25,6 +25,7 @@ from core.tariff import KrakenTariffProvider
 from core.forecast import SolcastForecastProvider, LearnedLoadForecastProvider
 from core import thermal as core_thermal
 from core import space_heating as core_space_heating
+from core import flow_control as core_flow
 from core import diagnostics as core_diagnostics
 from core import warranty as core_warranty
 from core.ev_schedule import find_cheapest_window
@@ -626,11 +627,7 @@ class GridLock(hass.Hass):
         # fire.
         self.thermal_learning_state = self._load_json("thermal_learning_state.json", {})
         for zone in self.thermal_zones:
-            saved = self.thermal_learning_state.get(zone["name"], {})
-            if saved.get("heat_loss_degrees") is not None:
-                zone["params"].heat_loss_degrees = saved["heat_loss_degrees"]
-            if saved.get("heat_loss_watts") is not None:
-                zone["params"].heat_loss_watts = saved["heat_loss_watts"]
+            self._apply_learned_thermal(zone)
         for zone in self.thermal_zones:
             if not zone["control_entity"]:
                 continue
@@ -2961,6 +2958,27 @@ class GridLock(hass.Hass):
                 # write; unmet means Blocked, not a command into the void.
                 "control_requires": core_space_heating.clean_requirements(
                     z.get("control_requires")),
+                # Dynamic flow temperature (core/flow_control.py) -- opt-in
+                # via flow_entity. The emitter rating, COP factor and
+                # thermal mass are starting points that self-refine.
+                "flow_entity": z.get("flow_entity"),
+                "flow_min": float(z.get("flow_min", 35.0)),
+                "flow_max": float(z.get("flow_max", 50.0)),
+                "flow_max_step": float(z.get("flow_max_step", 3.0)),
+                "flow_fallback": float(z.get("flow_fallback", 40.0)),
+                "water_dt": float(z.get("water_dt", 5.0)),
+                "emitter_rated_w_at_dt50": float(z.get("emitter_rated_w_at_dt50", 10000.0)),
+                "config_emitter_rated_w_at_dt50": float(z.get("emitter_rated_w_at_dt50", 10000.0)),
+                "cop_eta": float(z.get("cop_eta", 0.45)),
+                "config_cop_eta": float(z.get("cop_eta", 0.45)),
+                "config_thermal_mass_wh_per_c": mass,
+                "comfort_below": float(z.get("comfort_below", 1.0)),
+                "comfort_above": float(z.get("comfort_above", 1.0)),
+                "tariff_optimise": bool(z.get("tariff_optimise", True)),
+                "thermal_power_entity": z.get("thermal_power_entity"),
+                "flow_temp_entity": z.get("flow_temp_entity"),
+                "return_temp_entity": z.get("return_temp_entity"),
+                "compressor_entity": z.get("compressor_entity"),
                 # Usable-hot-water estimate — tank zones only (tank_litres
                 # is what makes it a tank rather than a room in the first
                 # place, see the mass branch above).
@@ -2975,6 +2993,148 @@ class GridLock(hass.Hass):
                 "config_heat_loss_degrees": params.heat_loss_degrees,
                 "config_heat_loss_watts": params.heat_loss_watts,
                 "params": params}
+
+    def _apply_learned_thermal(self, zone):
+        """Re-apply everything previously learned about a zone (persisted
+        in thermal_learning_state.json) over its configured starting
+        figures -- at startup and whenever a zone is rebuilt from the
+        dashboard settings, so neither resets what the model has learned
+        about the house back to the defaults."""
+        saved = self.thermal_learning_state.get(zone["name"], {})
+        params = zone["params"]
+        if saved.get("heat_loss_degrees") is not None:
+            params.heat_loss_degrees = saved["heat_loss_degrees"]
+        if saved.get("heat_loss_watts") is not None:
+            params.heat_loss_watts = saved["heat_loss_watts"]
+        if saved.get("thermal_mass_wh_per_c") is not None:
+            params.thermal_mass_wh_per_c = saved["thermal_mass_wh_per_c"]
+        if saved.get("emitter_w_at_dt50") is not None:
+            zone["emitter_rated_w_at_dt50"] = saved["emitter_w_at_dt50"]
+        if saved.get("cop_eta") is not None:
+            zone["cop_eta"] = saved["cop_eta"]
+
+    def _hp_live(self, zone):
+        """The heat pump's own live readings a flow-controlled zone uses
+        for learning and shows on the dashboard. All optional."""
+        g = lambda key: (self.get_float_state(zone[key], None) if zone.get(key) else None)  # noqa: E731
+        return {"thermal_kw": g("thermal_power_entity"),
+                "flow_temp": g("flow_temp_entity"),
+                "return_temp": g("return_temp_entity"),
+                "compressor_hz": g("compressor_entity"),
+                "live_cop": g("cop_entity"),
+                "flow_setpoint_live": g("flow_entity")}
+
+    def _update_flow_learning(self, zone, now, internal_temp, external_temp, heating_on, hp):
+        """Learns the three numbers dynamic flow control depends on, from
+        the heat pump's own live readings while it's heating:
+        - the emitter (radiator) rating, from measured thermal output vs
+          how far the mean water temperature is above the room;
+        - the COP factor (fraction of Carnot), from the live COP sensor
+          vs flow and outdoor temperature;
+        - the house's thermal mass, from heat delivered over a continuous
+          heating run of an hour or more vs how much the room rose
+          (shorter intervals drown in the thermometer's 0.1 °C steps).
+        Same gradual EMA blend as every other learned figure here, each
+        clamped to a physically plausible range. Must run BEFORE
+        _update_thermal_learning, which overwrites the prior-tick state
+        this reads."""
+        if not zone["flow_entity"]:
+            return
+        state = self.thermal_learning_state.setdefault(zone["name"], {})
+        params = zone["params"]
+        thermal_w = (hp["thermal_kw"] or 0.0) * 1000.0
+        prior_ts, prior_on = state.get("ts"), state.get("heating_on")
+        try:
+            elapsed_h = (now - self._iso(prior_ts)).total_seconds() / 3600.0 if prior_ts else None
+        except (ValueError, TypeError):
+            elapsed_h = None
+        if heating_on and thermal_w > 300.0:
+            if hp["flow_temp"] is not None and hp["return_temp"] is not None:
+                mean = (hp["flow_temp"] + hp["return_temp"]) / 2.0
+                obs = core_flow.implied_emitter_rating(thermal_w, mean, internal_temp)
+                if obs is not None and 500.0 <= obs <= 100000.0:
+                    zone["emitter_rated_w_at_dt50"] = core_flow.blend(zone["emitter_rated_w_at_dt50"], obs)
+            if hp["live_cop"] is not None and hp["flow_temp"] is not None:
+                eta = core_flow.implied_eta(hp["live_cop"], hp["flow_temp"], external_temp)
+                if eta is not None:
+                    zone["cop_eta"] = min(0.8, max(0.2, core_flow.blend(zone["cop_eta"], eta)))
+            run = state.get("heat_run")
+            if run is None or not prior_on or elapsed_h is None or elapsed_h > 0.3:
+                run = {"start_ts": now.isoformat(), "start_temp": internal_temp, "wh": 0.0, "loss_wh": 0.0}
+            else:
+                loss_w = core_flow.steady_state_loss_w(internal_temp, external_temp, params)
+                run["wh"] += thermal_w * elapsed_h
+                run["loss_wh"] += loss_w * elapsed_h
+                try:
+                    run_h = (now - self._iso(run["start_ts"])).total_seconds() / 3600.0
+                except (ValueError, TypeError, KeyError):
+                    run_h = 0.0
+                rise = internal_temp - run["start_temp"]
+                if run_h >= 1.0 and rise >= 0.3:
+                    obs = core_flow.implied_thermal_mass(run["wh"] / run_h, run["loss_wh"] / run_h, rise, run_h)
+                    if obs is not None and 500.0 <= obs <= 50000.0:
+                        params.thermal_mass_wh_per_c = core_flow.blend(params.thermal_mass_wh_per_c, obs, alpha=0.1)
+                    run = {"start_ts": now.isoformat(), "start_temp": internal_temp, "wh": 0.0, "loss_wh": 0.0}
+            state["heat_run"] = run
+        else:
+            state["heat_run"] = None
+        state["emitter_w_at_dt50"] = zone["emitter_rated_w_at_dt50"]
+        state["cop_eta"] = zone["cop_eta"]
+        state["thermal_mass_wh_per_c"] = params.thermal_mass_wh_per_c
+
+    def _plan_flow(self, zone, now, internal_temp, external_curve, plan_curve, rate_curve):
+        """The flow-temperature plan for one tick (see core/flow_control.py):
+        a least-cost heat schedule over the horizon at half-hour
+        resolution, then the flow setpoint that delivers its first slot
+        at the lowest temperature the radiators allow."""
+        per_slot = SLOT_MIN // THERMAL_STEP_MIN
+        slot_hours = SLOT_MIN / 60.0
+        idx = list(range(0, len(external_curve), per_slot))
+        ext = [external_curve[j] for j in idx]
+        tgt = [plan_curve[j] for j in idx]
+        rates = ([rate_curve[j] for j in idx] if zone["tariff_optimise"]
+                 else [1.0] * len(idx))
+        params = zone["params"]
+        emitter, eta = zone["emitter_rated_w_at_dt50"], zone["cop_eta"]
+        max_w = params.heat_max_power or 7000.0
+        low_w = min(max_w, core_flow.emitter_output_w(
+            zone["flow_min"] - zone["water_dt"] / 2.0, tgt[0] if tgt else internal_temp, emitter))
+        cop_low = [core_flow.cop_estimate(zone["flow_min"], e, eta) for e in ext]
+        cop_high = [core_flow.cop_estimate(zone["flow_max"], e, eta) for e in ext]
+        plan, status = core_flow.plan_heating(
+            internal_temp, ext, rates, tgt, params,
+            comfort_below=zone["comfort_below"], comfort_above=zone["comfort_above"],
+            slot_hours=slot_hours, low_flow_power_w=low_w, cop_low_curve=cop_low,
+            cop_high_curve=cop_high, max_power_w=max_w, solver=core_optimizer._solver())
+        if plan:
+            required_w = max(0.0, plan[0]["heat_kwh"] * 1000.0 / slot_hours)
+        else:
+            required_w = max(0.0, core_flow.steady_state_loss_w(internal_temp, ext[0] if ext else 10.0, params))
+        wanted = core_flow.flow_setpoint_for_power(
+            required_w, internal_temp, emitter, zone["water_dt"], zone["flow_min"], zone["flow_max"], 1.0)
+        ext_now = ext[0] if ext else 10.0
+        steps_per_day = int(24 / slot_hours)
+        today = plan[:steps_per_day]
+        heat_kwh = sum(p["heat_kwh"] for p in today)
+        elec_kwh = sum(p["heat_kwh"] / max(p["cop"], 0.1) for p in today)
+        return {"required_w": required_w,
+                "required_kw": round(required_w / 1000.0, 2),
+                "flow_setpoint_wanted": wanted,
+                "predicted_cop": round(core_flow.cop_estimate(wanted, ext_now, eta), 2),
+                "low_flow_kw": round(low_w / 1000.0, 2),
+                "plan_status": status,
+                "plan_heat_kwh_today": round(heat_kwh, 2),
+                "plan_elec_kwh_today": round(elec_kwh, 2),
+                "plan_cost_today": round(sum(p["cost"] for p in today), 2),
+                "plan": [{"x": (now + timedelta(minutes=SLOT_MIN * (i + 1))).isoformat(),
+                          "heat_kwh": round(p["heat_kwh"], 3), "temp": round(p["temp"], 2),
+                          "target": round(tgt[i], 2), "external": round(ext[i], 1),
+                          "price": round(p["price"], 2), "cop": round(p["cop"], 2),
+                          "flow": core_flow.flow_setpoint_for_power(
+                              p["heat_kwh"] * 1000.0 / slot_hours, p["temp"], emitter,
+                              zone["water_dt"], zone["flow_min"], zone["flow_max"], 1.0)
+                          if p["heat_kwh"] > 1e-6 else None}
+                         for i, p in enumerate(today)]}
 
     def _thermal_internal_temp(self, zone):
         """A climate.* entity's own state is its HVAC mode ("heat"/"off"),
@@ -3179,6 +3339,8 @@ class GridLock(hass.Hass):
             target_temp = internal_temp
         external_now = self._thermal_external_temp(zone)
         heating_on = self._thermal_heating_on(zone)
+        hp = self._hp_live(zone)
+        self._update_flow_learning(zone, now, internal_temp, external_now, heating_on, hp)
         self._update_thermal_learning(zone, now, internal_temp, external_now, heating_on)
 
         external_curve = (self._thermal_weather_curve(
@@ -3227,7 +3389,19 @@ class GridLock(hass.Hass):
                         else "Steady")}
             for i, j in enumerate(range(per_slot - 1, len(trace), per_slot))]
 
-        live_cop = self.get_float_state(zone["cop_entity"], None) if zone["cop_entity"] else None
+        live_cop = hp["live_cop"]
+        flow = None
+        if zone["flow_entity"]:
+            try:
+                flow = self._plan_flow(zone, now, internal_temp, external_curve, plan_curve, rate_curve)
+            except Exception as exc:  # noqa: BLE001 — a plan failure must not drop the zone
+                self.log(f"GridWarm: flow plan for '{zone['name']}' failed: {exc!r}", level="WARNING")
+                flow = None
+            if flow and flow["plan_status"] != "empty":
+                # The flow plan is the real forecast for this zone -- its
+                # cost figures supersede the on/off simulation's.
+                predicted_kwh_today = flow["plan_elec_kwh_today"]
+                predicted_cost_today = flow["plan_cost_today"]
         usable_litres = showers = None
         if zone["tank_litres"]:
             usable_litres = core_thermal.usable_hot_water_litres(
@@ -3250,7 +3424,16 @@ class GridLock(hass.Hass):
                 # this zone, actually commands. Distinct from the LIVE
                 # "heating_on" above, which is what the hardware is
                 # observed doing right now, not what the model wants.
-                "desired_heating_on": trace[0]["heating_on"],
+                "desired_heating_on": (flow["required_w"] >= (zone["params"].heat_min_power or 1500.0) * 0.5
+                                       if flow else trace[0]["heating_on"]),
+                "flow": flow,
+                "hp": hp,
+                "learned_emitter_w_at_dt50": round(zone["emitter_rated_w_at_dt50"], 0),
+                "config_emitter_w_at_dt50": round(zone["config_emitter_rated_w_at_dt50"], 0),
+                "learned_cop_eta": round(zone["cop_eta"], 3),
+                "config_cop_eta": round(zone["config_cop_eta"], 3),
+                "learned_thermal_mass": round(zone["params"].thermal_mass_wh_per_c, 0),
+                "config_thermal_mass": round(zone["config_thermal_mass_wh_per_c"], 0),
                 "cop": round(live_cop, 2) if live_cop is not None else zone["params"].heating_cop,
                 "predicted_kwh_today": round(predicted_kwh_today, 2),
                 "predicted_kwh_today_baseline": round(baseline_kwh_today, 2),
@@ -3307,11 +3490,7 @@ class GridLock(hass.Hass):
             # Same learned-parameter restore as the apps.yaml zones get at
             # startup -- a settings edit (or restart) mustn't reset what
             # the model has learned about the house back to the defaults.
-            saved = self.thermal_learning_state.get(zone["name"], {})
-            if saved.get("heat_loss_degrees") is not None:
-                zone["params"].heat_loss_degrees = saved["heat_loss_degrees"]
-            if saved.get("heat_loss_watts") is not None:
-                zone["params"].heat_loss_watts = saved["heat_loss_watts"]
+            self._apply_learned_thermal(zone)
             if zone["control_entity"]:
                 pause_helper = self._thermal_pause_helper(zone["name"])
                 if not self.entity_exists(pause_helper):
@@ -3329,8 +3508,8 @@ class GridLock(hass.Hass):
         """What a controlled zone publishes when it has no usable room
         reading (sensor unavailable, dead battery, wrong entity) -- it
         still has to appear on the dashboard with its control status,
-        and _control_thermal_zone still has to run for it (holding
-        heating ON, the safe failure mode), rather than silently vanish
+        and _control_thermal_zone still has to run for it (on weather
+        compensation alone, see there), rather than silently vanish
         along with whatever state its switch was last left in."""
         target = self._thermal_target_temp(zone)
         return {"name": zone["name"],
@@ -3342,6 +3521,14 @@ class GridLock(hass.Hass):
                 "is_tank": zone["is_tank"],
                 "target_editable": zone.get("source") == "dashboard",
                 "desired_heating_on": True,
+                "flow": None,
+                "hp": self._hp_live(zone),
+                "learned_emitter_w_at_dt50": round(zone["emitter_rated_w_at_dt50"], 0),
+                "config_emitter_w_at_dt50": round(zone["config_emitter_rated_w_at_dt50"], 0),
+                "learned_cop_eta": round(zone["cop_eta"], 3),
+                "config_cop_eta": round(zone["config_cop_eta"], 3),
+                "learned_thermal_mass": round(zone["params"].thermal_mass_wh_per_c, 0),
+                "config_thermal_mass": round(zone["config_thermal_mass_wh_per_c"], 0),
                 "cop": zone["params"].heating_cop,
                 "predicted_kwh_today": 0.0, "predicted_kwh_today_baseline": 0.0,
                 "predicted_cost_today": 0.0, "predicted_cost_today_baseline": 0.0,
@@ -3374,9 +3561,8 @@ class GridLock(hass.Hass):
         - a read-back check: if the device reverts a command it's re-sent
           every tick and flagged Reverted, so an overridden switch can't
           masquerade as "heating on".
-        A zone with no usable room reading (a stub result) is held ON:
-        with nothing to regulate against, heating is the safe failure
-        mode, never off."""
+        A zone with no usable room reading (a stub result) runs on plain
+        weather compensation from the loss model -- never "just on"."""
         entity = zone["control_entity"]
         if not entity:
             result["control"] = None
@@ -3403,7 +3589,9 @@ class GridLock(hass.Hass):
         result["control"] = {"entity": entity, "pause_helper": pause_helper,
                               "paused": paused, "commanded": state["last_commanded"],
                               "blocked": unmet, "blocked_items": blocked_items,
-                              "rejected": state["rejected"], "live_state": live_state}
+                              "rejected": state["rejected"], "live_state": live_state,
+                              "flow_entity": zone["flow_entity"],
+                              "flow_setpoint": state.get("flow_setpoint")}
         if paused:
             state["blocked_key"] = None
             return
@@ -3423,14 +3611,68 @@ class GridLock(hass.Hass):
         no_reading = result.get("no_reading", False)
         off_duration_hours = ((now - state["off_since"]).total_seconds() / 3600.0
                               if state["off_since"] else 0.0)
+        flow = result.get("flow")
+        flow_entity = zone["flow_entity"]
+        setpoint = None
+        flow_reason = None
         if no_reading:
-            command = True
+            # No room reading to regulate against. Holding heating ON
+            # "to be safe" is NOT safe -- it ran a real house flat out at
+            # 45°C flow for fourteen hours before anyone noticed. Instead,
+            # fall back to plain weather compensation computed here: the
+            # heat the house would need at its target in this outdoor
+            # temperature, from the learned loss model -- enough to stop
+            # it going cold, switched off in mild weather, flow capped.
+            # The fallback cap is deliberately low; a thermometer is the
+            # real fix and the dashboard says so.
+            params = zone["params"]
+            target = result["target_temp"] if result.get("target_temp") is not None else 20.0
+            need_w = max(0.0, core_flow.steady_state_loss_w(target, result["external_temp"], params))
+            currently_on = (state["last_commanded"] if state["last_commanded"] is not None
+                            else live_state == "on")
+            min_w = params.heat_min_power or 1500.0
+            command = need_w > min_w * 0.2 if currently_on else need_w >= min_w * 0.5
+            if flow_entity:
+                setpoint = min(zone["flow_fallback"], core_flow.flow_setpoint_for_power(
+                    need_w, target, zone["emitter_rated_w_at_dt50"], zone["water_dt"],
+                    zone["flow_min"], zone["flow_max"], 1.0))
+            flow_reason = (f"no room reading — weather compensation only: ~{need_w / 1000.0:.1f} kW to hold "
+                           f"{target:.1f}°C at {result['external_temp']:.1f}°C outside")
+        elif flow_entity and flow:
+            # Dynamic flow temperature: the plan's first slot says how much
+            # heat the house needs; decide_flow_command turns that into
+            # on/off with demand hysteresis and a rate-limited setpoint.
+            currently_on = (state["last_commanded"] if state["last_commanded"] is not None
+                            else live_state == "on")
+            command, setpoint = core_flow.decide_flow_command(
+                flow["required_w"], currently_on, zone["params"].heat_min_power or 1500.0,
+                state.get("flow_setpoint"), flow["flow_setpoint_wanted"], zone["flow_max_step"])
+            # Same two safety overrides as on/off control, layered on top.
+            forced = core_thermal.decide_heating_command(
+                command, result["current_temp"], zone["control_safety_min_temp"],
+                off_duration_hours, zone["control_max_off_hours"])
+            if forced and not command:
+                command = True
+                setpoint = max(setpoint, flow["flow_setpoint_wanted"],
+                               (zone["flow_min"] + zone["flow_max"]) / 2.0)
+            flow_reason = (f"plan needs {flow['required_kw']:.1f} kW at {result['current_temp']:.1f}°C "
+                           f"in / {result['external_temp']:.1f}°C out — predicted COP {flow['predicted_cop']:.2f}")
         else:
             command = core_thermal.decide_heating_command(
                 result["desired_heating_on"], result["current_temp"],
                 zone["control_safety_min_temp"], off_duration_hours, zone["control_max_off_hours"])
         state["off_since"] = None if command else (state["off_since"] or now)
         result["control"]["commanded"] = command
+        # Flow setpoint first, then the on/off switch -- so the unit starts
+        # at the temperature the plan wants, not at whatever was left.
+        if flow_entity and setpoint is not None and command:
+            setpoint = float(round(setpoint))
+            if state.get("flow_setpoint") != setpoint:
+                self.call_service("number/set_value", target={"entity_id": flow_entity}, value=setpoint)
+                state["flow_setpoint"] = setpoint
+                self._log_decision(f"GridWarm: {name} flow {setpoint:.0f}°C", flow_reason or "flow setpoint")
+        result["control"]["flow_entity"] = flow_entity
+        result["control"]["flow_setpoint"] = state.get("flow_setpoint")
         service = f"switch/turn_{'on' if command else 'off'}"
         if command == state["last_commanded"]:
             if core_thermal.command_matches_state(command, live_state):
@@ -3465,7 +3707,8 @@ class GridLock(hass.Hass):
         # decide_heating_command only ever forces ON, never OFF -- so "off"
         # can only mean the plan itself wanted off, no override needed.
         if no_reading:
-            reason = "No usable room temperature reading — holding heating on until one comes back"
+            reason = (flow_reason or "No usable room temperature reading") + (
+                " — heating on" if command else " — not enough demand, heating off")
         elif not command:
             reason = "GridWarm plan — heating off"
         elif result["current_temp"] <= zone["control_safety_min_temp"]:
@@ -4295,6 +4538,7 @@ class GridLock(hass.Hass):
         self.set_state("sensor.gridlock_status", state=state,
                        attributes={"friendly_name": "GridLock Status",
                                    "icon": "mdi:brain",
+                                   "engine_version": VERSION,
                                    "action": reason, "reason": reason,
                                    "plan_html": plan_html,
                                    "soc_entity": self.ent_soc,
