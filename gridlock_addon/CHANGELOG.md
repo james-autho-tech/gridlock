@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.52.1 - 2026-10-17
+
+### Fix
+- The hourly outdoor forecast never reached the heating plan: AppDaemon returns HA's websocket-shaped service response (the per-entity data sits under "response"), which the engine read as if it were the bare entity dict and found nothing, silently. The model had been holding the outdoor temperature flat all along. It now reads the right shape and logs which weather entity it's using and how many points it got
+
 ## 3.52.0 - 2026-10-17
 
 ### New

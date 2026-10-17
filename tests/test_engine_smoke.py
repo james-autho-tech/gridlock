@@ -354,3 +354,32 @@ def test_heat_pump_plan_is_handed_to_the_battery_load_forecast(engine):
     assert pub["attributes"]["device_class"] == "power"
     # 5 kW thermal at 40 °C flow, 4 °C outside -> roughly 1.5-2 kW electrical
     assert 1000 < float(pub["state"]) < 2500
+
+
+def test_forecast_points_are_found_under_the_websocket_response_shape(engine):
+    g, gridlock = engine
+    pts = [{"datetime": "2026-10-17T09:00:00+00:00", "temperature": 7.1}]
+    bare = {"weather.x": {"forecast": pts}}
+    assert gridlock.GridLock._forecast_points(bare, "weather.x") == pts
+    assert gridlock.GridLock._forecast_points({"response": bare}, "weather.x") == pts
+    assert gridlock.GridLock._forecast_points({"result": {"response": bare}}, "weather.x") == pts
+    assert gridlock.GridLock._forecast_points({"result": bare}, "weather.x") == pts
+    assert gridlock.GridLock._forecast_points({"response": {}}, "weather.x") == []
+    assert gridlock.GridLock._forecast_points(None, "weather.x") == []
+
+
+def test_weather_curve_uses_the_service_response(engine):
+    g, gridlock = engine
+    _seed_house(g)
+    from datetime import timedelta
+    now = g.get_now()
+    pts = [{"datetime": (now + timedelta(hours=h)).isoformat(), "temperature": 5.0 + h} for h in range(12)]
+    def call_service(service, **kw):
+        g.calls.append((service, kw))
+        if service == "weather/get_forecasts":
+            return {"response": {kw["entity_id"]: {"forecast": pts}}}
+        return None
+    g.call_service = call_service
+    curve = g._thermal_weather_curve(None, now, 12 * 12, 5, 4.0)
+    assert curve[0] == 5.0 and curve[12 * 6] == 11.0   # 6 h in -> 11 C
+    assert g._thermal_weather_ok == "weather.forecast_home"

@@ -3406,6 +3406,24 @@ class GridLock(hass.Hass):
                 continue
         return 18.0
 
+    @staticmethod
+    def _forecast_points(resp, ent):
+        """The forecast list out of whatever shape the service response
+        arrives in. AppDaemon hands back HA's websocket result, so the
+        per-entity data sits under "response" (and sometimes "result"
+        above that) -- reading it as if it were the bare per-entity dict
+        found nothing, silently, and left the model with a flat outdoor
+        curve for a whole day."""
+        if not isinstance(resp, dict):
+            return []
+        for layer in (resp, resp.get("result"), resp.get("response"),
+                      (resp.get("result") or {}).get("response") if isinstance(resp.get("result"), dict) else None):
+            if isinstance(layer, dict):
+                ent_data = layer.get(ent)
+                if isinstance(ent_data, dict) and isinstance(ent_data.get("forecast"), list):
+                    return ent_data["forecast"]
+        return []
+
     def _weather_candidates(self, configured):
         """Weather entities to ask for a forecast, best first: the one
         that worked last time, the configured one, then every weather.*
@@ -3448,7 +3466,7 @@ class GridLock(hass.Hass):
             try:
                 resp = self.call_service("weather/get_forecasts", entity_id=ent,
                                          type="hourly", return_response=True) or {}
-                points = (resp.get(ent, {}) or {}).get("forecast", []) or []
+                points = self._forecast_points(resp, ent)
             except Exception as exc:  # noqa: BLE001 — best-effort only
                 points = []
                 self.log(f"GridWarm: {ent} gave no hourly forecast ({exc!r}) — trying any other "
@@ -3459,8 +3477,11 @@ class GridLock(hass.Hass):
             self._thermal_forecast_warned[ent] = now
         if used and used != self._thermal_weather_ok:
             self._thermal_weather_ok = used
-            self.log(f"GridWarm: outdoor forecast from {used}"
+            self.log(f"GridWarm: outdoor forecast from {used} ({len(points)} points)"
                      + (f" (configured {weather_entity} serves none)" if weather_entity and used != weather_entity else ""))
+        elif not used and not self._thermal_weather_ok:
+            self.log("GridWarm: no weather entity served an hourly forecast — outdoor temperature held flat",
+                     level="WARNING")
         parsed = []
         for p in points:
             try:
