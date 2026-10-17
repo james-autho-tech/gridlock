@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.54.0 - 2026-10-17
+
+### New
+- Low and slow, properly: the heating plan now prices heat as a staircase, one step per flow temperature (25, 30 … 50 °C), each at its real marginal COP, instead of two tiers (gentle up to 25 °C flow, then everything at the 50 °C COP). A steady trickle at low flow is now genuinely the cheapest shape, so the plan starts earlier and runs flatter rather than coasting and then doing a block at higher flow
+- Sunshine counts: a share of the PV forecast (default 250 W per kW of forecast PV, configurable) is added to the house model as passive solar gain, so sunny days don't get heat they don't need
+
+### Fix
+- The COP model had a hard 6.0 ceiling that made 25 °C and 30 °C flow look equally good on mild days; it now uses a parasitic-loss term, so every degree of flow saved is rewarded
+
 ## 3.53.2 - 2026-10-17
 
 ### Fix

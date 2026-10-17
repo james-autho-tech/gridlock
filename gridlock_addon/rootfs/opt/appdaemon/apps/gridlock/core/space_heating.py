@@ -90,6 +90,11 @@ DEFAULTS = {
     "thermal_mass_wh_per_c": 8000.0,
     "hysteresis": 0.5,
     "hysteresis_off": 0.1,
+    # Sunshine through the windows, as a share of the PV forecast: watts
+    # of passive room gain per kW of forecast PV output. A 4 kW array in
+    # full sun means roughly a kilowatt into the rooms for most houses.
+    # Starting point -- compare predicted vs actual on sunny days.
+    "solar_gain_w_per_kw_pv": 250.0,
     # --- Dynamic flow temperature (core/flow_control.py) ---
     # The heat pump's space-heating flow setpoint. With this set GridWarm
     # modulates the flow temperature every tick to the lowest that meets
@@ -323,6 +328,7 @@ NUMERIC_BOUNDS = {
     "comfort_below": (0.0, 5.0),
     "comfort_above": (0.0, 5.0),
     "battery_wear_p_per_kwh": (0.0, 30.0),
+    "solar_gain_w_per_kw_pv": (0.0, 2000.0),
 }
 
 ENTITY_FIELDS = ("internal_temp_entity", "internal_temp_fallback_entity",
@@ -434,6 +440,7 @@ def to_zone_cfg(settings):
         "tariff_optimise": settings["tariff_optimise"],
         "heat_pricing": settings["heat_pricing"],
         "comfort_priority": settings["comfort_priority"],
+        "solar_gain_w_per_kw_pv": settings["solar_gain_w_per_kw_pv"],
         "thermal_power_entity": settings["thermal_power_entity"],
         "flow_temp_entity": settings["flow_temp_entity"],
         "return_temp_entity": settings["return_temp_entity"],

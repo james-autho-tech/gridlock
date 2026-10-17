@@ -3021,6 +3021,7 @@ class GridLock(hass.Hass):
                 "comfort_above": float(z.get("comfort_above", 1.0)),
                 "tariff_optimise": bool(z.get("tariff_optimise", True)),
                 "comfort_priority": str(z.get("comfort_priority", "cop")),
+                "solar_gain_w_per_kw_pv": float(z.get("solar_gain_w_per_kw_pv", 0.0)),
                 "thermal_power_entity": z.get("thermal_power_entity"),
                 "flow_temp_entity": z.get("flow_temp_entity"),
                 "return_temp_entity": z.get("return_temp_entity"),
@@ -3310,15 +3311,21 @@ class GridLock(hass.Hass):
             zone["flow_min"] - zone["water_dt"] / 2.0, tgt[0] if tgt else internal_temp, emitter))
         cop_low = [core_flow.cop_estimate(zone["flow_min"], e, eta) for e in ext]
         cop_high = [core_flow.cop_estimate(zone["flow_max"], e, eta) for e in ext]
+        segment_curve = [core_flow.heat_segments(tgt[i], ext[i], emitter, eta, zone["flow_min"],
+                                                 zone["flow_max"], zone["water_dt"], 5.0, max_w)
+                         for i in range(len(ext))]
         hp = self._hp_live(zone)
         delivering_kwh = ((hp["thermal_kw"] or 0.0) * slot_hours
                           if self._thermal_heating_on(zone) else 0.0)
+        pv_kw = getattr(self, "_thermal_pv_kw", None) or []
+        gain_curve = [pv_kw[j] * zone.get("solar_gain_w_per_kw_pv", 0.0) if j < len(pv_kw) else 0.0
+                      for j in idx]
         plan, status = core_flow.plan_heating(
             internal_temp, ext, rates, tgt, params,
             comfort_below=zone["comfort_below"], comfort_above=zone["comfort_above"],
             slot_hours=slot_hours, low_flow_power_w=low_w, cop_low_curve=cop_low,
             cop_high_curve=cop_high, max_power_w=max_w, solver=core_optimizer._solver(),
-            heat_kwh_prev=delivering_kwh,
+            heat_kwh_prev=delivering_kwh, gain_curve_w=gain_curve, segment_curve=segment_curve,
             comfort_cost_per_degree_slot=core_flow.COMFORT_COST_BY_PRIORITY.get(
                 zone.get("comfort_priority", "cop"), core_flow.COMFORT_COST_PER_DEGREE_SLOT))
         if plan:
@@ -3347,6 +3354,7 @@ class GridLock(hass.Hass):
                           "target": round(tgt[i], 2), "external": round(ext[i], 1),
                           "price": round(p["price"], 2), "grid_price": round(grid_rates[i], 2),
                           "cop": round(p["cop"], 2),
+                          "solar_gain_w": round(gain_curve[i], 0) if i < len(gain_curve) else 0.0,
                           "flow": core_flow.flow_setpoint_for_power(
                               p["heat_kwh"] * 1000.0 / slot_hours, p["temp"], emitter,
                               zone["water_dt"], zone["flow_min"], zone["flow_max"], 1.0)
@@ -3550,6 +3558,20 @@ class GridLock(hass.Hass):
             curve.extend([v] * step_ratio)
         if len(curve) < THERMAL_HORIZON_STEPS:
             curve.extend([curve[-1] if curve else batt_cost_p / 100.0] * (THERMAL_HORIZON_STEPS - len(curve)))
+        return curve[:THERMAL_HORIZON_STEPS]
+
+    def _thermal_pv_curve(self, slots):
+        """Forecast PV output in kW per 5-min thermal step, from the
+        battery plan's own per-slot PV kWh -- the house model turns a
+        share of it into passive solar gain."""
+        step_ratio = SLOT_MIN // THERMAL_STEP_MIN
+        curve = []
+        for s in slots:
+            pv_kwh = s.get("pv", 0.0) or 0.0
+            kw = pv_kwh / (SLOT_MIN / 60.0) if math.isfinite(pv_kwh) else 0.0
+            curve.extend([kw] * step_ratio)
+        if len(curve) < THERMAL_HORIZON_STEPS:
+            curve.extend([0.0] * (THERMAL_HORIZON_STEPS - len(curve)))
         return curve[:THERMAL_HORIZON_STEPS]
 
     def _thermal_rate_curve(self, slots):
@@ -4137,6 +4159,7 @@ class GridLock(hass.Hass):
             return
         slots = self.build_slots(now)
         rate_curve = self._thermal_rate_curve(slots)
+        self._thermal_pv_kw = self._thermal_pv_curve(slots)
         pricing_mode = ui_settings.get("heat_pricing", "battery")
         heat_rate_curve = self._heating_rate_curve(slots, pricing_mode)
         zones_out = []

@@ -1,5 +1,5 @@
 from core.thermal import ThermalParams
-from core.flow_control import (emitter_output_w, mean_water_temp_for, implied_emitter_rating,
+from core.flow_control import (heat_segments, emitter_output_w, mean_water_temp_for, implied_emitter_rating,
                                flow_setpoint_for_power, cop_estimate, implied_eta,
                                implied_thermal_mass, steady_state_loss_w, plan_heating,
                                decide_flow_command)
@@ -46,8 +46,13 @@ def test_flow_setpoint_adds_half_the_water_dt_clamps_and_rounds_up():
 def test_cop_falls_with_flow_temperature_and_rises_with_outdoor_temperature():
     assert cop_estimate(35.0, 7.0) > cop_estimate(45.0, 7.0) > cop_estimate(55.0, 7.0)
     assert cop_estimate(40.0, 12.0) > cop_estimate(40.0, 0.0)
-    assert 1.5 <= cop_estimate(60.0, -15.0) <= 6.0
-    assert cop_estimate(21.0, 20.0) <= 6.0  # tiny lift can't blow up
+    assert 1.5 <= cop_estimate(60.0, -15.0) <= 3.0
+    assert cop_estimate(21.0, 20.0) < 15.0  # tiny lift can't blow up
+    # The gradient that makes low-and-slow pay: every 5 C of flow matters,
+    # even on a mild day, instead of a hard ceiling flattening it.
+    c25, c30, c35, c45 = (cop_estimate(f, 10.0) for f in (25.0, 30.0, 35.0, 45.0))
+    assert c25 > c30 > c35 > c45
+    assert 5.0 < c25 < 6.5 and 4.2 < c30 < 5.2 and 3.5 < c35 < 4.5 and 2.5 < c45 < 3.3
 
 
 def test_implied_eta_round_trips_through_cop_estimate():
@@ -55,6 +60,7 @@ def test_implied_eta_round_trips_through_cop_estimate():
     assert abs(implied_eta(cop, 42.0, 5.0) - 0.47) < 1e-9
     assert implied_eta(None, 42.0, 5.0) is None
     assert implied_eta(3.0, 22.0, 20.0) is None
+    assert implied_eta(20.0, 42.0, 5.0) is None   # above the parasitic limit
 
 
 def test_implied_thermal_mass_from_a_heating_interval():
@@ -157,3 +163,37 @@ def test_plan_recovers_from_a_setback_by_ramping_not_bursting():
     assert step(smooth) < step(burst)
     # Still gets the room back near target within the horizon.
     assert smooth[-1]["temp"] > 19.6
+
+
+def test_solar_gain_curve_reduces_the_heat_the_plan_delivers():
+    p = _params()
+    n = 24
+    base, s1 = plan_heating(20.0, [8.0] * n, [20.0] * n, [20.0] * n, p)
+    sunny, s2 = plan_heating(20.0, [8.0] * n, [20.0] * n, [20.0] * n, p,
+                             gain_curve_w=[1500.0] * n)
+    assert sum(x["heat_kwh"] for x in sunny) < 0.6 * sum(x["heat_kwh"] for x in base)
+    assert all(19.7 <= x["temp"] <= 20.3 for x in sunny)   # still on target, just needing less
+
+
+def test_heat_segments_marginal_cop_falls_with_each_flow_step():
+    segs = heat_segments(15.0, 10.0, 10000, 0.45, 25.0, 50.0)
+    assert len(segs) == 6
+    cops = [c for _, c in segs]
+    assert all(a > b for a, b in zip(cops, cops[1:]))
+    assert all(w > 0 for w, _ in segs)
+
+
+def test_staircase_plan_runs_flat_instead_of_bursting():
+    # A day's heat at 10 C outside: with the staircase the cheapest plan is
+    # a steady trickle -- most slots in a narrow band, no block at high flow.
+    p = _params(heat_loss_degrees=0.0125, thermal_mass_wh_per_c=8000, heat_gain_static=0.0, heat_loss_watts=0.0)
+    n = 24
+    segs = [heat_segments(15.0, 10.0, 10000, 0.45, 25.0, 50.0)] * n
+    plan, status = plan_heating(15.0, [10.0] * n, [10.0] * n, [15.0] * n, p, segment_curve=segs,
+                                heat_kwh_prev=0.25)
+    if status != "optimal":
+        return
+    heats = [x["heat_kwh"] for x in plan]
+    # 0.0125 * 8000 * 5 K = 500 W loss -> 0.25 kWh per slot, delivered evenly
+    assert max(heats) - min(heats) < 0.1, heats
+    assert all(14.5 <= x["temp"] <= 15.5 for x in plan)

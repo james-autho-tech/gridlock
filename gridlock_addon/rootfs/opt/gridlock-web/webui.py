@@ -1203,6 +1203,7 @@ function renderSpaceHeatingSettings(s) {
           ${num('heat_loss_degrees', 'Heat loss °C/h per °C inside–outside', 0.001)}
           ${num('heat_loss_watts', 'Fixed background loss, W', 10)}
           ${num('heat_gain_static', 'Passive gain (people, electronics), W', 10)}
+          ${num('solar_gain_w_per_kw_pv', 'Sunshine gain, W per kW of forecast PV', 10, 'Sun through the windows, taken from the solar forecast. 250 means a 4 kW array in full sun warms the rooms by about 1 kW.')}
           ${num('thermal_mass_wh_per_c', 'Thermal mass, Wh per °C', 100, 'A typical house is several thousand.')}
           ${num('heat_max_power', 'Heat pump max thermal output, W', 100)}
           ${num('heat_min_power', 'Minimum modulated output, W', 100, 'Below half of this the plan switches heating off rather than cycle the compressor.')}
@@ -1480,7 +1481,7 @@ function renderHeatPlanChart(z, d) {
   const bars = plan.map((p, i) => {
     if (p.heat_kwh <= 0.0005) return '';
     const top = yk(p.heat_kwh), base = yk(0);
-    return `<rect x="${(i * colW + 1).toFixed(1)}" y="${top.toFixed(1)}" width="${Math.max(1, colW - 2).toFixed(1)}" height="${(base - top).toFixed(1)}" fill="${priceColor(p.price)}" opacity="0.35"><title>${esc(hhmm(p.x))}: ${p.heat_kwh.toFixed(2)} kWh heat @ ${p.price.toFixed(1)}p${p.grid_price !== undefined && Math.abs(p.grid_price - p.price) > 0.05 ? ` (tariff ${p.grid_price.toFixed(1)}p)` : ''}, COP ${p.cop.toFixed(2)}${p.flow ? `, flow ${p.flow}°C` : ''}</title></rect>`;
+    return `<rect x="${(i * colW + 1).toFixed(1)}" y="${top.toFixed(1)}" width="${Math.max(1, colW - 2).toFixed(1)}" height="${(base - top).toFixed(1)}" fill="${priceColor(p.price)}" opacity="0.35"><title>${esc(hhmm(p.x))}: ${p.heat_kwh.toFixed(2)} kWh heat @ ${p.price.toFixed(1)}p${p.grid_price !== undefined && Math.abs(p.grid_price - p.price) > 0.05 ? ` (tariff ${p.grid_price.toFixed(1)}p)` : ''}, COP ${p.cop.toFixed(2)}${p.flow ? `, flow ${p.flow}°C` : ''}${p.solar_gain_w ? `, sun ${(p.solar_gain_w / 1000).toFixed(1)} kW` : ''}</title></rect>`;
   }).join('');
   const band = plan.map((p, i) => `<rect x="${(i * colW).toFixed(1)}" y="${y(p.target + above).toFixed(1)}" width="${colW.toFixed(1)}" height="${Math.max(0, y(p.target - below) - y(p.target + above)).toFixed(1)}" fill="var(--cyan)" opacity="0.07" />`).join('');
   const tempLine = plan.map((p, i) => `${((i + 0.5) * colW).toFixed(1)},${y(p.temp).toFixed(1)}`).join(' ');

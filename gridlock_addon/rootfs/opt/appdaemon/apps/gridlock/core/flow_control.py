@@ -125,24 +125,39 @@ def flow_setpoint_for_power(power_w, room_temp, rated_w_at_dt50, water_dt=5.0,
     return min(max_flow, flow)
 
 
-def cop_estimate(flow_temp, outdoor_temp, eta=0.45, floor=1.5, ceiling=6.0):
-    """Carnot heating COP (T_hot / (T_hot - T_cold), in kelvin) scaled by
-    eta, the fraction of the ideal a real machine achieves -- 0.4-0.5
-    for a decent air-source unit, and learned from the live COP sensor
-    where one exists (learn_eta). Clamped to a plausible range so a tiny
-    flow/outdoor difference can't produce an absurd figure."""
+# The part of a heat pump's electricity that doesn't scale with lift --
+# circulation pump, fan, controller, defrost -- expressed as the COP the
+# machine would have if the compressor were free. It's what stops the
+# Carnot curve shooting to absurd figures at small lifts, and what gives
+# the planner a REAL, monotonic reward for every degree of flow it can
+# shave off: with a hard ceiling instead, 25 °C and 30 °C flow scored
+# the same on a mild day and the plan saw no reason to prefer the
+# lower, so it ramped instead of running low and slow.
+COP_PARASITIC = 15.0
+
+
+def cop_estimate(flow_temp, outdoor_temp, eta=0.45, floor=1.5, parasitic=COP_PARASITIC):
+    """Heating COP: Carnot (T_hot / (T_hot - T_cold), kelvin) scaled by
+    eta, the fraction of the ideal the compressor achieves (0.4-0.5 for
+    a decent air-source unit), combined in series with a fixed parasitic
+    loss (1/COP = 1/COP_carnot + 1/parasitic). For eta 0.45 at 10 °C
+    outside that gives roughly 5.6 at 25 °C flow, 4.7 at 30, 4.0 at 35,
+    2.9 at 45 -- the shape real units publish."""
     lift = max(2.0, flow_temp - outdoor_temp)
-    cop = eta * (flow_temp + KELVIN) / lift
-    return min(ceiling, max(floor, cop))
+    carnot = eta * (flow_temp + KELVIN) / lift
+    cop = 1.0 / (1.0 / carnot + 1.0 / parasitic)
+    return max(floor, cop)
 
 
-def implied_eta(live_cop, flow_temp, outdoor_temp):
+def implied_eta(live_cop, flow_temp, outdoor_temp, parasitic=COP_PARASITIC):
     """cop_estimate solved for eta from one live reading. None when the
-    reading can't be trusted (the unit idle, a tiny lift)."""
+    reading can't be trusted (the unit idle, a tiny lift, or a COP at or
+    above the parasitic limit, which no eta can explain)."""
     lift = flow_temp - outdoor_temp
-    if live_cop is None or live_cop <= 0.5 or lift < 5.0:
+    if live_cop is None or live_cop <= 0.5 or lift < 5.0 or live_cop >= parasitic:
         return None
-    return live_cop * lift / (flow_temp + KELVIN)
+    carnot = 1.0 / (1.0 / live_cop - 1.0 / parasitic)
+    return carnot * lift / (flow_temp + KELVIN)
 
 
 def implied_thermal_mass(thermal_power_w, loss_w, temp_rise_c, elapsed_hours):
@@ -167,13 +182,44 @@ def steady_state_loss_w(internal_temp, external_temp, params):
     return loss_c_per_hr * params.thermal_mass_wh_per_c - params.heat_gain_static
 
 
+def heat_segments(room_temp, outdoor_temp, rated_w_at_dt50, eta, flow_min, flow_max,
+                  water_dt=5.0, step=5.0, max_power_w=None):
+    """The heat pump's cost of heat as a staircase, one step per flow
+    temperature: [(extra_watts, marginal_cop), ...]. Step k is the extra
+    output going from flow f_{k-1} to f_k gives, priced at the COP that
+    makes the electricity add up: (P_k - P_{k-1}) / (P_k/COP_k -
+    P_{k-1}/COP_{k-1}). Marginal COP falls step by step, so the cheapest
+    way to deliver a day's heat is the flattest -- low and slow -- and the
+    planner sees exactly what each extra degree of flow costs, rather than
+    a two-tier cliff that made bursts look as good as a steady trickle."""
+    flows = []
+    f = flow_min
+    while f < flow_max - 1e-9:
+        flows.append(f)
+        f += step
+    flows.append(flow_max)
+    segs = []
+    prev_p, prev_e = 0.0, 0.0
+    for f in flows:
+        p = emitter_output_w(f - water_dt / 2.0, room_temp, rated_w_at_dt50)
+        if max_power_w is not None:
+            p = min(p, max_power_w)
+        if p <= prev_p + 1.0:
+            continue
+        e = p / cop_estimate(f, outdoor_temp, eta)
+        marginal = (p - prev_p) / max(e - prev_e, 1e-6)
+        segs.append((p - prev_p, max(marginal, 0.5)))
+        prev_p, prev_e = p, e
+    return segs
+
+
 def plan_heating(temp0, external_curve, rate_curve, target_curve, params, *,
                  comfort_below=1.0, comfort_above=1.0, slot_hours=0.5,
                  low_flow_power_w=None, cop_low_curve=None, cop_high_curve=None,
                  max_power_w=None, solver=None,
                  comfort_cost_per_degree_slot=COMFORT_COST_PER_DEGREE_SLOT,
                  smoothing_cost_per_kwh_change=SMOOTHING_COST_PER_KWH_CHANGE,
-                 heat_kwh_prev=None):
+                 heat_kwh_prev=None, gain_curve_w=None, segment_curve=None):
     """The heating plan: heat to deliver per slot (kWh) over the horizon
     at least cost, keeping the room inside [target - comfort_below,
     target + comfort_above]. Linear programme (PuLP) -- see the module
@@ -193,6 +239,12 @@ def plan_heating(temp0, external_curve, rate_curve, target_curve, params, *,
     n = min(len(external_curve), len(rate_curve), len(target_curve))
     if n == 0:
         return [], "empty"
+    # Passive gain per slot (W) on top of the static figure -- sunshine
+    # through the windows, from the PV forecast. A sunny day can supply
+    # the whole loss of a mild afternoon; without this the plan heats
+    # houses that are warming themselves.
+    gains = [params.heat_gain_static + (gain_curve_w[i] if gain_curve_w and i < len(gain_curve_w) else 0.0)
+             for i in range(n)]
     mass = max(params.thermal_mass_wh_per_c, 1.0)
     max_power_w = max_power_w if max_power_w is not None else (params.heat_max_power or 7000.0)
     low_w = low_flow_power_w if low_flow_power_w is not None else max_power_w
@@ -204,7 +256,7 @@ def plan_heating(temp0, external_curve, rate_curve, target_curve, params, *,
         out = []
         temp = temp0
         for i in range(n):
-            loss_w = steady_state_loss_w(temp, external_curve[i], params)
+            loss_w = steady_state_loss_w(temp, external_curve[i], params) - (gains[i] - params.heat_gain_static)
             # Hold the target: loss plus a gentle correction toward it.
             need_w = loss_w + (target_curve[i] - temp) * mass / max(slot_hours, 1e-6) * 0.5
             need_w = min(max_power_w, max(0.0, need_w))
@@ -222,9 +274,18 @@ def plan_heating(temp0, external_curve, rate_curve, target_curve, params, *,
 
     try:
         prob = pulp.LpProblem("gridwarm_heating", pulp.LpMinimize)
-        q_lo = [pulp.LpVariable(f"q_lo_{i}", 0, low_w * slot_hours / 1000.0) for i in range(n)]
-        q_hi = [pulp.LpVariable(f"q_hi_{i}", 0, max(0.0, (max_power_w - low_w)) * slot_hours / 1000.0)
-                for i in range(n)]
+        # Per-slot heat staircase: either the full per-flow staircase
+        # (segment_curve, see heat_segments) or the legacy two tiers.
+        if segment_curve:
+            segs = [segment_curve[i] if i < len(segment_curve) and segment_curve[i]
+                    else [(max_power_w, cop_low_curve[i])] for i in range(n)]
+        else:
+            segs = [[(low_w, cop_low_curve[i]), (max(0.0, max_power_w - low_w), cop_high_curve[i])]
+                    for i in range(n)]
+        q = [[pulp.LpVariable(f"q_{i}_{k}", 0, w * slot_hours / 1000.0) for k, (w, _) in enumerate(segs[i])]
+             for i in range(n)]
+        q_lo = [pulp.lpSum(q[i]) for i in range(n)]
+        q_hi = [0 for _ in range(n)]
         temp = [pulp.LpVariable(f"temp_{i}") for i in range(n)]
         under = [pulp.LpVariable(f"under_{i}", 0) for i in range(n)]
         over = [pulp.LpVariable(f"over_{i}", 0) for i in range(n)]
@@ -238,7 +299,7 @@ def plan_heating(temp0, external_curve, rate_curve, target_curve, params, *,
             # T_i = T_{i-1} + (heat_in - loss) * h / mass, with the loss
             # evaluated at T_{i-1} (explicit Euler, same as simulate()).
             loss_w_expr = (params.heat_loss_degrees * (prev - external_curve[i]) * mass
-                           + params.heat_loss_watts - params.heat_gain_static)
+                           + params.heat_loss_watts - gains[i])
             heat_w_expr = (q_lo[i] + q_hi[i]) * 1000.0 / slot_hours
             prob += temp[i] == prev + (heat_w_expr - loss_w_expr) * slot_hours / mass
             prob += temp[i] >= target_curve[i] - comfort_below - under[i]
@@ -246,8 +307,8 @@ def plan_heating(temp0, external_curve, rate_curve, target_curve, params, *,
             prob += dev_lo[i] >= target_curve[i] - temp[i]
             prob += dev_hi[i] >= temp[i] - target_curve[i]
             price = rate_curve[i] / 100.0  # p -> £
-            cost_terms.append(q_lo[i] / max(cop_low_curve[i], 0.1) * price)
-            cost_terms.append(q_hi[i] / max(cop_high_curve[i], 0.1) * price)
+            for k, (_, seg_cop) in enumerate(segs[i]):
+                cost_terms.append(q[i][k] / max(seg_cop, 0.1) * price)
             cost_terms.append((under[i] + over[i]) * COMFORT_PENALTY_PER_DEGREE_SLOT)
             cost_terms.append((dev_lo[i] + dev_hi[i]) * comfort_cost_per_degree_slot)
             # |heat_i - heat_{i-1}| <= ramp_i, charged in the objective.
@@ -269,10 +330,10 @@ def plan_heating(temp0, external_curve, rate_curve, target_curve, params, *,
             return fallback()
         out = []
         for i in range(n):
-            lo = pulp.value(q_lo[i]) or 0.0
-            hi = pulp.value(q_hi[i]) or 0.0
-            kwh = lo + hi
-            cop = ((lo * cop_low_curve[i] + hi * cop_high_curve[i]) / kwh) if kwh > 1e-9 else cop_low_curve[i]
+            parts = [(pulp.value(q[i][k]) or 0.0, segs[i][k][1]) for k in range(len(segs[i]))]
+            kwh = sum(v for v, _ in parts)
+            elec = sum(v / max(c, 0.1) for v, c in parts)
+            cop = (kwh / elec) if elec > 1e-9 else segs[i][0][1]
             out.append({"heat_kwh": kwh, "temp": pulp.value(temp[i]) or temp0,
                         "price": rate_curve[i], "cop": cop,
                         "cost": kwh / max(cop, 0.1) * rate_curve[i] / 100.0})
