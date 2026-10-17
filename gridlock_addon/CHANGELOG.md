@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.53.2 - 2026-10-17
+
+### Fix
+- Hot water panel: the status pill said "tank warm enough" while the tile said a run was due — the pill now follows the hot water plan ("Off — next run 23:00"); the run tile spells out the comparison in pence per kWh of hot water; zero counts no longer show as "1e-9"
+
 ## 3.53.1 - 2026-10-17
 
 ### Fix

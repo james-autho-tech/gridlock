@@ -1228,8 +1228,17 @@ function houseStatusPill(z, d) {
   if (st === 'paused') return '<span class="gl-pill gl-pill-eco">⏸️ Paused</span>';
   if (st === 'blocked') return '<span class="gl-pill gl-pill-bypass">⛔ Blocked</span>';
   if (st === 'rejected') return '<span class="gl-pill gl-pill-storm">⚠️ Reverted by the unit</span>';
-  if (st === 'heating') return '<span class="gl-pill gl-pill-charge">🔥 Heating</span>';
-  if (st === 'off') return `<span class="gl-pill gl-pill-eco">Off — ${z.dhw ? 'tank warm enough' : 'warm enough'}</span>`;
+  if (st === 'heating') return `<span class="gl-pill gl-pill-charge">🔥 ${z.dhw ? 'Heating the tank' : 'Heating'}</span>`;
+  if (st === 'off') {
+    if (z.dhw) {
+      const w = z.dhw;
+      const hhmm0 = iso => iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
+      if (w.status === 'waiting') return `<span class="gl-pill gl-pill-eco">Off — next run ${hhmm0(w.window_start)}</span>`;
+      if (w.status === 'skipped') return '<span class="gl-pill gl-pill-eco">Off — tank covers today\'s use</span>';
+      return '<span class="gl-pill gl-pill-eco">Off — tank warm enough</span>';
+    }
+    return '<span class="gl-pill gl-pill-eco">Off — warm enough</span>';
+  }
   return '<span class="gl-pill gl-pill-eco">Waiting for first tick</span>';
 }
 let hwBusy = false;
@@ -1312,7 +1321,7 @@ function renderHotWaterHero(d) {
   const n1 = (v, dp = 1, unit = '') => (v === null || v === undefined || v === '' || Number.isNaN(Number(v))) ? '—' : `${Number(v).toFixed(dp)}${unit}`;
   const t = iso => iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
   const day = iso => iso ? (new Date(iso).toDateString() === new Date().toDateString() ? 'today' : 'tomorrow') : '';
-  const tankTile = `<div class="gl-tile"><div class="lbl">Tank</div><div class="val num">${n1(z.current_temp, 1, '°C')}</div><div class="sub">setpoint ${n1(w.setpoint, 0, '°C')} · unit starts a run below ${n1(Number(w.setpoint) - Number(w.start_hysteresis), 0, '°C')}${z.showers_available != null ? ` · ${n1(z.showers_available, 1)} showers in it` : ''}</div></div>`;
+  const tankTile = `<div class="gl-tile"><div class="lbl">Tank</div><div class="val num">${n1(z.current_temp, 1, '°C')}</div><div class="sub">setpoint ${n1(w.setpoint, 0, '°C')} · unit starts a run below ${n1(Number(w.setpoint) - Number(w.start_hysteresis), 0, '°C')}${z.showers_available != null ? (Number(z.showers_available) < 0.5 ? ' · below shower temperature' : ` · about ${Math.round(Number(z.showers_available))} showers in it`) : ''}</div></div>`;
   const startPoint = n1(Number(w.setpoint) - Number(w.start_hysteresis), 0, '°C');
   const status = w.status || (w.committed ? 'running' : w.skipped_covered ? 'skipped' : (w.needed ? 'waiting' : 'not_needed'));
   const windowText = `${t(w.window_start)}–${t(w.window_end)} ${day(w.window_start)} at ${n1(w.window_price, 1, 'p')} / COP ${n1(w.window_cop, 2)}`;
@@ -1322,8 +1331,9 @@ function renderHotWaterHero(d) {
       ? `<div class="gl-tile"><div class="lbl">Run</div><div class="val" style="font-size:16px">Skipped</div><div class="sub">tank already covers the usage expected before the next chance</div></div>`
       : status === 'not_needed'
         ? `<div class="gl-tile"><div class="lbl">Run</div><div class="val" style="font-size:16px">Not needed</div><div class="sub">tank ${n1(z.current_temp, 0, '°C')} — the unit only starts a run below ${startPoint}. Once it drops, the cheapest window as of now would be ${windowText}; forced within ${n1(w.deadline_hours, 1, ' h')} regardless</div></div>`
-        : `<div class="gl-tile"><div class="lbl">Next run</div><div class="val num" style="font-size:18px">${t(w.window_start)}–${t(w.window_end)} <span style="font-size:11px;color:var(--dim)">${day(w.window_start)}</span></div><div class="sub">tank below ${startPoint}, waiting for the cheapest window: ${n1(w.window_price, 1, 'p')} at COP ${n1(w.window_cop, 2)} (now ${n1(w.price_now, 1, 'p')} / ${n1(w.cop_now, 2)}) · must finish within ${n1(w.deadline_hours, 1, ' h')}${w.ready_by ? `, before the ${t(w.ready_by)} usage` : ''}</div></div>`;
-  const usageTile = `<div class="gl-tile"><div class="lbl">Usage learned</div><div class="val num">${n1(w.expected_24h_kwh, 1, ' kWh')}</div><div class="sub">expected next 24 h, from ${w.usage_days_learned || 0} day${w.usage_days_learned === 1 ? '' : 's'} of watching the tank${(w.usage_days_learned || 0) < 3 ? ' — still learning' : ''}</div></div>`;
+        : `<div class="gl-tile"><div class="lbl">Next run</div><div class="val num" style="font-size:18px">${t(w.window_start)}–${t(w.window_end)} <span style="font-size:11px;color:var(--dim)">${day(w.window_start)}</span></div><div class="sub">Tank is below ${startPoint}, so a run is due. Cheapest slot before the deadline (${n1(w.deadline_hours, 1, ' h')} from now${w.ready_by ? `, the ${t(w.ready_by)} usage` : ''}): ${n1(w.window_price, 1, 'p')} electricity at COP ${n1(w.window_cop, 2)} = <b>${n1(w.window_score, 1, 'p')}</b> per kWh of hot water. Right now it would be ${n1(w.price_now, 1, 'p')} at COP ${n1(w.cop_now, 2)} = ${n1((Number(w.price_now) / Math.max(Number(w.cop_now) || 1, 0.1)), 1, 'p')}.</div></div>`;
+  const days = Math.round(Number(w.usage_days_learned) || 0);
+  const usageTile = `<div class="gl-tile"><div class="lbl">Usage learned</div><div class="val num">${n1(w.expected_24h_kwh, 1, ' kWh')}</div><div class="sub">${days === 0 ? 'nothing learned yet — it starts logging tonight and builds a picture over the first few days' : `expected next 24 h, from ${days} day${days === 1 ? '' : 's'} of watching the tank${days < 3 ? ' — still learning' : ''}`}</div></div>`;
   const pauseBtn = c.pause_helper
     ? (c.paused && d.gridwarm_control_mode === 'active'
         ? `<button class="gl-btn-sm" onclick="setGridwarmPause('${c.pause_helper}', false)">Resume</button>`
@@ -1433,7 +1443,7 @@ function renderHouseHero(d) {
   const pricingNote = f && f.pricing_mode
     ? `<div class="gl-sub" style="margin-top:6px">${f.pricing_mode === 'battery' ? 'Electricity priced via the battery plan: cheap-rate energy from the battery where it covers the heating, the tariff only where GridLock expects it to run flat or export — so most of the day the plan is simply chasing COP.' : f.pricing_mode === 'cop' ? 'Prices ignored: the plan minimises electricity, i.e. maximises COP.' : 'Priced at the import tariff, as if there were no battery.'}</div>`
     : '';
-  const learned = `${pricingNote}<div class="gl-sub" style="margin-top:8px">Learned so far — radiators ${n1(z.learned_emitter_w_at_dt50, 0, ' W')} at ΔT50 (started ${n1(z.config_emitter_w_at_dt50, 0)}), COP factor ${n1(z.learned_cop_eta, 2)} (started ${n1(z.config_cop_eta, 2)}), thermal mass ${n1(z.learned_thermal_mass, 0, ' Wh/°C')} (started ${n1(z.config_thermal_mass, 0)}), heat loss ${n1(z.learned_heat_loss_degrees, 4)} °C/h/°C from ${z.thermal_learning_observations || 0} cooling observations.</div>`;
+  const learned = `${pricingNote}<div class="gl-sub" style="margin-top:8px">Learned so far — radiators ${n1(z.learned_emitter_w_at_dt50, 0, ' W')} at ΔT50 (started ${n1(z.config_emitter_w_at_dt50, 0)}), COP factor ${n1(z.learned_cop_eta, 2)} (started ${n1(z.config_cop_eta, 2)}), thermal mass ${n1(z.learned_thermal_mass, 0, ' Wh/°C')} (started ${n1(z.config_thermal_mass, 0)}), heat loss ${n1(z.learned_heat_loss_degrees, 4)} °C/h/°C from ${Math.round(Number(z.thermal_learning_observations) || 0)} cooling observations.</div>`;
   return `
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px">
       <span style="color:var(--ink);font-weight:600">${esc(z.name)}</span>
