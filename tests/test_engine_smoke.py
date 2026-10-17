@@ -465,3 +465,15 @@ def test_legionella_cycle_is_abandoned_and_setpoint_restored_after_the_cap(engin
     hw = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]
     assert hw["dhw"]["legionella"]["last_failed"]
     assert ("number/set_value", {"target": {"entity_id": sp}, "value": 53.0}) in g.calls
+
+
+def test_hot_water_slots_carry_a_predicted_tank_temperature(engine):
+    g, _ = engine
+    _seed_house(g)
+    _seed_tank(g)
+    g._publish_thermal_forecast(g.get_now())
+    hw = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]
+    tanks = [s["tank"] for s in hw["dhw"]["slots"]]
+    assert len(tanks) == 48 and all(t is not None for t in tanks)
+    assert max(tanks) >= 59.0          # legionella night: climbs to 60
+    assert tanks[-1] < max(tanks)      # and cools afterwards

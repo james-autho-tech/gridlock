@@ -3333,6 +3333,32 @@ class GridLock(hass.Hass):
             status = "waiting"
         if lg_active:
             status = "running"
+        # Predicted tank temperature per slot, for the chart: heats at the
+        # unit's DHW output during the planned window up to the setpoint
+        # (or the legionella temperature on a cycle), otherwise cools by
+        # standing loss plus the learned draw for that half-hour.
+        n_show = min(48, len(scores))
+        if committed is not None or lg_active:
+            w_lo, w_hi = 0, run_slots if not lg_active else n_show
+            if committed is not None:
+                try:
+                    w_hi = max(1, int(math.ceil((self._iso(committed["end"]) - now).total_seconds() / 1800.0)))
+                except (ValueError, TypeError, KeyError):
+                    pass
+        elif window and needed:
+            w_lo, w_hi = window[0], window[1]
+        else:
+            w_lo = w_hi = -1
+        heat_to = (lg_cfg.get("temp", setpoint) if (lg_due or lg_active) else setpoint)
+        mass = max(zone["params"].thermal_mass_wh_per_c, 1.0)
+        tank_curve = []
+        tk = tank_temp if tank_temp is not None else setpoint - hyst
+        for i in range(n_show):
+            if w_lo <= i < w_hi and tk < heat_to:
+                tk = min(heat_to, tk + (zone["params"].heat_max_power or 3500.0) * slot_hours / mass)
+            else:
+                tk = tk - (zone["params"].heat_loss_watts * slot_hours + (expected[i] if i < len(expected) else 0.0)) / mass
+            tank_curve.append(round(tk, 1))
         try:
             lg_next = (self._iso(lg["last_done"]) + timedelta(days=lg_cfg.get("interval_days", 7))).isoformat() \
                 if lg.get("last_done") else None
@@ -3370,6 +3396,7 @@ class GridLock(hass.Hass):
                 "slots": [{"x": (self._slot_floor(now) + timedelta(minutes=SLOT_MIN * i)).isoformat(),
                            "price": round(rates[i], 2), "grid_price": round(grid_rates[i], 2),
                            "cop": round(cops[i], 2),
+                           "tank": tank_curve[i] if i < len(tank_curve) else None,
                            "score": round(scores[i], 2)} for i in range(min(48, len(scores)))]}
 
     @staticmethod

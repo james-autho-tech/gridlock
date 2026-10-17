@@ -1410,7 +1410,23 @@ function renderDhwChart(w) {
     return `<rect x="${(i * colW + 1).toFixed(1)}" y="${top.toFixed(1)}" width="${Math.max(1, colW - 2).toFixed(1)}" height="${(base - top).toFixed(1)}" fill="${inWin ? 'var(--green)' : 'var(--cyan)'}" opacity="${inWin ? 0.9 : 0.35}"><title>${esc(hhmm(s.x))}: ${s.price.toFixed(1)}p${s.grid_price !== undefined && Math.abs(s.grid_price - s.price) > 0.05 ? ` (tariff ${s.grid_price.toFixed(1)}p)` : ''} ÷ COP ${s.cop.toFixed(2)} = ${s.score.toFixed(1)}p per kWh of hot water</title></rect>`;
   }).join('');
   const xRow = barAxisLabels(n, 4, i => hhmm(slots[i].x));
-  const main = chartFrame(bars, H, niceTicks(lo, hi).map(t => ({ ...t, label: `${t.label}p` })), null, xRow);
+  // Predicted tank temperature over the same timeline, right-hand axis.
+  const tanks = slots.map(s => s.tank).filter(v => v !== null && v !== undefined);
+  let tankLine = '', rightTicks = null;
+  if (tanks.length) {
+    const tlo = Math.floor(Math.min(...tanks, 30) / 5) * 5, thi = Math.ceil(Math.max(...tanks, 55) / 5) * 5;
+    const yt = yScale(tlo, thi, H);
+    const pts = slots.map((s, i) => (s.tank === null || s.tank === undefined) ? null : `${((i + 0.5) * colW).toFixed(1)},${yt(Number(s.tank)).toFixed(1)}`).filter(Boolean).join(' ');
+    tankLine = `<polyline points="${pts}" fill="none" stroke="var(--amber)" stroke-width="2" />`
+      + slots.map((s, i) => (s.tank === null || s.tank === undefined) ? '' : `<circle cx="${((i + 0.5) * colW).toFixed(1)}" cy="${yt(Number(s.tank)).toFixed(1)}" r="5" fill="transparent"><title>${esc(hhmm(s.x))}: tank ~${Number(s.tank).toFixed(0)}°C</title></circle>`).join('');
+    rightTicks = niceTicks(tlo, thi, 3).map(t => ({ ...t, label: `${Number(t.label).toFixed(0)}°` }));
+  }
+  const legend = `<div class="gl-combo-legend" style="margin-bottom:4px">
+      <span><span class="gl-legend-dot" style="background:var(--cyan);opacity:.5"></span>Cost of a kWh of hot water (p, left)</span>
+      <span><span class="gl-legend-dot" style="background:var(--green)"></span>Planned run</span>
+      ${tankLine ? '<span><span class="gl-legend-dot" style="background:var(--amber)"></span>Tank temperature, predicted (°C, right)</span>' : ''}
+    </div>`;
+  const main = legend + chartFrame(bars + tankLine, H, niceTicks(lo, hi).map(t => ({ ...t, label: `${t.label}p` })), rightTicks, xRow);
   const prof = w.usage_profile_wh || [];
   let usage = '';
   if (prof.length) {

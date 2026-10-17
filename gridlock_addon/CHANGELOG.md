@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.55.1 - 2026-10-17
+
+### New
+- Hot water chart overlays the predicted tank temperature (right-hand axis): heating through the planned window to the setpoint, or 60 °C on a legionella night, then cooling with standing loss and learned usage; legend added
+
 ## 3.55.0 - 2026-10-17
 
 ### New
