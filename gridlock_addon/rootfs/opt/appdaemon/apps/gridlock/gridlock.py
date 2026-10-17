@@ -627,7 +627,8 @@ class GridLock(hass.Hass):
         gridwarm_cfg = a.get("gridwarm") or {}
         self.thermal_zones = ([self._build_thermal_zone(z) for z in gridwarm_cfg.get("zones", [])]
                               if gridwarm_cfg.get("active", True) else [])
-        self._thermal_forecast_warned = set()
+        self._thermal_forecast_warned = {}   # weather entity -> when it last failed
+        self._thermal_weather_ok = None      # the weather entity that last served a forecast
         self._thermal_control_state = {}
         # The dashboard-configured space heating zone (gridwarm_settings.json,
         # see core/space_heating.py) -- built lazily on the first tick and
@@ -3384,7 +3385,37 @@ class GridLock(hass.Hass):
             v = self.get_float_state(zone["external_temp_entity"], None)
             if v is not None:
                 return v
-        return float(zone["external_temp_constant"]) if zone["external_temp_constant"] is not None else 18.0
+        if zone["external_temp_constant"] is not None:
+            return float(zone["external_temp_constant"])
+        # No outdoor sensor configured: every weather entity carries the
+        # current outdoor temperature, so take it from the one serving
+        # the forecast (or the configured/any one).
+        for ent in self._weather_candidates(zone.get("weather_entity")):
+            v = self.get_state(ent, attribute="temperature")
+            try:
+                if v not in (None, "unknown", "unavailable"):
+                    return float(v)
+            except (ValueError, TypeError):
+                continue
+        return 18.0
+
+    def _weather_candidates(self, configured):
+        """Weather entities to ask for a forecast, best first: the one
+        that worked last time, the configured one, then every weather.*
+        entity HA has. Some (the OpenWeatherMap free tier's) serve no
+        forecast at all -- auto-detecting means nobody has to know which
+        of theirs does."""
+        out = []
+        for ent in (self._thermal_weather_ok, configured):
+            if ent and ent not in out and self.entity_exists(ent):
+                out.append(ent)
+        try:
+            for ent in self.registry.find_all(prefix="weather."):
+                if ent not in out:
+                    out.append(ent)
+        except Exception:  # noqa: BLE001 — registry lookup is best-effort
+            pass
+        return out
 
     def _thermal_weather_curve(self, weather_entity, now, n_steps, step_minutes, fallback_temp):
         """Best-effort external-temperature forecast for a room zone (a
@@ -3398,28 +3429,31 @@ class GridLock(hass.Hass):
         is available — a flat approximation is still more useful than no
         forecast at all for an advisory-only feature."""
         points = []
-        if weather_entity and self.entity_exists(weather_entity):
-            raw = self.get_state(weather_entity, attribute="forecast")
+        used = None
+        for ent in self._weather_candidates(weather_entity):
+            raw = self.get_state(ent, attribute="forecast")
             if isinstance(raw, list) and raw:
-                points = raw
-            elif weather_entity not in self._thermal_forecast_warned:
-                # Only tried once per entity, ever (not once per tick) --
-                # confirmed live that a weather integration not supporting
-                # this service call still costs a real round trip before
-                # the error comes back, and every tick calling it again
-                # forever was slow enough to back up this app's single
-                # worker thread (see poll_heatpump_diagnostics for the
-                # same lesson learned the hard way on a bigger scale).
-                try:
-                    resp = self.call_service("weather/get_forecasts", entity_id=weather_entity,
-                                             type="hourly", return_response=True) or {}
-                    points = (resp.get(weather_entity, {}) or {}).get("forecast", []) or []
-                except Exception as exc:  # noqa: BLE001 — best-effort only
-                    self.log(f"Couldn't get a weather forecast from {weather_entity} for "
-                             f"the thermal model ({exc!r}) — holding the current external "
-                             "temperature flat across the horizon instead. Not retrying this "
-                             "entity again this run.", level="WARNING")
-                    self._thermal_forecast_warned.add(weather_entity)
+                points, used = raw, ent
+                break
+            warned_at = self._thermal_forecast_warned.get(ent)
+            if warned_at is not None and (now - warned_at).total_seconds() < 3600:
+                continue
+            try:
+                resp = self.call_service("weather/get_forecasts", entity_id=ent,
+                                         type="hourly", return_response=True) or {}
+                points = (resp.get(ent, {}) or {}).get("forecast", []) or []
+            except Exception as exc:  # noqa: BLE001 — best-effort only
+                points = []
+                self.log(f"GridWarm: {ent} gave no hourly forecast ({exc!r}) — trying any other "
+                         "weather entity; this one is retried in an hour.", level="WARNING")
+            if points:
+                used = ent
+                break
+            self._thermal_forecast_warned[ent] = now
+        if used and used != self._thermal_weather_ok:
+            self._thermal_weather_ok = used
+            self.log(f"GridWarm: outdoor forecast from {used}"
+                     + (f" (configured {weather_entity} serves none)" if weather_entity and used != weather_entity else ""))
         parsed = []
         for p in points:
             try:
@@ -3452,9 +3486,16 @@ class GridLock(hass.Hass):
         if mode == "tariff":
             return raw
         plan = self._last_plan
+        # Wear priced at a realistic per-kWh figure from the dashboard
+        # setting -- NOT self.degradation, which is the battery LP's own
+        # mode weighting (15p/kWh in eco): a preference about how hard to
+        # cycle, not a cost. Using it here made battery energy look like
+        # 22p and pushed all the heating into the overnight import slots.
+        settings = self._ui_zone_cache[2] if self._ui_zone_cache else None
+        wear_gbp = float((settings or {}).get("battery_wear_p_per_kwh", 3.0)) / 100.0
         batt_cost_p = core_effective_price.battery_energy_cost_p(
             plan["slots"] if plan else [], plan["cost_trace"] if plan else [],
-            self.cheap_rate, getattr(self.cfg, "efficiency", 0.9), self.degradation)
+            self.cheap_rate, getattr(self.cfg, "efficiency", 0.9), wear_gbp)
         if mode == "cop" or not plan:
             return [batt_cost_p / 100.0] * len(raw)
         eff_p = core_effective_price.effective_prices_p(plan["slots"], plan["cost_trace"], batt_cost_p)

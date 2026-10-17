@@ -493,6 +493,15 @@ the tariff where the battery can't cover it. "Price a kWh of heating
 electricity by" in the form switches between the battery plan, pure COP
 (prices ignored) and the raw tariff; it applies to hot water too.
 
+**Weather, auto-detected.** The outdoor forecast comes from whichever
+weather entity actually serves HA's hourly forecast service — the
+configured one first, then every weather entity in HA, remembering the
+one that works (a failing one is retried hourly). Not all do: the
+OpenWeatherMap free tier's serves current conditions only, and a flat
+outdoor curve quietly ruins the plan. The outdoor temperature comes from
+that entity's own reading when no outdoor sensor is set. The plan chart
+shows the forecast line.
+
 **And the battery knows.** It works the other way too: GridWarm hands its
 planned heat pump electricity — the space heating plan per half-hour plus
 the hot water run — to the battery plan's load forecast slot by slot

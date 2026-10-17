@@ -1146,8 +1146,8 @@ function renderSpaceHeatingSettings(s) {
       ${section('Room & weather', 'The one thermometer that counts as "the house", and what the outside is doing.',
         entitySelect(s, 'internal_temp_entity', 'Room temperature', ['temperature'], { allowBlank: false, hint: 'A climate entity\'s current temperature is read automatically.' })
         + entitySelect(s, 'internal_temp_fallback_entity', 'Fallback room temperature', ['temperature', 'sensor'], { hint: 'Used whenever the one above is unavailable. The heat pump\'s own controller has a thermometer (its "Ta" sensor, once enabled on the unit) — coarse, but better than nothing.' })
-        + entitySelect(s, 'external_temp_entity', 'Outdoor temperature', ['temperature', 'sensor'])
-        + entitySelect(s, 'weather_entity', 'Weather forecast', ['weather'], { hint: 'Used to look ahead at the outdoor temperature.' }))}
+        + entitySelect(s, 'external_temp_entity', 'Outdoor temperature', ['temperature', 'sensor'], { hint: 'Blank = auto: the weather entity\'s own reading.' })
+        + entitySelect(s, 'weather_entity', 'Weather forecast', ['weather'], { hint: 'Blank = auto: whichever weather entity actually serves hourly forecasts (not all do).' }))}
       ${section('What GridWarm commands', 'The heat pump\'s own space-heating controls. Nothing is written until the mode is ACTIVE and the zone isn\'t paused.',
         entitySelect(s, 'control_entity', 'Space heating on/off switch', ['switch'], { hint: 'Blank = predict only, never command.' })
         + entitySelect(s, 'flow_entity', 'Flow temperature setpoint', ['number'], { hint: 'With this set, GridWarm modulates the flow temperature every tick to the lowest that meets the plan — that\'s where the COP comes from. Blank = on/off only.' })
@@ -1175,7 +1175,8 @@ function renderSpaceHeatingSettings(s) {
             <option value="tariff" ${shVal(s, 'heat_pricing') === 'tariff' ? 'selected' : ''}>the import tariff — as if there were no battery</option>
           </select><div style="color:var(--dim);font-size:10px;margin-top:2px">Applies to hot water too. With the battery plan, a slot only costs the peak rate where GridLock expects the battery to be empty or exporting.</div></div>`
         + num('comfort_below', 'May drift below target by °C', 0.1)
-        + num('comfort_above', 'May pre-heat above target by °C', 0.1))}
+        + num('comfort_above', 'May pre-heat above target by °C', 0.1)
+        + num('battery_wear_p_per_kwh', 'Battery wear, p per kWh through it', 0.5, 'A real cost for the battery-plan pricing — a £6k 36 kWh pack good for 6000 cycles is under 3p.'))}
       ${section('Heat pump readings', 'What the unit reports about itself — used to learn the radiator curve, COP factor and thermal mass, and shown on the panel above.',
         entitySelect(s, 'heating_entity', '"Heating now" sensor', ['sensor', 'switch'])
         + inp('heating_entity_state', '…and the value that means heating', '', 'e.g. on, or Heating for a text sensor.')
@@ -1283,8 +1284,8 @@ function renderHotWaterSettings(hw) {
         ${num('flow_margin', 'DHW flow above setpoint, °C', 1, 'For the COP estimate per slot.')}
         ${num('cop_eta', 'COP factor (fraction of Carnot)', 0.01)}
         ${hwEntitySelect(hw, 'cop_entity', 'Live COP', ['sensor'])}
-        ${hwEntitySelect(hw, 'external_temp_entity', 'Outdoor temperature', ['temperature', 'sensor'])}
-        ${hwEntitySelect(hw, 'weather_entity', 'Weather forecast', ['weather'])}
+        ${hwEntitySelect(hw, 'external_temp_entity', 'Outdoor temperature', ['temperature', 'sensor'], 'Blank = auto, from the weather entity.')}
+        ${hwEntitySelect(hw, 'weather_entity', 'Weather forecast', ['weather'], 'Blank = auto: any weather entity that serves forecasts.')}
         ${num('tank_litres', 'Tank size, litres', 10)}
         ${num('heat_loss_watts', 'Standing loss, W', 5)}
         ${num('heat_max_power', 'Heat pump DHW output, W', 100)}
@@ -1439,7 +1440,7 @@ function renderHeatPlanChart(z, d) {
   const plan = z.flow.plan;
   const n = plan.length;
   const H = 160;
-  const temps = plan.flatMap(p => [p.temp, p.target]);
+  const temps = plan.flatMap(p => [p.temp, p.target, p.external]);
   if (z.current_temp !== null && z.current_temp !== undefined) temps.push(Number(z.current_temp));
   const s = d.space_heating_settings || {};
   const below = Number(s.comfort_below || 0), above = Number(s.comfort_above || 0);
@@ -1464,10 +1465,12 @@ function renderHeatPlanChart(z, d) {
   const band = plan.map((p, i) => `<rect x="${(i * colW).toFixed(1)}" y="${y(p.target + above).toFixed(1)}" width="${colW.toFixed(1)}" height="${Math.max(0, y(p.target - below) - y(p.target + above)).toFixed(1)}" fill="var(--cyan)" opacity="0.07" />`).join('');
   const tempLine = plan.map((p, i) => `${((i + 0.5) * colW).toFixed(1)},${y(p.temp).toFixed(1)}`).join(' ');
   const targetLine = plan.map((p, i) => `${((i + 0.5) * colW).toFixed(1)},${y(p.target).toFixed(1)}`).join(' ');
+  const extLine = plan.map((p, i) => `${((i + 0.5) * colW).toFixed(1)},${y(p.external).toFixed(1)}`).join(' ');
   const nowDot = (z.current_temp !== null && z.current_temp !== undefined)
     ? `<circle cx="${(0.5 * colW).toFixed(1)}" cy="${y(Number(z.current_temp)).toFixed(1)}" r="3.5" fill="var(--ink)"><title>now: ${Number(z.current_temp).toFixed(1)}°C</title></circle>` : '';
   const inner = `${band}${bars}
       <polyline points="${targetLine}" fill="none" stroke="var(--dim)" stroke-width="1" stroke-dasharray="4,3" />
+      <polyline points="${extLine}" fill="none" stroke="var(--violet)" stroke-width="1.5" stroke-dasharray="2,3" />
       <polyline points="${tempLine}" fill="none" stroke="var(--cyan)" stroke-width="2" />${nowDot}`;
   const leftTicks = niceTicks(lo, hi, 4).map(t => ({ ...t, label: `${t.label}°` }));
   const rightTicks = [{ frac: 1 / 1.15, label: `${kwhTop.toFixed(2)} kWh` }, { frac: 0, label: '0' }];
@@ -1477,6 +1480,7 @@ function renderHeatPlanChart(z, d) {
     <div class="gl-combo-legend" style="margin-bottom:4px">
       <span><span class="gl-legend-dot" style="background:var(--cyan)"></span>Room (planned)</span>
       <span><span class="gl-legend-dot" style="background:var(--dim)"></span>Target &amp; comfort band</span>
+      <span><span class="gl-legend-dot" style="background:var(--violet)"></span>Outside (forecast)</span>
       <span><span class="gl-legend-dot" style="background:var(--green);opacity:.5"></span>Heat in cheap slots</span>
       <span><span class="gl-legend-dot" style="background:var(--amber);opacity:.5"></span>mid</span>
       <span><span class="gl-legend-dot" style="background:var(--crimson);opacity:.5"></span>expensive</span>

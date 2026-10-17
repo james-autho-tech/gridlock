@@ -84,7 +84,10 @@ def engine(tmp_path, monkeypatch):
     g.ent_gridwarm_mode = "input_select.gridlock_gridwarm_mode"
     g.build_slots = lambda now: []
     g.get_float_state = lambda eid, default=0.0: _as_float(g.get_state(eid), default)
-    g.registry = None
+    g.registry = types.SimpleNamespace(find_all=lambda prefix=None, contains=None: [
+        e for e in g.states if (prefix is None or e.startswith(prefix)) and (contains is None or contains in e)])
+    g._thermal_weather_ok = None
+    g._thermal_forecast_warned = {}
     g._control_listeners = {}
     g._last_plan = None
     g.load_provider = types.SimpleNamespace(planned_circuit_kwh={}, slot_key=lambda dt: int(dt.timestamp()) // 1800)
@@ -106,7 +109,9 @@ def _seed_house(g, room_temp="13.4", mode="active"):
     s["input_select.gridlock_gridwarm_mode"] = {"state": mode, "attributes": {}}
     s["sensor.loft_heatpump_controller_room_temperature_ta"] = {"state": room_temp, "attributes": {}}
     s["climate.bedroom_4_qing_thermo"] = {"state": "unavailable", "attributes": {}}
-    s["sensor.openweathermap_temperature"] = {"state": "4.0", "attributes": {}}
+    # No outdoor sensor configured by default: the weather entity's own
+    # reading is used (its forecast service is not available in the fake).
+    s["weather.forecast_home"] = {"state": "cloudy", "attributes": {"temperature": "4.0"}}
     s["switch.loft_heatpump_controller_water_flow_temperature_control_zone_1"] = {"state": "off", "attributes": {}}
     s["sensor.loft_heatpump_controller_active_state"] = {"state": "Idle", "attributes": {}}
     s["sensor.loft_heatpump_controller_coefficient_of_performance"] = {"state": "3.6", "attributes": {}}
@@ -174,7 +179,7 @@ def test_no_room_reading_runs_weather_compensation_not_just_on(engine):
                if e["state"].startswith("GridWarm: House"))
     # A mild day: almost no demand -> switched off, never held on for ever.
     g.calls.clear()
-    g.states["sensor.openweathermap_temperature"]["state"] = "19.0"
+    g.states["weather.forecast_home"]["attributes"]["temperature"] = "19.0"
     g._publish_thermal_forecast(g.get_now())
     assert ("switch/turn_off", {"target": {"entity_id": "switch.loft_heatpump_controller_water_flow_temperature_control_zone_1"}}) in g.calls
 
@@ -316,7 +321,7 @@ def test_battery_plan_pricing_flattens_the_heating_price_where_the_battery_cover
     house = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]
     plan = house["flow"]["plan"]
     assert house["flow"]["pricing_mode"] == "battery"
-    batt_p = (0.07 / 0.9 + 0.01) * 100
+    batt_p = (0.07 / 0.9 + 0.03) * 100   # 7p charge rate grossed up for losses, plus the 3p/kWh wear default
     # Slots 1-19 are battery-covered but the battery runs flat at slot 20,
     # so an extra kWh there is really paid at 30p; after slot 20 the
     # battery covers again at its own cost.

@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.51.0 - 2026-10-17
+
+### New
+- Weather is auto-detected: the forecast comes from whichever weather entity actually serves HA's hourly forecasts (the configured one first, then every weather entity in HA, remembering the one that works and retrying failures hourly), and the outdoor temperature from that entity's own reading when no outdoor sensor is set. Both fields default to auto
+- The house plan chart shows the outdoor forecast line
+- Battery wear is priced at a realistic, configurable figure (default 3p/kWh) in the battery-plan pricing
+
+### Fix
+- The OpenWeatherMap free-tier weather entity serves no forecast, and a failed fetch was never retried, so the heating plan was silently working from a flat outdoor temperature all day
+- Battery energy for heating was being priced with the battery LP's "eco" degradation weighting (15p/kWh, a cycling preference rather than a cost), which made battery-covered hours look like 22p and pushed heating into the overnight import slots
+
 ## 3.50.0 - 2026-10-17
 
 ### New

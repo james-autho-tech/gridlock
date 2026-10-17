@@ -36,8 +36,13 @@ DEFAULTS = {
     # GridLock owns the target itself — there's deliberately no
     # thermostat in the loop. Set from the GridWarm tab's ✏️ or −/+.
     "target_temp": 15.0,
-    "external_temp_entity": "sensor.openweathermap_temperature",
-    "weather_entity": "weather.openweathermap",
+    # Both auto-detected when blank: the forecast from whichever
+    # weather.* entity actually serves HA's get_forecasts (the
+    # OpenWeatherMap free tier's doesn't -- current conditions only --
+    # which silently left the model with a flat outdoor curve), and the
+    # outdoor temperature from that entity's own reading.
+    "external_temp_entity": None,
+    "weather_entity": None,
     # The heat pump's own space-heating power switch (zone 1). Commanded
     # only while the GridWarm master switch is ACTIVE and the zone isn't
     # paused — same gates as tank control.
@@ -121,6 +126,11 @@ DEFAULTS = {
     #   "cop"     -- ignore prices entirely, minimise electricity.
     #   "tariff"  -- the raw import rate, as if there were no battery.
     "heat_pricing": "battery",
+    # What a kWh through the battery costs in wear, p/kWh, for the
+    # battery-plan pricing above. A £6k, 36 kWh pack good for ~6000
+    # cycles is under 3p; this is a real cost, unlike the battery LP's
+    # own "degradation" weighting (which is a preference about cycling).
+    "battery_wear_p_per_kwh": 3.0,
     # COP over comfort: inside the comfort band the plan drifts freely to
     # catch the warmest hours and the lowest flow; the band edges are
     # what make sure the house is actually heated.
@@ -160,8 +170,8 @@ HOT_WATER_DEFAULTS = {
     "heating_entity": "sensor.loft_heatpump_controller_active_state",
     "heating_entity_state": "DHW",
     "cop_entity": "sensor.loft_heatpump_controller_coefficient_of_performance",
-    "external_temp_entity": "sensor.openweathermap_temperature",
-    "weather_entity": "weather.openweathermap",
+    "external_temp_entity": None,      # auto: the weather entity's own reading
+    "weather_entity": None,            # auto: any weather entity that serves forecasts
     "control_safety_min_temp": 40.0,   # force a run below this, whatever the plan
     "run_minutes": 60.0,               # length of the window the circuit is powered for
     "max_interval_hours": 24.0,        # never longer than this between windows
@@ -285,6 +295,7 @@ NUMERIC_BOUNDS = {
     "cop_eta": (0.2, 0.8),
     "comfort_below": (0.0, 5.0),
     "comfort_above": (0.0, 5.0),
+    "battery_wear_p_per_kwh": (0.0, 30.0),
 }
 
 ENTITY_FIELDS = ("internal_temp_entity", "internal_temp_fallback_entity",
