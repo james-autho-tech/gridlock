@@ -26,6 +26,7 @@ from core.forecast import SolcastForecastProvider, LearnedLoadForecastProvider
 from core import thermal as core_thermal
 from core import space_heating as core_space_heating
 from core import flow_control as core_flow
+from core import dhw_plan as core_dhw
 from core import diagnostics as core_diagnostics
 from core import warranty as core_warranty
 from core.ev_schedule import find_cheapest_window
@@ -618,6 +619,9 @@ class GridLock(hass.Hass):
         # rebuilt whenever the file changes, so a dashboard edit takes
         # effect on the next tick with no restart. (mtime, zone, settings).
         self._ui_zone_cache = (None, None, None)
+        # control_entity -> zone name, for the "something else flipped my
+        # switch" listener (the unit's own timer, a person in the UI).
+        self._control_listeners = {}
         # heat_loss_degrees learning -- refines the config's own starting
         # figure against real cooling periods (heating off) over time,
         # same EMA-blend pattern as the load forecast's learned profile.
@@ -631,6 +635,7 @@ class GridLock(hass.Hass):
         for zone in self.thermal_zones:
             if not zone["control_entity"]:
                 continue
+            self._watch_control_entity(zone)
             pause_helper = self._thermal_pause_helper(zone["name"])
             if not self.entity_exists(pause_helper):
                 self.log(f"Create {pause_helper} as a real HA helper (Settings > Devices > "
@@ -2983,6 +2988,9 @@ class GridLock(hass.Hass):
                 "flow_temp_entity": z.get("flow_temp_entity"),
                 "return_temp_entity": z.get("return_temp_entity"),
                 "compressor_entity": z.get("compressor_entity"),
+                # Hot water scheduling (core/dhw_plan.py) -- set by the
+                # dashboard hot water zone; None for everything else.
+                "dhw": z.get("dhw"),
                 # Usable-hot-water estimate — tank zones only (tank_litres
                 # is what makes it a tank rather than a room in the first
                 # place, see the mass branch above).
@@ -3085,6 +3093,134 @@ class GridLock(hass.Hass):
         state["emitter_w_at_dt50"] = zone["emitter_rated_w_at_dt50"]
         state["cop_eta"] = zone["cop_eta"]
         state["thermal_mass_wh_per_c"] = params.thermal_mass_wh_per_c
+
+    def _update_dhw_learning(self, zone, now, tank_temp, heating_on):
+        """Learns when this house draws hot water (core/dhw_plan.py's
+        usage profile): every tick's tank-temperature drop beyond
+        standing loss, while not heating, is hot water used in that
+        half-hour of the day; today's buckets are blended into the
+        learned profile at the first tick of each new day."""
+        learn = self.thermal_learning_state.setdefault(zone["name"], {})
+        params = zone["params"]
+        local = now.astimezone()
+        date_key = local.date().isoformat()
+        bucket = core_dhw.profile_bucket(local)
+        day = learn.get("dhw_day_buckets")
+        if learn.get("dhw_day_date") != date_key:
+            if day is not None and learn.get("dhw_day_date"):
+                learn["dhw_profile"] = core_dhw.blend_day_into_profile(learn.get("dhw_profile"), day)
+                learn["dhw_profile_days"] = int(learn.get("dhw_profile_days", 0)) + 1
+            day = [None] * core_dhw.PROFILE_SLOTS
+            learn["dhw_day_date"] = date_key
+        prev_ts, prev_temp, prev_on = learn.get("dhw_prev_ts"), learn.get("dhw_prev_temp"), learn.get("dhw_prev_on")
+        if prev_ts is not None:
+            try:
+                elapsed_h = (now - self._iso(prev_ts)).total_seconds() / 3600.0
+            except (ValueError, TypeError):
+                elapsed_h = None
+            if elapsed_h is not None:
+                wh = core_dhw.draw_wh(prev_temp, tank_temp, elapsed_h, params.heat_loss_watts,
+                                      params.thermal_mass_wh_per_c, heating_on or bool(prev_on))
+                if wh is not None:
+                    day[bucket] = (day[bucket] or 0.0) + wh
+        learn["dhw_day_buckets"] = day
+        learn["dhw_prev_ts"], learn["dhw_prev_temp"], learn["dhw_prev_on"] = now.isoformat(), tank_temp, heating_on
+
+    def _plan_dhw(self, zone, now, tank_temp, setpoint, external_curve, rate_curve):
+        """When the DHW circuit gets power (see core/dhw_plan.py): the
+        cheapest window by price / predicted COP that finishes before
+        the deadline -- the learned usage peak if one is coming, else
+        the max-interval guarantee -- committed once it starts so a
+        re-plan can't abandon a half-done run, and skipped when the tank
+        already covers the learned usage until the next window."""
+        d = zone["dhw"]
+        per_slot = SLOT_MIN // THERMAL_STEP_MIN
+        slot_hours = SLOT_MIN / 60.0
+        idx = list(range(0, len(external_curve), per_slot))
+        ext = [external_curve[j] for j in idx]
+        rates = [rate_curve[j] for j in idx]
+        setpoint = setpoint if setpoint is not None else 53.0
+        hyst = (self.get_float_state(d["start_hysteresis_entity"], 10.0)
+                if d.get("start_hysteresis_entity") else 10.0)
+        flow = setpoint + d["flow_margin"]
+        cops = [core_flow.cop_estimate(flow, e, d["cop_eta"]) for e in ext]
+        scores = core_dhw.slot_scores(rates, ext, flow, d["cop_eta"])
+        run_slots = core_dhw.run_slots_needed(d["run_minutes"], SLOT_MIN)
+        state = self._thermal_control_state.setdefault(
+            zone["name"], {"off_since": None, "last_commanded": None, "rejected": False,
+                           "rejected_notified": False, "blocked_key": None})
+        committed = state.get("dhw_window")
+        if committed:
+            try:
+                if now >= self._iso(committed["end"]):
+                    state["dhw_last_window_end"] = committed["end"]
+                    committed = state["dhw_window"] = None
+            except (ValueError, TypeError, KeyError):
+                committed = state["dhw_window"] = None
+        last_end = state.get("dhw_last_window_end")
+        try:
+            hours_since = (now - self._iso(last_end)).total_seconds() / 3600.0 if last_end else None
+        except (ValueError, TypeError):
+            hours_since = None
+        deadline = core_dhw.deadline_slots(hours_since, d["max_interval_hours"], slot_hours)
+        learn = self.thermal_learning_state.get(zone["name"], {})
+        profile = learn.get("dhw_profile")
+        bucket = core_dhw.profile_bucket(now.astimezone())
+        expected = core_dhw.expected_draw(profile, bucket, len(scores))
+        ready = core_dhw.ready_by_slot(expected, d.get("draw_threshold_wh", 300.0), lead_slots=1)
+        if ready is not None:
+            deadline = min(deadline, max(run_slots, ready))
+        window = core_dhw.cheapest_window(scores, run_slots, deadline)
+        # A window only starts when there's something to heat: the tank
+        # is below the point the unit would start a run at, or the daily
+        # guarantee is up. Otherwise "cheapest window is now" on a flat
+        # tariff would run the circuit back to back for ever.
+        needed = core_dhw.unit_will_heat(tank_temp, setpoint, hyst) or deadline <= run_slots
+        skipped = False
+        if not committed and window and window[0] == 0 and needed:
+            horizon = max(run_slots, deadline)
+            if profile and core_dhw.tank_can_cover(
+                    tank_temp, setpoint, hyst, zone["params"].thermal_mass_wh_per_c,
+                    sum(expected[:horizon]), zone["params"].heat_loss_watts, horizon * slot_hours):
+                # Warm enough for everything the house is expected to draw
+                # before the next chance -- count it as done, don't run.
+                state["dhw_last_window_end"] = now.isoformat()
+                skipped = True
+            else:
+                committed = {"start": now.isoformat(),
+                             "end": (now + timedelta(minutes=SLOT_MIN * run_slots)).isoformat()}
+                state["dhw_window"] = committed
+        if committed:
+            start_iso, end_iso = committed["start"], committed["end"]
+        elif window:
+            start_iso = (now + timedelta(minutes=SLOT_MIN * window[0])).isoformat()
+            end_iso = (now + timedelta(minutes=SLOT_MIN * window[1])).isoformat()
+        else:
+            start_iso = end_iso = None
+        w_cop = (sum(cops[window[0]:window[1]]) / run_slots) if window else None
+        w_price = (sum(rates[window[0]:window[1]]) / run_slots) if window else None
+        return {"heat_now": committed is not None,
+                "committed": committed is not None,
+                "needed": needed,
+                "skipped_covered": skipped,
+                "window_start": start_iso, "window_end": end_iso,
+                "window_price": round(w_price, 2) if w_price is not None else None,
+                "window_cop": round(w_cop, 2) if w_cop is not None else None,
+                "window_score": round(window[2], 2) if window else None,
+                "price_now": round(rates[0], 2) if rates else None,
+                "cop_now": round(cops[0], 2) if cops else None,
+                "deadline_hours": round(deadline * slot_hours, 1),
+                "ready_by": ((now + timedelta(minutes=SLOT_MIN * ready)).isoformat()
+                             if ready is not None else None),
+                "hours_since_last": round(hours_since, 1) if hours_since is not None else None,
+                "will_heat": core_dhw.unit_will_heat(tank_temp, setpoint, hyst),
+                "setpoint": setpoint, "start_hysteresis": hyst,
+                "usage_profile_wh": [round(v, 0) for v in (profile or [])],
+                "usage_days_learned": int(learn.get("dhw_profile_days", 0)),
+                "expected_24h_kwh": round(sum(expected[:48]) / 1000.0, 2),
+                "slots": [{"x": (now + timedelta(minutes=SLOT_MIN * i)).isoformat(),
+                           "price": round(rates[i], 2), "cop": round(cops[i], 2),
+                           "score": round(scores[i], 2)} for i in range(min(48, len(scores)))]}
 
     def _plan_flow(self, zone, now, internal_temp, external_curve, plan_curve, rate_curve):
         """The flow-temperature plan for one tick (see core/flow_control.py):
@@ -3352,6 +3488,8 @@ class GridLock(hass.Hass):
         heating_on = self._thermal_heating_on(zone)
         hp = self._hp_live(zone)
         self._update_flow_learning(zone, now, internal_temp, external_now, heating_on, hp)
+        if zone.get("dhw"):
+            self._update_dhw_learning(zone, now, internal_temp, heating_on)
         self._update_thermal_learning(zone, now, internal_temp, external_now, heating_on)
 
         external_curve = (self._thermal_weather_curve(
@@ -3401,6 +3539,13 @@ class GridLock(hass.Hass):
             for i, j in enumerate(range(per_slot - 1, len(trace), per_slot))]
 
         live_cop = hp["live_cop"]
+        dhw = None
+        if zone.get("dhw"):
+            try:
+                dhw = self._plan_dhw(zone, now, internal_temp, target_temp, external_curve, rate_curve)
+            except Exception as exc:  # noqa: BLE001 — a plan failure must not drop the zone
+                self.log(f"GridWarm: hot water plan for '{zone['name']}' failed: {exc!r}", level="WARNING")
+                dhw = None
         flow = None
         if zone["flow_entity"]:
             try:
@@ -3432,16 +3577,18 @@ class GridLock(hass.Hass):
                 "is_tank": zone["is_tank"],
                 # Only the dashboard zone's target is GridLock's own to
                 # change; a yaml zone's comes from its target entity.
-                "target_editable": zone.get("source") == "dashboard",
+                "target_editable": zone.get("source") == "dashboard" and not zone["target_temp_entity"],
                 # The model's own first-step decision (already reflects
                 # the anticipation-adjusted plan_curve and its hysteresis
                 # band) -- this is what active control, if enabled for
                 # this zone, actually commands. Distinct from the LIVE
                 # "heating_on" above, which is what the hardware is
                 # observed doing right now, not what the model wants.
-                "desired_heating_on": (flow["required_w"] >= (zone["params"].heat_min_power or 1500.0) * 0.5
+                "desired_heating_on": (dhw["heat_now"] if dhw else
+                                       flow["required_w"] >= (zone["params"].heat_min_power or 1500.0) * 0.5
                                        if flow else trace[0]["heating_on"]),
                 "flow": flow,
+                "dhw": dhw,
                 "hp": hp,
                 "learned_emitter_w_at_dt50": round(zone["emitter_rated_w_at_dt50"], 0),
                 "config_emitter_w_at_dt50": round(zone["config_emitter_rated_w_at_dt50"], 0),
@@ -3493,14 +3640,19 @@ class GridLock(hass.Hass):
             mtime = os.path.getmtime(path)
         except OSError:
             mtime = None
-        cached_mtime, cached_zone, cached_settings = self._ui_zone_cache
+        cached_mtime, cached_zones, cached_settings = self._ui_zone_cache
         if cached_settings is not None and mtime == cached_mtime:
-            return cached_zone, cached_settings
+            return cached_zones, cached_settings
         settings = core_space_heating.merge_settings(
             self._load_dashboard_json("gridwarm_settings.json", {}))
-        zone = None
+        zones = []
+        cfgs = []
         if settings["configured"]:
-            zone = self._build_thermal_zone(core_space_heating.to_zone_cfg(settings))
+            cfgs.append(("space heating", core_space_heating.to_zone_cfg(settings)))
+        if settings["hot_water"]["configured"]:
+            cfgs.append(("hot water", core_space_heating.to_hot_water_zone_cfg(settings["hot_water"])))
+        for kind, cfg in cfgs:
+            zone = self._build_thermal_zone(cfg)
             zone["source"] = "dashboard"
             # Same learned-parameter restore as the apps.yaml zones get at
             # startup -- a settings edit (or restart) mustn't reset what
@@ -3514,10 +3666,42 @@ class GridLock(hass.Hass):
                     # real helper exists, so this one is usable as-is.
                     self.set_state(pause_helper, state="on",
                                    attributes={"friendly_name": f"GridLock GridWarm control: {zone['name']}"})
-            self.log(f"GridWarm: dashboard space heating zone '{zone['name']}' loaded "
-                     f"(control_entity={zone['control_entity']}, target={settings['target_temp']}°C)")
-        self._ui_zone_cache = (mtime, zone, settings)
-        return zone, settings
+                self._watch_control_entity(zone)
+            self.log(f"GridWarm: dashboard {kind} zone '{zone['name']}' loaded "
+                     f"(control_entity={zone['control_entity']})")
+            zones.append(zone)
+        self._ui_zone_cache = (mtime, zones, settings)
+        return zones, settings
+
+    def _watch_control_entity(self, zone):
+        """React within seconds, not at the next 5-minute tick, when
+        something other than GridWarm flips a controlled switch -- the
+        heat pump's own built-in DHW timer most of all (there is no
+        Modbus register for that timer, so it can't be deleted; this
+        makes it irrelevant instead). Our own writes trigger this too,
+        but then the state already matches and nothing happens."""
+        entity = zone["control_entity"]
+        if not entity or entity in self._control_listeners:
+            return
+        self._control_listeners[entity] = zone["name"]
+        self.listen_state(self._on_control_entity_changed, entity)
+
+    def _on_control_entity_changed(self, entity, attribute, old, new, kwargs):
+        name = self._control_listeners.get(entity)
+        state = self._thermal_control_state.get(name or "")
+        if not state or state.get("last_commanded") is None or new not in ("on", "off"):
+            return
+        if core_thermal.command_matches_state(state["last_commanded"], new):
+            return
+        if self.get_state(self.ent_gridwarm_mode) != "active":
+            return
+        if self.get_state(self._thermal_pause_helper(name)) == "off":
+            return
+        wanted = state["last_commanded"]
+        self.call_service(f"switch/turn_{'on' if wanted else 'off'}", target={"entity_id": entity})
+        self._log_decision(f"GridWarm: {name} {'ON' if wanted else 'OFF'} re-asserted",
+                           f"{entity} was switched {new} by something else (the unit's own timer, "
+                           "or a hand) — put back to what the plan wants")
 
     def _thermal_stub_result(self, zone):
         """What a controlled zone publishes when it has no usable room
@@ -3534,9 +3718,10 @@ class GridLock(hass.Hass):
                 "heating_on": self._thermal_heating_on(zone),
                 "no_reading": True,
                 "is_tank": zone["is_tank"],
-                "target_editable": zone.get("source") == "dashboard",
+                "target_editable": zone.get("source") == "dashboard" and not zone["target_temp_entity"],
                 "desired_heating_on": True,
                 "flow": None,
+                "dhw": None,
                 "hp": self._hp_live(zone),
                 "learned_emitter_w_at_dt50": round(zone["emitter_rated_w_at_dt50"], 0),
                 "config_emitter_w_at_dt50": round(zone["config_emitter_rated_w_at_dt50"], 0),
@@ -3736,8 +3921,13 @@ class GridLock(hass.Hass):
         self._log_decision(f"GridWarm: {name} {'ON' if command else 'OFF'}", reason)
 
     def _publish_thermal_forecast(self, now):
-        ui_zone, ui_settings = self._ui_space_heating_zone()
-        zones = list(self.thermal_zones) + ([ui_zone] if ui_zone else [])
+        ui_zones, ui_settings = self._ui_space_heating_zone()
+        # A yaml zone reading the same sensor as a dashboard zone is the
+        # same thing configured twice -- the dashboard one wins, so the
+        # old apps.yaml tank entry doesn't show up as a second row.
+        ui_sensors = {z["internal_temp_entity"] for z in ui_zones}
+        zones = ([z for z in self.thermal_zones if z["internal_temp_entity"] not in ui_sensors]
+                 + ui_zones)
         if not zones:
             # Still publish the settings so the dashboard's space heating
             # form has something to show (a hidden zone can be un-hidden).
@@ -3746,7 +3936,8 @@ class GridLock(hass.Hass):
                                        "icon": "mdi:heat-pump",
                                        "zones": [],
                                        "control_mode": self.get_state(self.ent_gridwarm_mode) or "read_only",
-                                       "space_heating_settings": ui_settings})
+                                       "space_heating_settings": ui_settings,
+                                       "hot_water_settings": ui_settings["hot_water"]})
             return
         rate_curve = self._thermal_rate_curve(self.build_slots(now))
         zones_out = []
@@ -3791,6 +3982,7 @@ class GridLock(hass.Hass):
                                    "predicted_cost_today_baseline_total": round(baseline_cost, 2),
                                    "control_mode": self.get_state(self.ent_gridwarm_mode) or "read_only",
                                    "space_heating_settings": ui_settings,
+                                   "hot_water_settings": ui_settings["hot_water"],
                                    "zones": zones_out})
 
     def _refresh_diagnostic_entities(self):

@@ -488,6 +488,45 @@ heat pump state, what the plan needs now with its predicted COP, and the
 24-hour plan chart. With no flow entity the zone falls back to on/off
 control at whatever the unit's own setpoint is.
 
+### Hot water, scheduled not timed
+
+The dashboard's hot water zone (⚙️ Hot water settings on the GridWarm
+tab) replaces the heat pump's fixed DHW timer. The unit's own hot water
+logic is left alone — it still heats to its setpoint and still only
+starts a run once the tank has dropped its start hysteresis (dT5_ON)
+below it, both read live. GridWarm only decides *when the DHW circuit
+gets power*:
+
+- **One window a day, the cheapest.** Every tick it scores each of the
+  next 48 half-hours by electricity price divided by the COP it expects at
+  the DHW flow temperature (setpoint plus a margin) in that slot's
+  forecast outdoor temperature, and picks the cheapest contiguous window
+  of the configured run length that finishes before the deadline. On a
+  cheap-rate tariff that's overnight; on a flat one it's the warmest part
+  of the afternoon. A window only starts when there's something to heat
+  (the tank is below the unit's own start point) or the daily guarantee
+  is up — otherwise a flat tariff would run it back to back. Once a
+  window starts it's committed, so a re-plan can't abandon a half-done
+  run.
+- **Guard rails.** A floor (default 40°C) forces a run regardless of
+  plan; a maximum interval (default 24 h) means a window can't be
+  postponed for ever chasing a cheaper tomorrow.
+- **It learns your usage.** While the tank isn't heating, any temperature
+  drop beyond its standing loss is hot water being drawn; that energy is
+  logged against the half-hour of the day and blended into a learned
+  daily profile (20% per day, like the house-load profile). The plan then
+  finishes a run before the first expected draw-off of the day, and skips
+  a window entirely when the tank already covers what's expected before
+  the next chance. The panel shows how many days it has learned from.
+- **The unit's own timer.** There's no Modbus register for it, so it
+  can't be deleted from HA — turn it off on the wired controller if you
+  can. If it fires anyway, GridWarm watches the DHW switch live and puts
+  it back within seconds, so the timer becomes irrelevant.
+
+The switch GridWarm uses is the DHW circuit's power switch, the one the
+unit's timer drives. Never the "forced tank heating" switch, which fires
+the immersion heater on this unit (see below).
+
 ### Active control (hot water tank or space heating)
 
 A zone can set `control_entity` to a switch that turns the heat pump's

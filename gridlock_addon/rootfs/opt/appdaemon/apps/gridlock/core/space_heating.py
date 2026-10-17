@@ -117,6 +117,130 @@ DEFAULTS = {
     "compressor_entity": "sensor.loft_heatpump_controller_compressor_operating_frequency",
 }
 
+# --- Hot water (DHW) zone, same dashboard-configured arrangement ---
+# The unit's own DHW logic is left intact; GridWarm just decides when the
+# DHW circuit gets power (core/dhw_plan.py): the cheapest window of the
+# day by price / predicted COP, a floor that forces a run, and a maximum
+# interval so it always runs at least once a day.
+HOT_WATER_DEFAULTS = {
+    "configured": True,
+    "name": "Hot water",
+    "tank_temp_entity": "sensor.loft_heatpump_controller_water_tank_temperature_t5",
+    # The "standard" the tank is heated to -- the unit's own DHW setpoint
+    # is read live, so changing it on the unit changes it here.
+    "target_temp_entity": "number.loft_heatpump_controller_set_dhw_tank_temperature_t5s",
+    # The unit only starts a run once the tank is this far below the
+    # setpoint (Midea dT5_ON) -- read live so "will it actually heat?"
+    # on the panel is right.
+    "start_hysteresis_entity": "number.loft_heatpump_controller_dt5_on",
+    # Power to the DHW circuit -- the same switch the unit's own timer
+    # drives. NOT the "forced tank heating" one, which fires the
+    # immersion heater on this unit.
+    "control_entity": "switch.loft_heatpump_controller_power_dhw_t5s",
+    "heating_entity": "sensor.loft_heatpump_controller_active_state",
+    "heating_entity_state": "DHW",
+    "cop_entity": "sensor.loft_heatpump_controller_coefficient_of_performance",
+    "external_temp_entity": "sensor.openweathermap_temperature",
+    "weather_entity": "weather.openweathermap",
+    "control_safety_min_temp": 40.0,   # force a run below this, whatever the plan
+    "run_minutes": 60.0,               # length of the window the circuit is powered for
+    "max_interval_hours": 24.0,        # never longer than this between windows
+    "flow_margin": 5.0,                # DHW flow runs about this far above the tank setpoint (for the COP estimate)
+    "cop_eta": 0.45,
+    "control_requires": [
+        {"entity": "switch.loft_heatpump_controller_parameter_setting_1_enable_water_heating",
+         "state": "on"},
+    ],
+    # Tank model (prediction only -- the plan above doesn't need it).
+    "tank_litres": 150.0,
+    "heat_loss_watts": 60.0,
+    "heat_max_power": 3500.0,
+    "heat_min_power": 1500.0,
+    "heating_cop": 2.5,
+    "hysteresis": 2.0,
+    "hysteresis_off": 0.5,
+}
+
+HOT_WATER_NUMERIC_BOUNDS = {
+    "control_safety_min_temp": (20.0, 55.0),
+    "run_minutes": (15.0, 240.0),
+    "max_interval_hours": (0.0, 72.0),
+    "flow_margin": (0.0, 15.0),
+    "cop_eta": (0.2, 0.8),
+    "tank_litres": (20.0, 1000.0),
+    "heat_loss_watts": (0.0, 1000.0),
+    "heat_max_power": (200.0, 30000.0),
+    "heat_min_power": (0.0, 30000.0),
+    "heating_cop": (0.5, 10.0),
+    "hysteresis": (0.0, 15.0),
+    "hysteresis_off": (0.0, 5.0),
+}
+
+HOT_WATER_ENTITY_FIELDS = ("tank_temp_entity", "target_temp_entity", "start_hysteresis_entity",
+                           "control_entity", "heating_entity", "cop_entity",
+                           "external_temp_entity", "weather_entity")
+
+
+def merge_hot_water(saved):
+    out = copy.deepcopy(HOT_WATER_DEFAULTS)
+    saved = saved if isinstance(saved, dict) else {}
+    if "configured" in saved:
+        out["configured"] = bool(saved["configured"])
+    name = saved.get("name")
+    if isinstance(name, str) and name.strip():
+        out["name"] = name.strip()[:60]
+    for key in HOT_WATER_ENTITY_FIELDS:
+        if key in saved:
+            out[key] = _clean_entity(saved[key])
+    if "heating_entity_state" in saved:
+        hs = saved["heating_entity_state"]
+        out["heating_entity_state"] = (str(hs).strip() or "on") if hs is not None else "on"
+    for key, (lo, hi) in HOT_WATER_NUMERIC_BOUNDS.items():
+        if key in saved:
+            try:
+                out[key] = min(hi, max(lo, float(saved[key])))
+            except (TypeError, ValueError):
+                pass
+    if "control_requires" in saved:
+        out["control_requires"] = clean_requirements(saved["control_requires"])
+    return out
+
+
+def to_hot_water_zone_cfg(hw):
+    """The yaml-shaped tank zone dict the engine's zone builder already
+    understands, plus the DHW scheduling keys the control step reads."""
+    return {
+        "name": hw["name"],
+        "internal_temp_entity": hw["tank_temp_entity"],
+        "target_temp_entity": hw["target_temp_entity"],
+        "external_temp_constant": 18.0,
+        "external_temp_entity": hw["external_temp_entity"],
+        "weather_entity": hw["weather_entity"],
+        "heating_entity": hw["heating_entity"],
+        "heating_entity_state": hw["heating_entity_state"],
+        "cop_entity": hw["cop_entity"],
+        "control_entity": hw["control_entity"],
+        "control_safety_min_temp": hw["control_safety_min_temp"],
+        "control_max_off_hours": 0.0,   # the max interval below is the run guarantee
+        "control_requires": hw["control_requires"],
+        "tank_litres": hw["tank_litres"],
+        "heat_loss_degrees": 0.0,
+        "heat_loss_watts": hw["heat_loss_watts"],
+        "heat_max_power": hw["heat_max_power"],
+        "heat_min_power": hw["heat_min_power"],
+        "heat_share": 1.0,
+        "heating_cop": hw["heating_cop"],
+        "hysteresis": hw["hysteresis"],
+        "hysteresis_off": hw["hysteresis_off"],
+        "active": False,   # no anticipation curve for a tank
+        "dhw": {"start_hysteresis_entity": hw["start_hysteresis_entity"],
+                "run_minutes": hw["run_minutes"],
+                "max_interval_hours": hw["max_interval_hours"],
+                "flow_margin": hw["flow_margin"],
+                "cop_eta": hw["cop_eta"]},
+    }
+
+
 # (min, max) clamps for the numeric fields — a typo must never reach a
 # heating device as a setpoint.
 NUMERIC_BOUNDS = {
@@ -202,6 +326,8 @@ def merge_settings(saved):
         out["control_requires"] = clean_requirements(saved["control_requires"])
     if out["flow_max"] < out["flow_min"]:
         out["flow_max"] = out["flow_min"]
+    # The hot water zone rides along in the same file under its own key.
+    out["hot_water"] = merge_hot_water(saved.get("hot_water"))
     return out
 
 

@@ -348,6 +348,8 @@ def build_status():
         "space_heating_settings": (thermal.get("attributes", {}).get("space_heating_settings")
                                    or merge_space_heating_settings(load_gridwarm_settings())),
         "engine_version": status_attrs.get("engine_version"),
+        "hot_water_settings": (thermal.get("attributes", {}).get("hot_water_settings")
+                               or merge_space_heating_settings(load_gridwarm_settings())["hot_water"]),
         # None (not empty lists) when never configured, so the dashboard
         # knows to hide the card entirely rather than show an empty one.
         "heatpump_diagnostics": ({
@@ -1023,6 +1025,8 @@ function rerenderSpaceHeating() {
   const host = document.getElementById('gl-sh-host');
   const s = (latestStatus && latestStatus.space_heating_settings) || null;
   if (host && s) { host.innerHTML = renderSpaceHeatingSettings(s); fillGridwarmDatalists(); }
+  const hwHost = document.getElementById('gl-hw-host');
+  if (hwHost && latestStatus) hwHost.innerHTML = renderHotWaterSettings(latestStatus.hot_water_settings);
 }
 let shSaveBusy = false;
 async function saveSpaceHeating(reset) {
@@ -1200,8 +1204,139 @@ function houseStatusPill(z, d) {
   if (c.commanded === false) return '<span class="gl-pill gl-pill-eco">Off — warm enough</span>';
   return '<span class="gl-pill gl-pill-eco">Waiting for first tick</span>';
 }
+let hwBusy = false;
+async function hwSet(key, el) {
+  if (hwBusy) return;
+  const value = el.type === 'checkbox' ? el.checked : el.value;
+  hwBusy = true;
+  try {
+    const r = await fetch('api/gridwarm-hot-water', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ [key]: value }),
+    });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); window.alert(j.error || 'Could not save'); }
+  } catch (e) { window.alert('Could not reach GridLock to save.'); }
+  hwBusy = false;
+  refresh();
+}
+async function hwReset() {
+  if (!window.confirm('Reset every hot water setting back to the defaults?')) return;
+  try { await fetch('api/gridwarm-hot-water', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reset: true }) }); } catch (e) { /* refresh shows it */ }
+  refresh();
+}
+let hwOpen = false;
+function hwEntitySelect(hw, key, label, groups, hint = '') {
+  // Same dropdown as the space heating form, but saving on change.
+  const current = String(hw[key] ?? '');
+  const seen = new Set();
+  let options = `<option value="" ${current === '' ? 'selected' : ''}>— none —</option>`;
+  if (gridwarmEntities) {
+    for (const g of groups) {
+      for (const id of (gridwarmEntities[g] || []).slice().sort((a, b) => entityLabel(a).localeCompare(entityLabel(b)))) {
+        if (seen.has(id)) continue; seen.add(id);
+        options += `<option value="${esc(id)}" ${id === current ? 'selected' : ''}>${esc(entityLabel(id))}</option>`;
+      }
+    }
+  } else if (current) options += `<option disabled>loading entity list…</option>`;
+  if (current && !seen.has(current)) options += `<option value="${esc(current)}" selected>${esc(current)}${gridwarmEntities ? ' (not found in HA)' : ''}</option>`;
+  return `<div><div class="lbl">${label}</div><select class="gl-inp" onchange="hwSet('${key}', this)">${options}</select>${hint ? `<div style="color:var(--dim);font-size:10px;margin-top:2px">${hint}</div>` : ''}</div>`;
+}
+function renderHotWaterSettings(hw) {
+  if (!hw) return '';
+  const num = (key, label, step, hint = '') =>
+    `<div><div class="lbl">${label}</div><input class="gl-inp" type="number" step="${step}" value="${esc(String(hw[key] ?? ''))}" onchange="hwSet('${key}', this)">${hint ? `<div style="color:var(--dim);font-size:10px;margin-top:2px">${hint}</div>` : ''}</div>`;
+  const txt = (key, label, hint = '') =>
+    `<div><div class="lbl">${label}</div><input class="gl-inp" value="${esc(String(hw[key] ?? ''))}" onchange="hwSet('${key}', this)">${hint ? `<div style="color:var(--dim);font-size:10px;margin-top:2px">${hint}</div>` : ''}</div>`;
+  return `
+    <details ${hwOpen ? 'open' : ''} ontoggle="hwOpen = this.open; if (this.open) loadGridwarmEntities();">
+      <summary style="cursor:pointer;color:var(--ink);font-weight:600;margin-top:14px">⚙️ Hot water settings</summary>
+      <div class="gl-sub" style="margin-top:6px">Each field saves as you change it; the engine picks it up on its next tick. The unit's own hot water logic is untouched — GridWarm only decides when the DHW circuit gets power. Turn the unit's own DHW timer off on its panel if you can; if not, GridWarm switches the circuit straight back off within seconds whenever the timer turns it on outside the planned window.</div>
+      <div class="gl-sh-grid" style="margin-top:10px">
+        <div><div class="lbl">Show this zone</div><label style="font-size:12px;color:var(--ink)"><input type="checkbox" ${hw.configured ? 'checked' : ''} onchange="hwSet('configured', this)"> predicted, planned and shown</label></div>
+        ${txt('name', 'Zone name')}
+        ${hwEntitySelect(hw, 'tank_temp_entity', 'Tank temperature', ['temperature', 'sensor'])}
+        ${hwEntitySelect(hw, 'target_temp_entity', 'Tank setpoint (the "standard")', ['number'], 'Read from the unit, so change it there.')}
+        ${hwEntitySelect(hw, 'start_hysteresis_entity', 'Unit start hysteresis (dT5_ON)', ['number'], 'The unit only starts a run once the tank is this far below the setpoint.')}
+        ${hwEntitySelect(hw, 'control_entity', 'DHW circuit power switch', ['switch'], 'The switch the unit\'s own timer drives — never a "forced tank heating" switch (immersion heater).')}
+        ${hwEntitySelect(hw, 'heating_entity', '"Heating hot water now" sensor', ['sensor', 'switch'])}
+        ${txt('heating_entity_state', '…and the value that means heating', 'e.g. DHW')}
+        ${num('control_safety_min_temp', 'Floor °C — force a run below this', 1)}
+        ${num('run_minutes', 'Window length, minutes', 5, 'How long the circuit is powered for per run.')}
+        ${num('max_interval_hours', 'Run at least every … hours', 1, '0 = no guarantee, only the floor and learned usage.')}
+        ${num('flow_margin', 'DHW flow above setpoint, °C', 1, 'For the COP estimate per slot.')}
+        ${num('cop_eta', 'COP factor (fraction of Carnot)', 0.01)}
+        ${hwEntitySelect(hw, 'cop_entity', 'Live COP', ['sensor'])}
+        ${hwEntitySelect(hw, 'external_temp_entity', 'Outdoor temperature', ['temperature', 'sensor'])}
+        ${hwEntitySelect(hw, 'weather_entity', 'Weather forecast', ['weather'])}
+        ${num('tank_litres', 'Tank size, litres', 10)}
+        ${num('heat_loss_watts', 'Standing loss, W', 5)}
+        ${num('heat_max_power', 'Heat pump DHW output, W', 100)}
+        ${num('heating_cop', 'Assumed DHW COP (no live sensor)', 0.05)}
+      </div>
+      <div style="margin-top:12px"><button class="gl-btn-sm" onclick="hwReset()">Reset to defaults</button></div>
+    </details>`;
+}
+function renderHotWaterHero(d) {
+  const z = (d.thermal_zones || []).find(x => x.dhw);
+  if (!z) return '';
+  const w = z.dhw;
+  const c = z.control || {};
+  const n1 = (v, dp = 1, unit = '') => (v === null || v === undefined || v === '' || Number.isNaN(Number(v))) ? '—' : `${Number(v).toFixed(dp)}${unit}`;
+  const t = iso => iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
+  const day = iso => iso ? (new Date(iso).toDateString() === new Date().toDateString() ? 'today' : 'tomorrow') : '';
+  const tankTile = `<div class="gl-tile"><div class="lbl">Tank</div><div class="val num">${n1(z.current_temp, 1, '°C')}</div><div class="sub">setpoint ${n1(w.setpoint, 0, '°C')} · unit starts a run below ${n1(Number(w.setpoint) - Number(w.start_hysteresis), 0, '°C')}${z.showers_available != null ? ` · ${n1(z.showers_available, 1)} showers in it` : ''}</div></div>`;
+  const runTile = w.committed
+    ? `<div class="gl-tile"><div class="lbl">Run</div><div class="val" style="font-size:16px;color:var(--green)">🔥 Running now</div><div class="sub">until ${t(w.window_end)} · ${w.will_heat ? 'tank below the start point, so it is heating' : 'tank already above the unit\'s start point — nothing to do'}</div></div>`
+    : w.skipped_covered
+      ? `<div class="gl-tile"><div class="lbl">Run</div><div class="val" style="font-size:16px">Skipped</div><div class="sub">tank already covers the usage expected before the next chance</div></div>`
+      : `<div class="gl-tile"><div class="lbl">Next run</div><div class="val num" style="font-size:18px">${t(w.window_start)}–${t(w.window_end)} <span style="font-size:11px;color:var(--dim)">${day(w.window_start)}</span></div><div class="sub">cheapest by price ÷ COP: ${n1(w.window_price, 1, 'p')} at COP ${n1(w.window_cop, 2)} (now ${n1(w.price_now, 1, 'p')} / ${n1(w.cop_now, 2)}) · must finish within ${n1(w.deadline_hours, 1, ' h')}${w.ready_by ? `, before the ${t(w.ready_by)} usage` : ''}</div></div>`;
+  const usageTile = `<div class="gl-tile"><div class="lbl">Usage learned</div><div class="val num">${n1(w.expected_24h_kwh, 1, ' kWh')}</div><div class="sub">expected next 24 h, from ${w.usage_days_learned || 0} day${w.usage_days_learned === 1 ? '' : 's'} of watching the tank${(w.usage_days_learned || 0) < 3 ? ' — still learning' : ''}</div></div>`;
+  const pauseBtn = c.pause_helper
+    ? (c.paused && d.gridwarm_control_mode === 'active'
+        ? `<button class="gl-btn-sm" onclick="setGridwarmPause('${c.pause_helper}', false)">Resume</button>`
+        : `<button class="gl-btn-sm" onclick="setGridwarmPause('${c.pause_helper}', true)">Pause</button>`)
+    : '';
+  const fixes = (c.blocked_items || []).map(b =>
+    `<button class="gl-btn-sm" onclick="fixRequirement('${esc(b.entity)}', '${esc(b.state)}')">Fix: ${esc(b.entity.split('.').pop().replace(/^loft_heatpump_controller_/, '').replace(/_/g, ' '))} → ${esc(b.state)}</button>`).join(' ');
+  return `
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:18px">
+      <span style="color:var(--ink);font-weight:600">${esc(z.name)}</span>
+      ${houseStatusPill(z, d)}
+      ${fixes}
+      ${pauseBtn}
+    </div>
+    <div class="gl-hero">${tankTile}${runTile}${usageTile}</div>
+    ${w.slots && w.slots.length ? `<div style="margin-top:12px"><div class="lbl" style="margin-bottom:6px">Next 24 hours — cost of a kWh of hot water per half-hour (price ÷ COP), planned window highlighted; learned usage below</div>${renderDhwChart(w)}</div>` : ''}`;
+}
+function renderDhwChart(w) {
+  const slots = w.slots;
+  const n = slots.length;
+  const H = 110;
+  const colW = VB_W / n;
+  const maxS = Math.max(...slots.map(s => s.score), 0.01);
+  const ws = w.window_start ? new Date(w.window_start).getTime() : null;
+  const we = w.window_end ? new Date(w.window_end).getTime() : null;
+  const bars = slots.map((s, i) => {
+    const tms = new Date(s.x).getTime();
+    const inWin = ws !== null && tms >= ws - 1000 && tms < we;
+    const h = (s.score / maxS) * (H - 30);
+    return `<rect x="${(i * colW + 1).toFixed(1)}" y="${(H - 18 - h).toFixed(1)}" width="${Math.max(1, colW - 2).toFixed(1)}" height="${h.toFixed(1)}" fill="${inWin ? 'var(--green)' : 'var(--cyan)'}" opacity="${inWin ? 0.9 : 0.35}"><title>${esc(new Date(s.x).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}: ${s.price.toFixed(1)}p ÷ COP ${s.cop.toFixed(2)} = ${s.score.toFixed(1)}p per kWh of heat</title></rect>`;
+  }).join('');
+  const labels = slots.map((s, i) => i % 8 === 0 ? `<text x="${(i * colW + 2).toFixed(1)}" y="${H - 5}" fill="var(--dim)" font-size="10">${esc(new Date(s.x).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}</text>` : '').join('');
+  const prof = w.usage_profile_wh || [];
+  let usage = '';
+  if (prof.length) {
+    const maxP = Math.max(...prof, 1);
+    const startBucket = (() => { const d0 = new Date(slots[0].x); return Math.floor((d0.getHours() * 60 + d0.getMinutes()) / 30); })();
+    usage = `<svg class="gl-triad-chart" viewBox="0 0 ${VB_W} 40" preserveAspectRatio="none" style="margin-top:2px">${prof.map((_, i) => {
+      const v = prof[(startBucket + i) % 48];
+      const h = (v / maxP) * 36;
+      return `<rect x="${(i * (VB_W / 48) + 1).toFixed(1)}" y="${(38 - h).toFixed(1)}" width="${(VB_W / 48 - 2).toFixed(1)}" height="${h.toFixed(1)}" fill="var(--amber)" opacity="0.6"><title>${(v / 1000).toFixed(2)} kWh typically drawn in this half-hour</title></rect>`;
+    }).join('')}</svg>`;
+  }
+  return `<svg class="gl-triad-chart" viewBox="0 0 ${VB_W} ${H}" preserveAspectRatio="none">${bars}${labels}</svg>${usage}`;
+}
 function renderHouseHero(d) {
-  const z = (d.thermal_zones || []).find(x => x.target_editable);
+  const z = (d.thermal_zones || []).find(x => x.target_editable && !x.dhw);
   if (!z) return '';
   const f = z.flow || null;
   const hp = z.hp || {};
@@ -2761,10 +2896,12 @@ async function refresh() {
         </div>
         <div class="gl-sub">Runs the heat pump the efficient way: the lowest flow temperature that meets a least-cost plan for the next day, re-planned every 5 minutes from the room, the weather forecast and the tariff. READ-ONLY only predicts; ACTIVE commands.${d.engine_version ? ` <span style="opacity:.6">engine v${esc(String(d.engine_version))}</span>` : ''}</div>
         ${renderHouseHero(d)}
+        ${renderHotWaterHero(d)}
         <div class="gl-h" style="margin-top:18px;font-size:13px">All zones</div>
         ${d.thermal_plan_summary ? `<div class="gl-sub" style="color:var(--ink)">${esc(d.thermal_plan_summary)}</div>` : ''}
         ${renderThermalZones(d.thermal_zones)}
         <div id="gl-sh-host">${d.space_heating_settings ? renderSpaceHeatingSettings(d.space_heating_settings) : ''}</div>
+        <div id="gl-hw-host">${renderHotWaterSettings(d.hot_water_settings)}</div>
       </div>
       ${renderHeatpumpDiagnostics(d.heatpump_diagnostics)}
     </div>
@@ -2852,6 +2989,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_gridwarm_target()
         elif path.endswith("/api/gridwarm-settings"):
             self._handle_gridwarm_settings()
+        elif path.endswith("/api/gridwarm-hot-water"):
+            self._handle_gridwarm_hot_water()
         elif path.endswith("/api/gridwarm-fix-requirement"):
             self._handle_gridwarm_fix_requirement()
         elif path.endswith("/api/warranty-add"):
@@ -2970,6 +3109,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 merged = merge_space_heating_settings(body)
             save_gridwarm_settings(merged)
             self._send(200, json.dumps({"ok": True, "settings": merged}).encode(), "application/json")
+        except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
+            self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
+
+    def _handle_gridwarm_hot_water(self):
+        """Partial update of the hot water zone's settings -- each field
+        saves as it's changed. {"reset": true} restores the defaults."""
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+            if not isinstance(body, dict):
+                self._send(400, json.dumps({"error": "expected an object"}).encode(), "application/json")
+                return
+            saved = load_gridwarm_settings()
+            if body.get("reset"):
+                saved["hot_water"] = {}
+            else:
+                hw = saved.get("hot_water") if isinstance(saved.get("hot_water"), dict) else {}
+                hw.update(body)
+                saved["hot_water"] = hw
+            merged = merge_space_heating_settings(saved)
+            save_gridwarm_settings(merged)
+            self._send(200, json.dumps({"ok": True, "hot_water": merged["hot_water"]}).encode(),
+                       "application/json")
         except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
             self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
 

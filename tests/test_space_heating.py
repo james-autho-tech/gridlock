@@ -1,9 +1,14 @@
 from core.space_heating import DEFAULTS, merge_settings, to_zone_cfg, NUMERIC_BOUNDS
 
 
+def _defaults():
+    from core.space_heating import HOT_WATER_DEFAULTS
+    return dict(DEFAULTS, hot_water=HOT_WATER_DEFAULTS)
+
+
 def test_merge_with_nothing_saved_is_the_defaults_and_a_copy():
     merged = merge_settings({})
-    assert merged == DEFAULTS
+    assert merged == _defaults()
     merged["control_requires"].clear()
     assert DEFAULTS["control_requires"]  # untouched -- deep copied
 
@@ -37,8 +42,8 @@ def test_merge_drops_incomplete_requirement_rows():
 
 
 def test_merge_tolerates_a_non_dict_file():
-    assert merge_settings(None) == DEFAULTS
-    assert merge_settings([1, 2]) == DEFAULTS
+    assert merge_settings(None) == _defaults()
+    assert merge_settings([1, 2]) == _defaults()
 
 
 def test_to_zone_cfg_maps_onto_the_yaml_zone_shape():
@@ -48,3 +53,18 @@ def test_to_zone_cfg_maps_onto_the_yaml_zone_shape():
     assert cfg["heat_share"] == 1.0
     assert cfg["control_entity"] == DEFAULTS["control_entity"]
     assert cfg["control_requires"] == DEFAULTS["control_requires"]
+
+
+def test_hot_water_settings_merge_and_zone_cfg():
+    from core.space_heating import HOT_WATER_DEFAULTS, merge_hot_water, to_hot_water_zone_cfg
+    merged = merge_settings({"hot_water": {"run_minutes": 5, "control_entity": " switch.x ", "name": ""}})
+    hw = merged["hot_water"]
+    assert hw["run_minutes"] == 15.0            # clamped to the floor
+    assert hw["control_entity"] == "switch.x"
+    assert hw["name"] == HOT_WATER_DEFAULTS["name"]
+    assert merge_settings({})["hot_water"] == HOT_WATER_DEFAULTS
+    cfg = to_hot_water_zone_cfg(hw)
+    assert cfg["tank_litres"] == HOT_WATER_DEFAULTS["tank_litres"]
+    assert cfg["control_max_off_hours"] == 0.0
+    assert cfg["dhw"]["run_minutes"] == 15.0
+    assert cfg["active"] is False

@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.47.0 - 2026-10-17
+
+### New
+- Hot water is now scheduled by GridWarm instead of the heat pump's fixed timer: the DHW circuit is powered for one window a day, the cheapest by electricity price divided by the COP predicted at the DHW flow temperature in that slot's forecast outdoor temperature — so a mild afternoon can beat a cold night, and on a cheap-rate tariff it still goes overnight. A floor forces a run if the tank gets low, and a maximum interval guarantees it runs at least once a day. The unit's own DHW logic (setpoint, start hysteresis) is untouched and read live
+- Hot water usage learning: every tank-temperature drop beyond standing loss while not heating is logged as hot water drawn in that half-hour of the day and blended into a learned daily profile; the plan then finishes a run before the first expected draw-off and skips a window when the tank already covers what's expected before the next chance
+- Hot water panel on the GridWarm tab: tank, setpoint and the unit's start point, the next run (time, price, COP, why then), what's been learned about usage, a 24-hour chart of hot-water cost per half-hour with the chosen window highlighted and the learned usage profile beneath; settings in their own form, saving per field
+- Controlled switches are now watched live: if anything else flips one (the unit's built-in DHW timer, a hand on the panel), GridWarm puts it back within seconds rather than at its next tick — the Modbus map has no timer register, so this is how the timer is made irrelevant
+- An apps.yaml zone reading the same sensor as a dashboard zone is dropped in favour of the dashboard one, so the old tank entry doesn't show twice
+
 ## 3.46.1 - 2026-10-17
 
 ### New

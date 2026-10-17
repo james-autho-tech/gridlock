@@ -1,0 +1,152 @@
+"""Hot water (DHW) scheduling — heat the tank to its standard setpoint in
+the cheapest window, not on a fixed timer.
+
+Deliberately simple. The heat pump's own DHW logic is left intact (it
+starts a run when the tank has dropped its hysteresis below the setpoint
+and stops at the setpoint); GridWarm only decides WHEN the DHW circuit is
+allowed power, so the unit does its heating in the cheapest half-hours
+rather than at 01:00 because a timer said so. Cheapest means electricity
+cost per kWh of heat: price divided by the COP the unit will get at the
+DHW flow temperature in that slot's forecast outdoor temperature -- on a
+flat tariff that alone moves the run to the warmest part of the day.
+
+Two guard rails live in the caller: a tank floor that forces heating on
+regardless of plan, and a maximum interval between runs so a window can't
+be postponed for ever chasing a cheaper tomorrow.
+"""
+
+import math
+
+from core import flow_control as core_flow
+
+
+def slot_scores(rate_curve, outdoor_curve, flow_temp, eta):
+    """Cost of a kWh of heat in each slot: p/kWh electricity divided by
+    the predicted COP at the DHW flow temperature."""
+    n = min(len(rate_curve), len(outdoor_curve))
+    return [rate_curve[i] / core_flow.cop_estimate(flow_temp, outdoor_curve[i], eta)
+            for i in range(n)]
+
+
+def cheapest_window(scores, run_slots, latest_end_slot):
+    """The contiguous run of run_slots with the lowest total score that
+    ends no later than latest_end_slot. Returns (start, end, mean_score)
+    with end exclusive, or None if the scores are empty. If the deadline
+    doesn't leave room for a full run, the window is the earliest
+    possible one (start now) -- a late run beats no run."""
+    n = len(scores)
+    if n == 0:
+        return None
+    run_slots = max(1, min(run_slots, n))
+    latest_end_slot = max(run_slots, min(latest_end_slot, n))
+    best = None
+    for start in range(0, latest_end_slot - run_slots + 1):
+        total = sum(scores[start:start + run_slots])
+        if best is None or total < best[2] - 1e-9:
+            best = (start, start + run_slots, total)
+    start, end, total = best
+    return start, end, total / run_slots
+
+
+def run_slots_needed(run_minutes, slot_minutes):
+    return max(1, math.ceil(run_minutes / slot_minutes))
+
+
+def deadline_slots(hours_since_last_run, max_interval_hours, slot_hours):
+    """How many slots from now the next run must have finished by. None
+    for hours_since_last_run (never run / unknown) counts as "the full
+    interval is available", not "overdue" -- a restart mid-day mustn't
+    force a run at peak price."""
+    if max_interval_hours <= 0:
+        return 10 ** 6
+    since = hours_since_last_run if hours_since_last_run is not None else 0.0
+    remaining = max(0.0, max_interval_hours - since)
+    return max(1, math.ceil(remaining / slot_hours))
+
+
+def unit_will_heat(tank_temp, setpoint, start_hysteresis):
+    """Whether powering the DHW circuit now actually produces a run: the
+    unit only starts once the tank is start_hysteresis below its
+    setpoint (Midea's dT5_ON). Powering it above that is harmless, just
+    nothing happens -- worth telling the user rather than looking stuck."""
+    if tank_temp is None:
+        return True
+    return tank_temp <= setpoint - start_hysteresis
+
+
+# ---- Usage learning ---------------------------------------------------
+# A tank that's cooling faster than its standing loss is being drawn
+# from: hot water out, cold mains in. Each tick's unexplained drop,
+# converted through the tank's thermal mass, is a measurement of hot
+# water energy used in that half-hour of the day. Accumulated per
+# half-hour bucket and blended day over day (same EMA idea as the
+# learned house-load profile), it becomes a picture of when this house
+# actually uses hot water -- with no diary and no shower counting.
+
+PROFILE_SLOTS = 48           # half-hour buckets across the day
+PROFILE_ALPHA = 0.2          # a new day's figure moves the bucket 20% of the way
+DRAW_MIN_WH = 30.0           # below this a drop is just sensor noise / loss error
+
+
+def draw_wh(prev_temp, temp, elapsed_hours, standing_loss_w, mass_wh_per_c, heating_on):
+    """Hot water energy drawn over one interval, from the temperature
+    drop beyond what standing loss explains. None while the tank is
+    being heated (the drop is masked) or the interval is odd."""
+    if heating_on or prev_temp is None or temp is None:
+        return None
+    if not 0.02 <= elapsed_hours <= 0.5:
+        return None
+    expected_drop = standing_loss_w * elapsed_hours / max(mass_wh_per_c, 1.0)
+    unexplained = (prev_temp - temp) - expected_drop
+    wh = unexplained * mass_wh_per_c
+    return wh if wh >= DRAW_MIN_WH else 0.0
+
+
+def profile_bucket(local_dt):
+    return (local_dt.hour * 60 + local_dt.minute) // 30
+
+
+def blend_day_into_profile(profile, day_buckets):
+    """profile: 48 learned Wh figures. day_buckets: the 48 totals observed
+    today (None where nothing was observed, e.g. the tank was heating
+    the whole half-hour). Returns the new profile."""
+    out = list(profile) if profile else [0.0] * PROFILE_SLOTS
+    out = (out + [0.0] * PROFILE_SLOTS)[:PROFILE_SLOTS]
+    for i, v in enumerate(day_buckets[:PROFILE_SLOTS]):
+        if v is None:
+            continue
+        out[i] = out[i] * (1 - PROFILE_ALPHA) + v * PROFILE_ALPHA
+    return out
+
+
+def expected_draw(profile, start_bucket, n_slots):
+    """Learned Wh per slot for the next n_slots, starting at start_bucket
+    and wrapping around midnight."""
+    if not profile:
+        return [0.0] * n_slots
+    return [profile[(start_bucket + i) % PROFILE_SLOTS] for i in range(n_slots)]
+
+
+def ready_by_slot(expected, threshold_wh, lead_slots=1):
+    """The slot a run should have finished by: just before the first
+    slot where learned usage reaches threshold_wh (a real draw-off --
+    morning showers, say), with lead_slots of margin. None when nothing
+    significant is expected in the horizon, so the caller falls back to
+    its max-interval deadline."""
+    for i, wh in enumerate(expected):
+        if wh >= threshold_wh:
+            return max(1, i - lead_slots + 1)
+    return None
+
+
+def tank_can_cover(tank_temp, setpoint, start_hysteresis, mass_wh_per_c, expected_wh_until_next_window,
+                   standing_loss_w, hours_until_next_window):
+    """Can the tank skip this window? Only if, after the learned draw and
+    standing loss between now and the next window, it would still be
+    above the point the unit would start a run anyway. Conservative:
+    a wrong "yes" means a cool tank, a wrong "no" costs one cheap run."""
+    if tank_temp is None:
+        return False
+    usable_wh = (tank_temp - (setpoint - start_hysteresis)) * mass_wh_per_c
+    needed_wh = expected_wh_until_next_window + standing_loss_w * hours_until_next_window
+    return usable_wh > needed_wh * 1.25

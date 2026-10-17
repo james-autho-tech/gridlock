@@ -52,6 +52,10 @@ def engine(tmp_path, monkeypatch):
         def get_now(self):
             return datetime(2026, 10, 17, 7, 0, tzinfo=timezone.utc)
 
+        def listen_state(self, cb, entity, **kwargs):
+            self.listeners = getattr(self, "listeners", {})
+            self.listeners[entity] = cb
+
     fake_hass.Hass = Hass
     pkg = types.ModuleType("appdaemon")
     plugins = types.ModuleType("appdaemon.plugins")
@@ -81,6 +85,7 @@ def engine(tmp_path, monkeypatch):
     g.build_slots = lambda now: []
     g.get_float_state = lambda eid, default=0.0: _as_float(g.get_state(eid), default)
     g.registry = None
+    g._control_listeners = {}
     return g, gridlock
 
 
@@ -160,7 +165,8 @@ def test_no_room_reading_runs_weather_compensation_not_just_on(engine):
     sp = next(kw for svc, kw in g.calls if svc == "number/set_value")
     assert 35.0 <= sp["value"] <= 38.0
     assert ("switch/turn_on", {"target": {"entity_id": "switch.loft_heatpump_controller_water_flow_temperature_control_zone_1"}}) in g.calls
-    assert "weather compensation" in g.decision_log[-1]["reason"]
+    assert any("weather compensation" in e["reason"] for e in g.decision_log
+               if e["state"].startswith("GridWarm: House"))
     # A mild day: almost no demand -> switched off, never held on for ever.
     g.calls.clear()
     g.states["sensor.openweathermap_temperature"]["state"] = "19.0"
@@ -211,8 +217,78 @@ def test_reverted_switch_is_resent_and_flagged(engine):
 def test_hidden_dashboard_zone_still_publishes_settings(engine, tmp_path):
     g, _ = engine
     _seed_house(g)
-    (tmp_path / "gridwarm_settings.json").write_text(json.dumps({"configured": False}))
+    (tmp_path / "gridwarm_settings.json").write_text(
+        json.dumps({"configured": False, "hot_water": {"configured": False}}))
     g._publish_thermal_forecast(g.get_now())
     pub = g.published["sensor.gridlock_gridwarm"]["attributes"]
     assert pub["zones"] == []
     assert pub["space_heating_settings"]["configured"] is False
+
+
+def _seed_tank(g):
+    s = g.states
+    s["sensor.loft_heatpump_controller_water_tank_temperature_t5"] = {"state": "42.0", "attributes": {}}
+    s["number.loft_heatpump_controller_set_dhw_tank_temperature_t5s"] = {"state": "53.0", "attributes": {}}
+    s["number.loft_heatpump_controller_dt5_on"] = {"state": "10.0", "attributes": {}}
+    s["switch.loft_heatpump_controller_power_dhw_t5s"] = {"state": "off", "attributes": {}}
+    s["switch.loft_heatpump_controller_parameter_setting_1_enable_water_heating"] = {"state": "on", "attributes": {}}
+
+
+def test_hot_water_zone_plans_a_window_and_powers_the_circuit_when_it_starts(engine):
+    g, _ = engine
+    _seed_house(g)
+    _seed_tank(g)
+    g._publish_thermal_forecast(g.get_now())
+    pub = g.published["sensor.gridlock_gridwarm"]["attributes"]
+    assert pub["hot_water_settings"]["name"] == "Hot water"
+    hw = {z["name"]: z for z in pub["zones"]}["Hot water"]
+    assert hw["is_tank"] is True and hw["target_editable"] is False
+    d = hw["dhw"]
+    assert d["window_start"] and d["window_end"]
+    assert len(d["slots"]) == 48
+    # Flat rates and a constant 4 °C -> every slot scores the same, so the
+    # cheapest window is the first one: it starts now and commits.
+    assert d["committed"] is True and d["heat_now"] is True
+    assert d["will_heat"] is True   # 42 <= 53 - 10
+    assert ("switch/turn_on", {"target": {"entity_id": "switch.loft_heatpump_controller_power_dhw_t5s"}}) in g.calls
+    # The unit's own timer flips it off mid-window: put straight back.
+    g.calls.clear()
+    g.listeners["switch.loft_heatpump_controller_power_dhw_t5s"](
+        "switch.loft_heatpump_controller_power_dhw_t5s", None, "on", "off", {})
+    assert ("switch/turn_on", {"target": {"entity_id": "switch.loft_heatpump_controller_power_dhw_t5s"}}) in g.calls
+
+
+def test_hot_water_window_completes_and_is_not_rerun_until_the_interval(engine):
+    g, _ = engine
+    _seed_house(g)
+    _seed_tank(g)
+    from datetime import timedelta
+    now = g.get_now()
+    g._publish_thermal_forecast(now)
+    later = now + timedelta(hours=2)
+    # The unit heated the tank during the window -- nothing to do now,
+    # even though on a flat tariff "now" is as cheap as any other slot.
+    g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "52.0"
+    g.calls.clear()
+    g._publish_thermal_forecast(later)
+    hw = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]
+    assert hw["dhw"]["committed"] is False
+    assert not hw["dhw"].get("needed")
+    assert hw["dhw"]["hours_since_last"] == 1.0
+    assert hw["dhw"]["deadline_hours"] == 23.0
+    assert ("switch/turn_off", {"target": {"entity_id": "switch.loft_heatpump_controller_power_dhw_t5s"}}) in g.calls
+
+
+def test_hot_water_floor_forces_a_run_outside_the_window(engine):
+    g, _ = engine
+    _seed_house(g)
+    _seed_tank(g)
+    from datetime import timedelta
+    now = g.get_now()
+    g._publish_thermal_forecast(now)
+    g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "52.0"
+    g._publish_thermal_forecast(now + timedelta(hours=2))   # window done, tank warm
+    g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "38.0"
+    g.calls.clear()
+    g._publish_thermal_forecast(now + timedelta(hours=3))
+    assert ("switch/turn_on", {"target": {"entity_id": "switch.loft_heatpump_controller_power_dhw_t5s"}}) in g.calls
