@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.53.1 - 2026-10-17
+
+### Fix
+- Battery-plan pricing fell back to a flat battery cost on the first tick after a restart (before the first battery solve), which made "now" the cheapest hot water window on COP alone and committed a run at peak rate; it now falls back to the tariff until the battery plan exists
+
 ## 3.53.0 - 2026-10-17
 
 ### New

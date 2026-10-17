@@ -402,3 +402,17 @@ def test_house_plan_uses_the_auto_detected_forecast(engine):
     ext = [p["external"] for p in house["flow"]["plan"]]
     assert ext[0] == 4.0 and ext[12] == 10.0, ext[:14]   # 6 h in -> 10 C: the forecast, not a flat line
     assert any("outdoor forecast from weather.forecast_home" in m for _, m in g.logs)
+
+
+def test_battery_pricing_falls_back_to_the_tariff_before_the_first_battery_solve(engine):
+    g, _ = engine
+    _seed_house(g)
+    now = g.get_now()
+    from datetime import timedelta
+    starts = [now.replace(minute=0, second=0, microsecond=0) + timedelta(minutes=30 * i) for i in range(96)]
+    slots = [{"start": st, "imp": 0.34 if i < 5 else 0.0666, "exp": 0.04, "export": 0.0} for i, st in enumerate(starts)]
+    g.build_slots = lambda now_: slots
+    g._last_plan = None
+    curve = g._heating_rate_curve(slots, "battery")
+    assert curve[0] == 0.34 and curve[6 * 6] == 0.0666     # the tariff, not a flat battery cost
+    assert g._heating_rate_curve(slots, "cop")[0] == g._heating_rate_curve(slots, "cop")[40]  # cop mode: flat by design

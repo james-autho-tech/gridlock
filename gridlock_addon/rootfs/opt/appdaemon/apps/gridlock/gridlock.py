@@ -3530,8 +3530,15 @@ class GridLock(hass.Hass):
         batt_cost_p = core_effective_price.battery_energy_cost_p(
             plan["slots"] if plan else [], plan["cost_trace"] if plan else [],
             self.cheap_rate, getattr(self.cfg, "efficiency", 0.9), wear_gbp)
-        if mode == "cop" or not plan:
+        if mode == "cop":
             return [batt_cost_p / 100.0] * len(raw)
+        if not plan:
+            # Before the first battery solve (the thermal step runs ahead
+            # of it in a tick) there is nothing to read the battery's
+            # behaviour off -- price at the tariff, never flat: a flat
+            # price on the first tick after a restart committed a hot
+            # water run at peak rate because "now" had the best COP.
+            return raw
         eff_p = core_effective_price.effective_prices_p(plan["slots"], plan["cost_trace"], batt_cost_p)
         by_start = {plan["slots"][i]["start"]: eff_p[i] / 100.0 for i in range(len(eff_p))}
         step_ratio = SLOT_MIN // THERMAL_STEP_MIN
