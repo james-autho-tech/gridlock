@@ -415,6 +415,20 @@ this was built against (a Midea air-to-water heat pump on the Mosibi
 "Heatpump Controller" ESPHome integration, one radiator loop); every
 field is editable, and "Show this zone" unticked hides it entirely.
 
+**The unit's own thermometer, and the H9 that comes with it.** On the
+Midea controller, turning on "supports room temperature sensor Ta"
+(`switch.<device>_parameter_setting_1_supports_room_temperature_sensor_ta`)
+makes `sensor.<device>_room_temperature_ta` a live 1°C-resolution reading
+from the wired panel. The firmware also flips "double zone" and "Tw2
+enabled" on by itself in the same instant and then reports **H9, "Outlet
+water for zone 2 temp. sensor (Tw2) fault"**, because there is no zone 2
+sensor. Confirmed on real hardware that H9 is cosmetic for zone 1: with
+it showing, zone 1 heating starts the pump and compressor exactly as
+normal. The two bits can only be cleared with Ta off (both clears sent
+within one 10-second poll window), which also freezes the reading — so
+with no other room thermometer, Ta on plus H9 on the panel is the
+working configuration.
+
 **Fallback room sensor.** A second room temperature entity is used whenever
 the main one is unavailable (a dead battery, a Thread border router down).
 The Midea controller's own wired panel has a thermometer: enable the unit's
