@@ -114,8 +114,9 @@ def _seed_house(g, room_temp="13.4", mode="active"):
     s["input_select.gridlock_gridwarm_mode"] = {"state": mode, "attributes": {}}
     s["sensor.loft_heatpump_controller_room_temperature_ta"] = {"state": room_temp, "attributes": {}}
     s["climate.bedroom_4_qing_thermo"] = {"state": "unavailable", "attributes": {}}
-    # No outdoor sensor configured by default: the weather entity's own
-    # reading is used (its forecast service is not available in the fake).
+    # The heat pump's own outdoor sensor is the default outdoor reading;
+    # the weather entity only supplies the forecast (not available in the fake).
+    s["sensor.loft_heatpump_controller_outdoor_ambient_temperature"] = {"state": "4.0", "attributes": {}}
     s["weather.forecast_home"] = {"state": "cloudy", "attributes": {"temperature": "4.0"}}
     s["switch.loft_heatpump_controller_water_flow_temperature_control_zone_1"] = {"state": "off", "attributes": {}}
     s["sensor.loft_heatpump_controller_active_state"] = {"state": "Idle", "attributes": {}}
@@ -184,7 +185,7 @@ def test_no_room_reading_runs_weather_compensation_not_just_on(engine):
                if e["state"].startswith("GridWarm: House"))
     # A mild day: almost no demand -> switched off, never held on for ever.
     g.calls.clear()
-    g.states["weather.forecast_home"]["attributes"]["temperature"] = "19.0"
+    g.states["sensor.loft_heatpump_controller_outdoor_ambient_temperature"]["state"] = "19.0"
     g._publish_thermal_forecast(g.get_now())
     assert ("switch/turn_off", {"target": {"entity_id": "switch.loft_heatpump_controller_water_flow_temperature_control_zone_1"}}) in g.calls
 

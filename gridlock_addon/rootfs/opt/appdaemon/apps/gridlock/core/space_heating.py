@@ -36,12 +36,12 @@ DEFAULTS = {
     # GridLock owns the target itself — there's deliberately no
     # thermostat in the loop. Set from the GridWarm tab's ✏️ or −/+.
     "target_temp": 15.0,
-    # Both auto-detected when blank: the forecast from whichever
-    # weather.* entity actually serves HA's get_forecasts (the
-    # OpenWeatherMap free tier's doesn't -- current conditions only --
-    # which silently left the model with a flat outdoor curve), and the
-    # outdoor temperature from that entity's own reading.
-    "external_temp_entity": None,
+    # The heat pump measures the outdoor temperature itself, at the
+    # outdoor unit -- always present, no cloud. The forecast ahead comes
+    # from whichever weather.* entity actually serves HA's get_forecasts
+    # (auto-detected when blank; the OpenWeatherMap free tier's doesn't,
+    # which silently left the model with a flat outdoor curve).
+    "external_temp_entity": "sensor.loft_heatpump_controller_outdoor_ambient_temperature",
     "weather_entity": None,
     # The heat pump's own space-heating power switch (zone 1). Commanded
     # only while the GridWarm master switch is ACTIVE and the zone isn't
@@ -170,7 +170,7 @@ HOT_WATER_DEFAULTS = {
     "heating_entity": "sensor.loft_heatpump_controller_active_state",
     "heating_entity_state": "DHW",
     "cop_entity": "sensor.loft_heatpump_controller_coefficient_of_performance",
-    "external_temp_entity": None,      # auto: the weather entity's own reading
+    "external_temp_entity": "sensor.loft_heatpump_controller_outdoor_ambient_temperature",
     "weather_entity": None,            # auto: any weather entity that serves forecasts
     "control_safety_min_temp": 40.0,   # force a run below this, whatever the plan
     "run_minutes": 60.0,               # length of the window the circuit is powered for

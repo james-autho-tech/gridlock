@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.51.2 - 2026-10-17
+
+### Fix
+- Default outdoor temperature is the heat pump's own outdoor-unit sensor (always present, no cloud), with the weather entity used only for the forecast ahead
+
 ## 3.51.1 - 2026-10-17
 
 ### Fix
