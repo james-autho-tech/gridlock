@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.52.3 - 2026-10-17
+
+### Fix
+- The fail-safe watchdog package (`packages/gridlock.yaml`, which also carries the GridWarm mode selector and the engine master switch helpers) was never installed: the Supervisor mounts the HA config at `/homeassistant`, and the start script only looked at two other paths. It now finds it, installs the package and reloads the helpers on start
+
 ## 3.52.2 - 2026-10-17
 
 ### Fix

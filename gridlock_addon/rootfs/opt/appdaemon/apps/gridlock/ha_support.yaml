@@ -1,7 +1,9 @@
 # =====================================================================
 # GridLock — HA-side support (the ONLY config that must live in HA).
-# Save as /config/packages/gridlock.yaml
-# (needs `homeassistant: packages: !include_dir_named packages`)
+# Installed automatically by the add-on on every start as
+# <HA config>/packages/gridlock.yaml (needs `homeassistant: packages:
+# !include_dir_named packages` in configuration.yaml -- the add-on
+# can't add that for you).
 #
 # Why this can't be in the AppDaemon package:
 # - input_booleans must be real HA helpers to be toggleable in the UI
@@ -76,7 +78,10 @@ input_select:
     options:
       - read_only
       - active
-    initial: read_only
+    # No "initial:" -- that would force READ-ONLY on every HA restart and
+    # silently stop a house that was being heated. HA restores the last
+    # state instead; a brand-new helper starts on the first option,
+    # read_only, which is the safe first-run default.
   gridlock_mode_override:
     name: GridLock Mode Override
     icon: mdi:tune-vertical
