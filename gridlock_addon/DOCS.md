@@ -584,6 +584,17 @@ gets power*:
   free-session entities and priced at 0p in the plan, so the heating
   plan pre-heats to the top of the comfort band and the hot water run
   lands in them whenever they're within reach.
+- **Legionella.** Once a week (configurable) the run that would happen
+  anyway becomes a pasteurisation cycle: GridWarm raises the unit's DHW
+  setpoint to 60°C, keeps the circuit powered until the tank has held
+  60°C for 60 minutes, then restores the setpoint (even if paused
+  mid-cycle). It notes whether the immersion helped. A cycle that can't
+  finish in 5 hours is abandoned and retried next window. The unit's own
+  disinfection function is left off — it runs on a panel schedule
+  GridWarm can't see.
+- **Keep the unit's top-up margin small.** The unit only heats once the
+  tank is dT5_ON below its setpoint (10°C out of the box). Set it to
+  about 2°C on the unit; GridWarm decides when.
 - **The unit's own timer.** There's no Modbus register for it, so it
   can't be deleted from HA — turn it off on the wired controller if you
   can. If it fires anyway, GridWarm watches the DHW switch live and puts

@@ -183,6 +183,20 @@ HOT_WATER_DEFAULTS = {
     # enough for showers by the evening. Blank list = daily guarantee only.
     "ready_by_times": ["06:30", "18:30"],
     "run_minutes": 60.0,               # length of the window the circuit is powered for
+    # Legionella: once every interval, heat the tank to legionella_temp
+    # and hold it there for legionella_hold_minutes, in the cheapest
+    # window the normal plan would pick -- by raising the unit's own DHW
+    # setpoint for the cycle and putting it back after. A cycle that
+    # can't finish within legionella_max_hours is abandoned (setpoint
+    # restored) and retried at the next window.
+    "legionella_enabled": True,
+    "legionella_temp": 60.0,
+    "legionella_hold_minutes": 60.0,
+    "legionella_interval_days": 7.0,
+    "legionella_window_minutes": 180.0,
+    "legionella_max_hours": 5.0,
+    # The immersion heater's output, to report whether a cycle needed it.
+    "immersion_entity": "binary_sensor.loft_heatpump_controller_load_output_electric_heater_tbh",
     "max_interval_hours": 24.0,        # never longer than this between windows
     "flow_margin": 5.0,                # DHW flow runs about this far above the tank setpoint (for the COP estimate)
     "cop_eta": 0.45,
@@ -203,6 +217,11 @@ HOT_WATER_DEFAULTS = {
 HOT_WATER_NUMERIC_BOUNDS = {
     "control_safety_min_temp": (20.0, 55.0),
     "run_minutes": (15.0, 240.0),
+    "legionella_temp": (55.0, 70.0),
+    "legionella_hold_minutes": (5.0, 180.0),
+    "legionella_interval_days": (1.0, 31.0),
+    "legionella_window_minutes": (60.0, 480.0),
+    "legionella_max_hours": (1.0, 12.0),
     "max_interval_hours": (0.0, 72.0),
     "flow_margin": (0.0, 15.0),
     "cop_eta": (0.2, 0.8),
@@ -215,7 +234,7 @@ HOT_WATER_NUMERIC_BOUNDS = {
     "hysteresis_off": (0.0, 5.0),
 }
 
-HOT_WATER_ENTITY_FIELDS = ("tank_temp_entity", "target_temp_entity", "start_hysteresis_entity",
+HOT_WATER_ENTITY_FIELDS = ("tank_temp_entity", "target_temp_entity", "start_hysteresis_entity", "immersion_entity",
                            "control_entity", "heating_entity", "cop_entity",
                            "external_temp_entity", "weather_entity")
 
@@ -223,8 +242,9 @@ HOT_WATER_ENTITY_FIELDS = ("tank_temp_entity", "target_temp_entity", "start_hyst
 def merge_hot_water(saved):
     out = copy.deepcopy(HOT_WATER_DEFAULTS)
     saved = saved if isinstance(saved, dict) else {}
-    if "configured" in saved:
-        out["configured"] = bool(saved["configured"])
+    for key in ("configured", "legionella_enabled"):
+        if key in saved:
+            out[key] = bool(saved[key])
     name = saved.get("name")
     if isinstance(name, str) and name.strip():
         out["name"] = name.strip()[:60]
@@ -296,6 +316,13 @@ def to_hot_water_zone_cfg(hw):
         "active": False,   # no anticipation curve for a tank
         "dhw": {"start_hysteresis_entity": hw["start_hysteresis_entity"],
                 "ready_by_times": hw.get("ready_by_times", []),
+                "immersion_entity": hw.get("immersion_entity"),
+                "legionella": {"enabled": hw["legionella_enabled"],
+                               "temp": hw["legionella_temp"],
+                               "hold_minutes": hw["legionella_hold_minutes"],
+                               "interval_days": hw["legionella_interval_days"],
+                               "window_minutes": hw["legionella_window_minutes"],
+                               "max_hours": hw["legionella_max_hours"]},
                 "run_minutes": hw["run_minutes"],
                 "max_interval_hours": hw["max_interval_hours"],
                 "flow_margin": hw["flow_margin"],

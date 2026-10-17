@@ -3181,8 +3181,8 @@ class GridLock(hass.Hass):
         rates = [rate_curve[j] * 100.0 for j in idx]           # £ -> p
         grid_rates = [(grid_rate_curve or rate_curve)[j] * 100.0 for j in idx]
         setpoint = setpoint if setpoint is not None else 53.0
-        hyst = (self.get_float_state(d["start_hysteresis_entity"], 10.0)
-                if d.get("start_hysteresis_entity") else 10.0)
+        hyst = (self.get_float_state(d["start_hysteresis_entity"], 2.0)
+                if d.get("start_hysteresis_entity") else 2.0)
         flow = setpoint + d["flow_margin"]
         cops = [core_flow.cop_estimate(flow, e, d["cop_eta"]) for e in ext]
         scores = core_dhw.slot_scores(rates, ext, flow, d["cop_eta"])
@@ -3190,6 +3190,21 @@ class GridLock(hass.Hass):
         state = self._thermal_control_state.setdefault(
             zone["name"], {"off_since": None, "last_commanded": None, "rejected": False,
                            "rejected_notified": False, "blocked_key": None})
+        # Legionella cycle bookkeeping lives in the persisted learning state
+        # so a restart mid-week (or mid-cycle) doesn't lose it.
+        lg_cfg = d.get("legionella") or {}
+        lg = self.thermal_learning_state.setdefault(zone["name"], {}).setdefault("legionella", {})
+        lg_due = False
+        lg_days_since = None
+        if lg_cfg.get("enabled"):
+            try:
+                lg_days_since = ((now - self._iso(lg["last_done"])).total_seconds() / 86400.0
+                                 if lg.get("last_done") else None)
+            except (ValueError, TypeError):
+                lg_days_since = None
+            lg_due = lg_days_since is None or lg_days_since >= lg_cfg["interval_days"]
+            if lg_due and not lg.get("phase"):
+                run_slots = max(run_slots, core_dhw.run_slots_needed(lg_cfg["window_minutes"], SLOT_MIN))
         committed = state.get("dhw_window")
         if committed:
             try:
@@ -3222,7 +3237,7 @@ class GridLock(hass.Hass):
         # is below the point the unit would start a run at, or the daily
         # guarantee is up. Otherwise "cheapest window is now" on a flat
         # tariff would run the circuit back to back for ever.
-        needed = core_dhw.unit_will_heat(tank_temp, setpoint, hyst) or deadline <= run_slots
+        needed = core_dhw.unit_will_heat(tank_temp, setpoint, hyst) or deadline <= run_slots or lg_due
         skipped = False
         if not committed and window and window[0] == 0 and needed:
             horizon = max(run_slots, deadline)
@@ -3247,6 +3262,65 @@ class GridLock(hass.Hass):
             start_iso = end_iso = None
         w_cop = (sum(cops[window[0]:window[1]]) / run_slots) if window else None
         w_price = (sum(rates[window[0]:window[1]]) / run_slots) if window else None
+        # Legionella cycle: starts with a committed window, holds the
+        # setpoint at legionella_temp until the tank has been there for
+        # the hold time, then restores the setpoint it found.
+        setpoint_wanted = None
+        lg_changed = False
+        controllable = (self.get_state(self.ent_gridwarm_mode) == "active"
+                        and self.get_state(self._thermal_pause_helper(zone["name"])) != "off")
+        if lg_cfg.get("enabled") and lg_due and not lg.get("phase") and committed and controllable:
+            lg.update({"phase": "heating", "started": now.isoformat(), "hold_start": None,
+                       "orig_setpoint": (setpoint if setpoint < lg_cfg["temp"] - 0.5
+                                         else lg.get("orig_setpoint") or 53.0),
+                       "immersion_used": False})
+            lg_changed = True
+            self._log_decision(f"GridWarm: {zone['name']} legionella cycle",
+                               f"Heating the tank to {lg_cfg['temp']:.0f}°C and holding it "
+                               f"{lg_cfg['hold_minutes']:.0f} min in this window")
+        phase = lg.get("phase")
+        if phase:
+            orig = lg.get("orig_setpoint") or 53.0
+            try:
+                elapsed_h = (now - self._iso(lg["started"])).total_seconds() / 3600.0
+            except (ValueError, TypeError, KeyError):
+                elapsed_h = 0.0
+            if d.get("immersion_entity") and self.get_state(d["immersion_entity"]) == "on" \
+                    and not lg.get("immersion_used"):
+                lg["immersion_used"] = True
+                lg_changed = True
+            if not lg_cfg.get("enabled"):
+                lg["phase"] = None
+                setpoint_wanted = orig
+            elif elapsed_h > lg_cfg["max_hours"]:
+                lg.update({"phase": None, "last_failed": now.isoformat()})
+                setpoint_wanted = orig
+                self._log_decision(f"GridWarm: {zone['name']} legionella cycle abandoned",
+                                   f"Tank didn't hold {lg_cfg['temp']:.0f}°C within "
+                                   f"{lg_cfg['max_hours']:.0f} h — setpoint restored, retrying next window")
+            elif phase == "heating":
+                setpoint_wanted = lg_cfg["temp"]
+                if tank_temp is not None and tank_temp >= lg_cfg["temp"] - 0.5:
+                    lg.update({"phase": "holding", "hold_start": now.isoformat()})
+            elif phase == "holding":
+                setpoint_wanted = lg_cfg["temp"]
+                try:
+                    held_min = (now - self._iso(lg["hold_start"])).total_seconds() / 60.0
+                except (ValueError, TypeError, KeyError):
+                    held_min = 0.0
+                if held_min >= lg_cfg["hold_minutes"]:
+                    lg.update({"phase": None, "last_done": now.isoformat()})
+                    setpoint_wanted = orig
+                    self._log_decision(f"GridWarm: {zone['name']} legionella cycle done",
+                                       f"Held {lg_cfg['temp']:.0f}°C for {lg_cfg['hold_minutes']:.0f} min"
+                                       + (" (immersion heater helped)" if lg.get("immersion_used") else
+                                          " on the heat pump alone"))
+            lg_changed = lg_changed or lg.get("phase") != phase
+        lg_active = bool(lg.get("phase"))
+        if lg_due and lg.get("last_done") == now.isoformat():
+            lg_due = False   # finished this tick
+        if lg_changed:
+            self._save_json("thermal_learning_state.json", self.thermal_learning_state)
         # A plain word for the dashboard -- booleans that are False don't
         # survive the trip through HA's attribute store (see _never_zero_deep).
         if committed is not None:
@@ -3257,8 +3331,23 @@ class GridLock(hass.Hass):
             status = "not_needed"
         else:
             status = "waiting"
-        return {"heat_now": committed is not None,
-                "committed": committed is not None,
+        if lg_active:
+            status = "running"
+        try:
+            lg_next = (self._iso(lg["last_done"]) + timedelta(days=lg_cfg.get("interval_days", 7))).isoformat() \
+                if lg.get("last_done") else None
+        except (ValueError, TypeError):
+            lg_next = None
+        return {"heat_now": committed is not None or lg_active,
+                "committed": committed is not None or lg_active,
+                "setpoint_wanted": setpoint_wanted,
+                "legionella": {"enabled": bool(lg_cfg.get("enabled")), "due": lg_due,
+                               "phase": lg.get("phase") or ("due" if lg_due else "idle"),
+                               "temp": lg_cfg.get("temp"), "hold_minutes": lg_cfg.get("hold_minutes"),
+                               "last_done": lg.get("last_done"), "next_due": lg_next,
+                               "hold_start": lg.get("hold_start"),
+                               "immersion_used": "yes" if lg.get("immersion_used") else "no",
+                               "last_failed": lg.get("last_failed")},
                 "status": status,
                 "pricing_mode": pricing_mode,
                 "needed": needed,
@@ -4009,6 +4098,18 @@ class GridLock(hass.Hass):
                                          else "heating" if state["last_commanded"]
                                          else "off" if state["last_commanded"] is False
                                          else "pending")}
+        # A hot water setpoint the plan wants (legionella cycle up, then
+        # back). Raising it needs control; restoring it happens even when
+        # paused -- leaving a 60 °C setpoint behind is never intended.
+        sw = (result.get("dhw") or {}).get("setpoint_wanted")
+        tgt_ent = zone.get("target_temp_entity")
+        if sw is not None and tgt_ent:
+            live_sp = self.get_float_state(tgt_ent, None)
+            raising = live_sp is None or sw > live_sp + 0.4
+            if (live_sp is None or abs(live_sp - sw) > 0.4) and not (paused and raising):
+                self.call_service("number/set_value", target={"entity_id": tgt_ent}, value=float(sw))
+                self._log_decision(f"GridWarm: {name} setpoint {sw:.0f}°C",
+                                   "Legionella cycle" if raising else "Legionella cycle over — setpoint restored")
         if paused:
             state["blocked_key"] = None
             return
@@ -4253,7 +4354,7 @@ class GridLock(hass.Hass):
                 if start and end and end > start:
                     tank = r.get("current_temp")
                     setpoint = dhw.get("setpoint") or 53.0
-                    hyst = dhw.get("start_hysteresis") or 10.0
+                    hyst = dhw.get("start_hysteresis") or 2.0
                     from_temp = tank if tank is not None else setpoint - hyst
                     heat_kwh = max(0.0, setpoint - from_temp) * zone["params"].thermal_mass_wh_per_c / 1000.0
                     if dhw.get("will_heat") or dhw.get("committed"):

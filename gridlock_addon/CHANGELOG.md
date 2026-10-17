@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.55.0 - 2026-10-17
+
+### New
+- Legionella cycle: once a week (configurable), in the cheapest window the hot water plan picks anyway, GridWarm raises the tank setpoint to 60 °C, keeps the circuit powered until the tank has held 60 °C for 60 minutes, then restores the setpoint. It records whether the immersion heater helped; a cycle that can't finish within 5 hours is abandoned with the setpoint restored and retried at the next window. The setpoint is always restored, even if GridWarm is paused mid-cycle. Shown as its own tile on the hot water panel
+
+## 3.54.1 - 2026-10-17
+
+### Fix
+- Hot water no longer waits for the tank to fall 10 °C below its setpoint: that was the unit's own dT5_ON margin. Set it small on the unit (2 °C); GridWarm reads it live and decides when. The panel now calls it a top-up margin, and the fallback when it can't be read is 2 °C
+
 ## 3.54.0 - 2026-10-17
 
 ### New

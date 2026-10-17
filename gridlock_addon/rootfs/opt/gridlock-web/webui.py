@@ -1293,7 +1293,7 @@ function renderHotWaterSettings(hw) {
         ${txt('name', 'Zone name')}
         ${hwEntitySelect(hw, 'tank_temp_entity', 'Tank temperature', ['temperature', 'sensor'])}
         ${hwEntitySelect(hw, 'target_temp_entity', 'Tank setpoint (the "standard")', ['number'], 'Read from the unit, so change it there.')}
-        ${hwEntitySelect(hw, 'start_hysteresis_entity', 'Unit start hysteresis (dT5_ON)', ['number'], 'The unit only starts a run once the tank is this far below the setpoint.')}
+        ${hwEntitySelect(hw, 'start_hysteresis_entity', 'Unit top-up margin (dT5_ON)', ['number'], 'The unit only heats once the tank is this far below its setpoint. Keep it small (2°C) on the unit — GridWarm decides when.')}
         ${hwEntitySelect(hw, 'control_entity', 'DHW circuit power switch', ['switch'], 'The switch the unit\'s own timer drives — never a "forced tank heating" switch (immersion heater).')}
         ${hwEntitySelect(hw, 'heating_entity', '"Heating hot water now" sensor', ['sensor', 'switch'])}
         ${txt('heating_entity_state', '…and the value that means heating', 'e.g. DHW')}
@@ -1302,6 +1302,10 @@ function renderHotWaterSettings(hw) {
         ${num('run_minutes', 'Window length, minutes', 5, 'How long the circuit is powered for per run.')}
         ${num('max_interval_hours', 'Run at least every … hours', 1, '0 = no guarantee, only the floor and learned usage.')}
         ${num('flow_margin', 'DHW flow above setpoint, °C', 1, 'For the COP estimate per slot.')}
+        <div><div class="lbl">Legionella cycle</div><label style="font-size:12px;color:var(--ink)"><input type="checkbox" ${hw.legionella_enabled ? 'checked' : ''} onchange="hwSet('legionella_enabled', this)"> heat to the temperature below and hold it, regularly</label></div>
+        ${num('legionella_temp', 'Legionella temperature °C', 1)}
+        ${num('legionella_hold_minutes', 'Hold for, minutes', 5)}
+        ${num('legionella_interval_days', 'Every … days', 1)}
         ${num('cop_eta', 'COP factor (fraction of Carnot)', 0.01)}
         ${hwEntitySelect(hw, 'cop_entity', 'Live COP', ['sensor'])}
         ${hwEntitySelect(hw, 'external_temp_entity', 'Outdoor temperature', ['temperature', 'sensor'], 'Blank = auto, from the weather entity.')}
@@ -1322,7 +1326,7 @@ function renderHotWaterHero(d) {
   const n1 = (v, dp = 1, unit = '') => (v === null || v === undefined || v === '' || Number.isNaN(Number(v))) ? '—' : `${Number(v).toFixed(dp)}${unit}`;
   const t = iso => iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
   const day = iso => iso ? (new Date(iso).toDateString() === new Date().toDateString() ? 'today' : 'tomorrow') : '';
-  const tankTile = `<div class="gl-tile"><div class="lbl">Tank</div><div class="val num">${n1(z.current_temp, 1, '°C')}</div><div class="sub">setpoint ${n1(w.setpoint, 0, '°C')} · unit starts a run below ${n1(Number(w.setpoint) - Number(w.start_hysteresis), 0, '°C')}${z.showers_available != null ? (Number(z.showers_available) < 0.5 ? ' · below shower temperature' : ` · about ${Math.round(Number(z.showers_available))} showers in it`) : ''}</div></div>`;
+  const tankTile = `<div class="gl-tile"><div class="lbl">Tank</div><div class="val num">${n1(z.current_temp, 1, '°C')}</div><div class="sub">setpoint ${n1(w.setpoint, 0, '°C')} · topped up when below ${n1(Number(w.setpoint) - Number(w.start_hysteresis), 0, '°C')}${z.showers_available != null ? (Number(z.showers_available) < 0.5 ? ' · below shower temperature' : ` · about ${Math.round(Number(z.showers_available))} showers in it`) : ''}</div></div>`;
   const startPoint = n1(Number(w.setpoint) - Number(w.start_hysteresis), 0, '°C');
   const status = w.status || (w.committed ? 'running' : w.skipped_covered ? 'skipped' : (w.needed ? 'waiting' : 'not_needed'));
   const windowText = `${t(w.window_start)}–${t(w.window_end)} ${day(w.window_start)} at ${n1(w.window_price, 1, 'p')} / COP ${n1(w.window_cop, 2)}`;
@@ -1331,9 +1335,19 @@ function renderHotWaterHero(d) {
     : status === 'skipped'
       ? `<div class="gl-tile"><div class="lbl">Run</div><div class="val" style="font-size:16px">Skipped</div><div class="sub">tank already covers the usage expected before the next chance</div></div>`
       : status === 'not_needed'
-        ? `<div class="gl-tile"><div class="lbl">Run</div><div class="val" style="font-size:16px">Not needed</div><div class="sub">tank ${n1(z.current_temp, 0, '°C')} — the unit only starts a run below ${startPoint}. Once it drops, the cheapest window as of now would be ${windowText}; forced within ${n1(w.deadline_hours, 1, ' h')} regardless</div></div>`
-        : `<div class="gl-tile"><div class="lbl">Next run</div><div class="val num" style="font-size:18px">${t(w.window_start)}–${t(w.window_end)} <span style="font-size:11px;color:var(--dim)">${day(w.window_start)}</span></div><div class="sub">Tank is below ${startPoint}, so a run is due. Cheapest slot before the deadline (${n1(w.deadline_hours, 1, ' h')} from now${w.ready_by ? `, the ${t(w.ready_by)} usage` : ''}): ${n1(w.window_price, 1, 'p')} electricity at COP ${n1(w.window_cop, 2)} = <b>${n1(w.window_score, 1, 'p')}</b> per kWh of hot water. Right now it would be ${n1(w.price_now, 1, 'p')} at COP ${n1(w.cop_now, 2)} = ${n1((Number(w.price_now) / Math.max(Number(w.cop_now) || 1, 0.1)), 1, 'p')}.</div></div>`;
+        ? `<div class="gl-tile"><div class="lbl">Run</div><div class="val" style="font-size:16px">Not needed</div><div class="sub">tank ${n1(z.current_temp, 0, '°C')} — within 2°C or so of the setpoint, nothing to top up (below ${startPoint} it will). Once it drops, the cheapest window as of now would be ${windowText}; forced within ${n1(w.deadline_hours, 1, ' h')} regardless</div></div>`
+        : `<div class="gl-tile"><div class="lbl">Next run</div><div class="val num" style="font-size:18px">${t(w.window_start)}–${t(w.window_end)} <span style="font-size:11px;color:var(--dim)">${day(w.window_start)}</span></div><div class="sub">Tank is below ${startPoint}, so a top-up is due. Cheapest slot before the deadline (${n1(w.deadline_hours, 1, ' h')} from now${w.ready_by ? `, the ${t(w.ready_by)} usage` : ''}): ${n1(w.window_price, 1, 'p')} electricity at COP ${n1(w.window_cop, 2)} = <b>${n1(w.window_score, 1, 'p')}</b> per kWh of hot water. Right now it would be ${n1(w.price_now, 1, 'p')} at COP ${n1(w.cop_now, 2)} = ${n1((Number(w.price_now) / Math.max(Number(w.cop_now) || 1, 0.1)), 1, 'p')}.</div></div>`;
   const days = Math.round(Number(w.usage_days_learned) || 0);
+  const lgx = w.legionella || {};
+  const lgTile = lgx.enabled ? (() => {
+    const ago = lgx.last_done ? Math.floor((Date.now() - new Date(lgx.last_done).getTime()) / 86400000) : null;
+    let val, sub;
+    if (lgx.phase === 'heating') { val = `Heating to ${n1(lgx.temp, 0, '°C')}`; sub = `then held ${n1(lgx.hold_minutes, 0)} min`; }
+    else if (lgx.phase === 'holding') { const m = lgx.hold_start ? Math.floor((Date.now() - new Date(lgx.hold_start).getTime()) / 60000) : 0; val = `Holding ${n1(lgx.temp, 0, '°C')}`; sub = `${m} of ${n1(lgx.hold_minutes, 0)} min${lgx.immersion_used === 'yes' ? ' · immersion helped' : ''}`; }
+    else if (lgx.phase === 'due') { val = 'Due'; sub = `next run (${t(w.window_start)}) heats to ${n1(lgx.temp, 0, '°C')} and holds ${n1(lgx.hold_minutes, 0)} min${lgx.last_failed ? ' · last attempt didn’t finish' : ''}`; }
+    else { val = ago === 0 ? 'Done today' : `Done ${ago} day${ago === 1 ? '' : 's'} ago`; sub = `next due ${lgx.next_due ? new Date(lgx.next_due).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }) : '—'}${lgx.immersion_used === 'yes' ? ' · last one used the immersion' : ''}`; }
+    return `<div class="gl-tile"><div class="lbl">Legionella</div><div class="val" style="font-size:16px">${val}</div><div class="sub">${sub}</div></div>`;
+  })() : '';
   const usageTile = `<div class="gl-tile"><div class="lbl">Usage learned</div><div class="val num">${n1(w.expected_24h_kwh, 1, ' kWh')}</div><div class="sub">${days === 0 ? 'nothing learned yet — it starts logging tonight and builds a picture over the first few days' : `expected next 24 h, from ${days} day${days === 1 ? '' : 's'} of watching the tank${days < 3 ? ' — still learning' : ''}`}</div></div>`;
   const pauseBtn = c.pause_helper
     ? (c.paused && d.gridwarm_control_mode === 'active'
@@ -1349,7 +1363,7 @@ function renderHotWaterHero(d) {
       ${fixes}
       ${pauseBtn}
     </div>
-    <div class="gl-hero">${tankTile}${runTile}${usageTile}</div>
+    <div class="gl-hero">${tankTile}${runTile}${lgTile}${usageTile}</div>
     ${w.slots && w.slots.length ? `<div style="margin-top:12px"><div class="lbl" style="margin-bottom:6px">Next 24 hours — cost of a kWh of hot water per half-hour (price ÷ COP), planned window highlighted; learned usage below</div>${renderDhwChart(w)}</div>` : ''}`;
 }
 // A chart with axes: gridlines inside the SVG, tick labels as HTML on

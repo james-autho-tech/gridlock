@@ -278,6 +278,9 @@ def test_hot_water_window_completes_and_is_not_rerun_until_the_interval(engine):
     g, _ = engine
     _seed_house(g)
     _seed_tank(g)
+    # Ordinary windows only -- the legionella cycle has its own tests.
+    with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
+        json.dump({"hot_water": {"legionella_enabled": False}}, f)
     from datetime import timedelta
     now = g.get_now()
     g._publish_thermal_forecast(now)
@@ -416,3 +419,49 @@ def test_battery_pricing_falls_back_to_the_tariff_before_the_first_battery_solve
     curve = g._heating_rate_curve(slots, "battery")
     assert curve[0] == 0.34 and curve[6 * 6] == 0.0666     # the tariff, not a flat battery cost
     assert g._heating_rate_curve(slots, "cop")[0] == g._heating_rate_curve(slots, "cop")[40]  # cop mode: flat by design
+
+
+def test_legionella_cycle_raises_holds_and_restores_the_setpoint(engine):
+    g, _ = engine
+    _seed_house(g)
+    _seed_tank(g)
+    g.states["binary_sensor.loft_heatpump_controller_load_output_electric_heater_tbh"] = {"state": "off", "attributes": {}}
+    from datetime import timedelta
+    tank = "sensor.loft_heatpump_controller_water_tank_temperature_t5"
+    sp = "number.loft_heatpump_controller_set_dhw_tank_temperature_t5s"
+    now = g.get_now()
+    # Never done -> due; flat prices -> the window starts now and the cycle begins.
+    g._publish_thermal_forecast(now)
+    hw = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]
+    assert hw["dhw"]["legionella"]["phase"] == "heating"
+    assert ("number/set_value", {"target": {"entity_id": sp}, "value": 60.0}) in g.calls
+    g.states[sp]["state"] = "60.0"
+    # Tank reaches 60 an hour later -> holding.
+    g.states[tank]["state"] = "60.0"
+    g._publish_thermal_forecast(now + timedelta(hours=1))
+    hw = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]
+    assert hw["dhw"]["legionella"]["phase"] == "holding"
+    assert hw["control"]["commanded"] is True
+    # 61 minutes later -> done, setpoint back to 53.
+    g.calls.clear()
+    g._publish_thermal_forecast(now + timedelta(hours=2, minutes=1))
+    hw = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]
+    assert hw["dhw"]["legionella"]["phase"] == "idle"
+    assert hw["dhw"]["legionella"]["last_done"]
+    assert ("number/set_value", {"target": {"entity_id": sp}, "value": 53.0}) in g.calls
+
+
+def test_legionella_cycle_is_abandoned_and_setpoint_restored_after_the_cap(engine):
+    g, _ = engine
+    _seed_house(g)
+    _seed_tank(g)
+    from datetime import timedelta
+    sp = "number.loft_heatpump_controller_set_dhw_tank_temperature_t5s"
+    now = g.get_now()
+    g._publish_thermal_forecast(now)
+    g.states[sp]["state"] = "60.0"
+    g.calls.clear()
+    g._publish_thermal_forecast(now + timedelta(hours=6))   # tank never got there
+    hw = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]
+    assert hw["dhw"]["legionella"]["last_failed"]
+    assert ("number/set_value", {"target": {"entity_id": sp}, "value": 53.0}) in g.calls
