@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.51.1 - 2026-10-17
+
+### Fix
+- Weather auto-detection in 3.51.0 called the entity registry with a wrong argument, which was swallowed as "no weather entity found" — the outdoor temperature fell back to the 18 °C placeholder and the plan thought the house needed no heat; it now lists weather entities correctly and logs a lookup failure instead of hiding it
+- The hot water panel's projected window is aligned to the tariff half-hours
+
 ## 3.51.0 - 2026-10-17
 
 ### New

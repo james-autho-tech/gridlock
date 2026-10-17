@@ -84,8 +84,13 @@ def engine(tmp_path, monkeypatch):
     g.ent_gridwarm_mode = "input_select.gridlock_gridwarm_mode"
     g.build_slots = lambda now: []
     g.get_float_state = lambda eid, default=0.0: _as_float(g.get_state(eid), default)
-    g.registry = types.SimpleNamespace(find_all=lambda prefix=None, contains=None: [
-        e for e in g.states if (prefix is None or e.startswith(prefix)) and (contains is None or contains in e)])
+    # Mirrors core.registry.HASensorRegistry.find_all's real signature
+    # (keyword-only contains/domain) -- a wrong kwarg there was swallowed
+    # as "no weather entity" on a live install.
+    def _find_all(*, contains=None, domain=None):
+        return [e for e in g.states
+                if (domain is None or e.startswith(domain + ".")) and (contains is None or contains in e)]
+    g.registry = types.SimpleNamespace(find_all=_find_all)
     g._thermal_weather_ok = None
     g._thermal_forecast_warned = {}
     g._control_listeners = {}

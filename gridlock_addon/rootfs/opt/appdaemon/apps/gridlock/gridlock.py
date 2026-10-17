@@ -3227,8 +3227,9 @@ class GridLock(hass.Hass):
         if committed:
             start_iso, end_iso = committed["start"], committed["end"]
         elif window:
-            start_iso = (now + timedelta(minutes=SLOT_MIN * window[0])).isoformat()
-            end_iso = (now + timedelta(minutes=SLOT_MIN * window[1])).isoformat()
+            # Projected window: slot-aligned like the chart, not "now + n".
+            start_iso = (self._slot_floor(now) + timedelta(minutes=SLOT_MIN * window[0])).isoformat()
+            end_iso = (self._slot_floor(now) + timedelta(minutes=SLOT_MIN * window[1])).isoformat()
         else:
             start_iso = end_iso = None
         w_cop = (sum(cops[window[0]:window[1]]) / run_slots) if window else None
@@ -3410,11 +3411,11 @@ class GridLock(hass.Hass):
             if ent and ent not in out and self.entity_exists(ent):
                 out.append(ent)
         try:
-            for ent in self.registry.find_all(prefix="weather."):
+            for ent in self.registry.find_all(domain="weather"):
                 if ent not in out:
                     out.append(ent)
-        except Exception:  # noqa: BLE001 — registry lookup is best-effort
-            pass
+        except Exception as exc:  # noqa: BLE001 — registry lookup is best-effort, but say so
+            self.log(f"GridWarm: weather entity lookup failed ({exc!r})", level="WARNING")
         return out
 
     def _thermal_weather_curve(self, weather_entity, now, n_steps, step_minutes, fallback_temp):
