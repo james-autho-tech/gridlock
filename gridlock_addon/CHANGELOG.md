@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.52.2 - 2026-10-17
+
+### Fix
+- The outdoor forecast was only fetched when a weather entity was explicitly configured, so the auto-detect default (blank) never looked one up — room and hot water zones now always build the forecast, auto-detecting the entity
+
 ## 3.52.1 - 2026-10-17
 
 ### Fix

@@ -383,3 +383,22 @@ def test_weather_curve_uses_the_service_response(engine):
     curve = g._thermal_weather_curve(None, now, 12 * 12, 5, 4.0)
     assert curve[0] == 5.0 and curve[12 * 6] == 11.0   # 6 h in -> 11 C
     assert g._thermal_weather_ok == "weather.forecast_home"
+
+
+def test_house_plan_uses_the_auto_detected_forecast(engine):
+    g, gridlock = engine
+    _seed_house(g)
+    from datetime import timedelta
+    now = g.get_now()
+    pts = [{"datetime": (now + timedelta(hours=h)).isoformat(), "temperature": 4.0 + h} for h in range(24)]
+    real_call = g.call_service
+    def call_service(service, **kw):
+        if service == "weather/get_forecasts":
+            return {"response": {kw["entity_id"]: {"forecast": pts}}}
+        return real_call(service, **kw)
+    g.call_service = call_service
+    g._publish_thermal_forecast(now)
+    house = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]
+    ext = [p["external"] for p in house["flow"]["plan"]]
+    assert ext[0] == 4.0 and ext[12] == 10.0, ext[:14]   # 6 h in -> 10 C: the forecast, not a flat line
+    assert any("outdoor forecast from weather.forecast_home" in m for _, m in g.logs)

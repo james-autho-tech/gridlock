@@ -3658,9 +3658,15 @@ class GridLock(hass.Hass):
             self._update_dhw_learning(zone, now, internal_temp, heating_on)
         self._update_thermal_learning(zone, now, internal_temp, external_now, heating_on)
 
+        # A room, or a hot water zone (its COP per slot follows the outdoor
+        # temperature), always gets the outdoor forecast -- auto-detected
+        # when no weather entity is configured. A plain yaml tank zone
+        # loses heat to a constant indoor ambient and has nothing to
+        # look ahead at.
+        wants_forecast = bool(zone["weather_entity"]) or not zone["is_tank"] or bool(zone.get("dhw"))
         external_curve = (self._thermal_weather_curve(
             zone["weather_entity"], now, THERMAL_HORIZON_STEPS, THERMAL_STEP_MIN, external_now)
-            if zone["weather_entity"] else [external_now] * THERMAL_HORIZON_STEPS)
+            if wants_forecast else [external_now] * THERMAL_HORIZON_STEPS)
 
         # The GridWarm plan: ease the target down ahead of a forecast
         # warm-up (passive warming will do some of the work) and nudge
