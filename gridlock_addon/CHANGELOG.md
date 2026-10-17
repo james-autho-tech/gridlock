@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.48.0 - 2026-10-17
+
+### New
+- Heating and hot water are priced the way the battery actually makes electricity cost: from GridLock's own battery plan, a slot costs the cheap rate the battery was charged at (grossed up for losses and wear) where the battery covers the load, the import rate where the plan expects it to run flat or be charging, and the export rate where it would otherwise export. With a battery sized to carry the heating that's flat most of the day, so the plan simply minimises electricity — maximises COP — and only bends to the tariff where the battery genuinely can't cover it
+- "Price a kWh of heating electricity by" setting: the battery plan (default), nothing but COP, or the raw tariff; applies to hot water too. Chart tooltips show the tariff price alongside the effective one where they differ
+
+### Fix
+- The heating plan was pricing electricity 100× too low (rates are £/kWh internally, the planner expected pence), so predicted costs showed as £0.01 and the tariff never influenced the plan
+
 ## 3.47.1 - 2026-10-17
 
 ### Fix

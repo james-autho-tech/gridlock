@@ -108,6 +108,17 @@ DEFAULTS = {
     "comfort_below": 1.0,
     "comfort_above": 1.0,
     "tariff_optimise": True,
+    # What a kWh of electricity for heating costs in each slot:
+    #   "battery" -- GridLock's own battery plan decides: the cheap rate
+    #              the battery was charged at (plus losses and wear) in
+    #              slots the battery covers, the import rate where it
+    #              would be empty, the export rate where it would
+    #              otherwise be exporting. With a battery sized to carry
+    #              the heating this is flat most of the time, so the plan
+    #              simply minimises electricity -- i.e. maximises COP.
+    #   "cop"     -- ignore prices entirely, minimise electricity.
+    #   "tariff"  -- the raw import rate, as if there were no battery.
+    "heat_pricing": "battery",
     # Live readings for learning the emitter curve, COP factor and
     # thermal mass (all optional -- without them the starting values
     # above just stay put).
@@ -324,6 +335,8 @@ def merge_settings(saved):
                 pass
     if "control_requires" in saved:
         out["control_requires"] = clean_requirements(saved["control_requires"])
+    if str(saved.get("heat_pricing", "")).lower() in ("battery", "cop", "tariff"):
+        out["heat_pricing"] = str(saved["heat_pricing"]).lower()
     if out["flow_max"] < out["flow_min"]:
         out["flow_max"] = out["flow_min"]
     # The hot water zone rides along in the same file under its own key.
@@ -370,6 +383,7 @@ def to_zone_cfg(settings):
         "comfort_below": settings["comfort_below"],
         "comfort_above": settings["comfort_above"],
         "tariff_optimise": settings["tariff_optimise"],
+        "heat_pricing": settings["heat_pricing"],
         "thermal_power_entity": settings["thermal_power_entity"],
         "flow_temp_entity": settings["flow_temp_entity"],
         "return_temp_entity": settings["return_temp_entity"],

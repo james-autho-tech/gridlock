@@ -471,6 +471,20 @@ controller should:
   how much the room rose. All blend in gradually, like the heat-loss
   learning. The panel shows each learned figure against where it started.
 
+**What a kWh costs, with a battery.** By default the planners don't price
+electricity at the import tariff — that's the wrong number for a house
+with a battery sized to carry its heating. They read GridLock's own
+battery plan: in a slot the battery covers, a kWh costs the cheap rate it
+was charged at, grossed up for round-trip losses plus the configured
+wear cost; where the plan expects the battery to run flat before the
+next cheap window (or to be charging) the import rate applies; where it
+would otherwise be exporting, the export price. Most of the day that's a
+flat number, so the plan simply minimises electricity — maximises COP,
+heating when the air is warmest at the lowest flow — and only bends to
+the tariff where the battery can't cover it. "Price a kWh of heating
+electricity by" in the form switches between the battery plan, pure COP
+(prices ignored) and the raw tariff; it applies to hot water too.
+
 **How low can the flow go?** Only as low as the unit allows. The Midea
 controller reports its heating setpoint range in
 `sensor.<device>_temperature_lower/upper_limit_of_t1s_heating_zone_1` —

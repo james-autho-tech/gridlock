@@ -1163,7 +1163,11 @@ function renderSpaceHeatingSettings(s) {
         + num('water_dt', 'Flow/return split °C', 0.5)
         + num('emitter_rated_w_at_dt50', 'Radiator output at ΔT50, W', 100, 'Total for the loop, as datasheets quote it. Self-refines from the heat pump\'s measured output.')
         + num('cop_eta', 'COP factor (fraction of Carnot)', 0.01, 'Self-refines from the live COP sensor.')
-        + chk('tariff_optimise', 'Tariff optimisation', 'shift heat into cheaper half-hours')
+        + `<div><div class="lbl">Price a kWh of heating electricity by</div><select class="gl-inp" data-key="heat_pricing" onchange="shEdit(this)">
+            <option value="battery" ${shVal(s, 'heat_pricing') === 'battery' ? 'selected' : ''}>the battery plan — COP first while the battery covers it</option>
+            <option value="cop" ${shVal(s, 'heat_pricing') === 'cop' ? 'selected' : ''}>nothing — just maximise COP</option>
+            <option value="tariff" ${shVal(s, 'heat_pricing') === 'tariff' ? 'selected' : ''}>the import tariff — as if there were no battery</option>
+          </select><div style="color:var(--dim);font-size:10px;margin-top:2px">Applies to hot water too. With the battery plan, a slot only costs the peak rate where GridLock expects the battery to be empty or exporting.</div></div>`
         + num('comfort_below', 'May drift below target by °C', 0.1)
         + num('comfort_above', 'May pre-heat above target by °C', 0.1))}
       ${section('Heat pump readings', 'What the unit reports about itself — used to learn the radiator curve, COP factor and thermal mass, and shown on the panel above.',
@@ -1356,7 +1360,7 @@ function renderDhwChart(w) {
     const tms = new Date(s.x).getTime();
     const inWin = ws !== null && tms >= ws - 1000 && tms < we;
     const top = y(s.score), base = y(0);
-    return `<rect x="${(i * colW + 1).toFixed(1)}" y="${top.toFixed(1)}" width="${Math.max(1, colW - 2).toFixed(1)}" height="${(base - top).toFixed(1)}" fill="${inWin ? 'var(--green)' : 'var(--cyan)'}" opacity="${inWin ? 0.9 : 0.35}"><title>${esc(hhmm(s.x))}: ${s.price.toFixed(1)}p ÷ COP ${s.cop.toFixed(2)} = ${s.score.toFixed(1)}p per kWh of hot water</title></rect>`;
+    return `<rect x="${(i * colW + 1).toFixed(1)}" y="${top.toFixed(1)}" width="${Math.max(1, colW - 2).toFixed(1)}" height="${(base - top).toFixed(1)}" fill="${inWin ? 'var(--green)' : 'var(--cyan)'}" opacity="${inWin ? 0.9 : 0.35}"><title>${esc(hhmm(s.x))}: ${s.price.toFixed(1)}p${s.grid_price !== undefined && Math.abs(s.grid_price - s.price) > 0.05 ? ` (tariff ${s.grid_price.toFixed(1)}p)` : ''} ÷ COP ${s.cop.toFixed(2)} = ${s.score.toFixed(1)}p per kWh of hot water</title></rect>`;
   }).join('');
   const xRow = barAxisLabels(n, 4, i => hhmm(slots[i].x));
   const main = chartFrame(bars, H, niceTicks(lo, hi).map(t => ({ ...t, label: `${t.label}p` })), null, xRow);
@@ -1404,7 +1408,10 @@ function renderHouseHero(d) {
         ? `<button class="gl-btn-sm" onclick="setGridwarmPause('${c.pause_helper}', false)">Resume</button>`
         : `<button class="gl-btn-sm" onclick="setGridwarmPause('${c.pause_helper}', true)">Pause</button>`)
     : '';
-  const learned = `<div class="gl-sub" style="margin-top:8px">Learned so far — radiators ${n1(z.learned_emitter_w_at_dt50, 0, ' W')} at ΔT50 (started ${n1(z.config_emitter_w_at_dt50, 0)}), COP factor ${n1(z.learned_cop_eta, 2)} (started ${n1(z.config_cop_eta, 2)}), thermal mass ${n1(z.learned_thermal_mass, 0, ' Wh/°C')} (started ${n1(z.config_thermal_mass, 0)}), heat loss ${n1(z.learned_heat_loss_degrees, 4)} °C/h/°C from ${z.thermal_learning_observations || 0} cooling observations.</div>`;
+  const pricingNote = f && f.pricing_mode
+    ? `<div class="gl-sub" style="margin-top:6px">${f.pricing_mode === 'battery' ? 'Electricity priced via the battery plan: cheap-rate energy from the battery where it covers the heating, the tariff only where GridLock expects it to run flat or export — so most of the day the plan is simply chasing COP.' : f.pricing_mode === 'cop' ? 'Prices ignored: the plan minimises electricity, i.e. maximises COP.' : 'Priced at the import tariff, as if there were no battery.'}</div>`
+    : '';
+  const learned = `${pricingNote}<div class="gl-sub" style="margin-top:8px">Learned so far — radiators ${n1(z.learned_emitter_w_at_dt50, 0, ' W')} at ΔT50 (started ${n1(z.config_emitter_w_at_dt50, 0)}), COP factor ${n1(z.learned_cop_eta, 2)} (started ${n1(z.config_cop_eta, 2)}), thermal mass ${n1(z.learned_thermal_mass, 0, ' Wh/°C')} (started ${n1(z.config_thermal_mass, 0)}), heat loss ${n1(z.learned_heat_loss_degrees, 4)} °C/h/°C from ${z.thermal_learning_observations || 0} cooling observations.</div>`;
   return `
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px">
       <span style="color:var(--ink);font-weight:600">${esc(z.name)}</span>
@@ -1441,7 +1448,7 @@ function renderHeatPlanChart(z, d) {
   const bars = plan.map((p, i) => {
     if (p.heat_kwh <= 0.0005) return '';
     const top = yk(p.heat_kwh), base = yk(0);
-    return `<rect x="${(i * colW + 1).toFixed(1)}" y="${top.toFixed(1)}" width="${Math.max(1, colW - 2).toFixed(1)}" height="${(base - top).toFixed(1)}" fill="${priceColor(p.price)}" opacity="0.35"><title>${esc(hhmm(p.x))}: ${p.heat_kwh.toFixed(2)} kWh heat @ ${p.price.toFixed(1)}p, COP ${p.cop.toFixed(2)}${p.flow ? `, flow ${p.flow}°C` : ''}</title></rect>`;
+    return `<rect x="${(i * colW + 1).toFixed(1)}" y="${top.toFixed(1)}" width="${Math.max(1, colW - 2).toFixed(1)}" height="${(base - top).toFixed(1)}" fill="${priceColor(p.price)}" opacity="0.35"><title>${esc(hhmm(p.x))}: ${p.heat_kwh.toFixed(2)} kWh heat @ ${p.price.toFixed(1)}p${p.grid_price !== undefined && Math.abs(p.grid_price - p.price) > 0.05 ? ` (tariff ${p.grid_price.toFixed(1)}p)` : ''}, COP ${p.cop.toFixed(2)}${p.flow ? `, flow ${p.flow}°C` : ''}</title></rect>`;
   }).join('');
   const band = plan.map((p, i) => `<rect x="${(i * colW).toFixed(1)}" y="${y(p.target + above).toFixed(1)}" width="${colW.toFixed(1)}" height="${Math.max(0, y(p.target - below) - y(p.target + above)).toFixed(1)}" fill="var(--cyan)" opacity="0.07" />`).join('');
   const tempLine = plan.map((p, i) => `${((i + 0.5) * colW).toFixed(1)},${y(p.temp).toFixed(1)}`).join(' ');

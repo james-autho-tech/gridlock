@@ -27,6 +27,7 @@ from core import thermal as core_thermal
 from core import space_heating as core_space_heating
 from core import flow_control as core_flow
 from core import dhw_plan as core_dhw
+from core import effective_price as core_effective_price
 from core import diagnostics as core_diagnostics
 from core import warranty as core_warranty
 from core.ev_schedule import find_cheapest_window
@@ -622,6 +623,10 @@ class GridLock(hass.Hass):
         # control_entity -> zone name, for the "something else flipped my
         # switch" listener (the unit's own timer, a person in the UI).
         self._control_listeners = {}
+        # The last solved battery plan (slots + cost trace), for pricing
+        # heating electricity the way the battery actually makes it cost
+        # (core/effective_price.py). None until the first solve.
+        self._last_plan = None
         # heat_loss_degrees learning -- refines the config's own starting
         # figure against real cooling periods (heating off) over time,
         # same EMA-blend pattern as the load forecast's learned profile.
@@ -3126,7 +3131,8 @@ class GridLock(hass.Hass):
         learn["dhw_day_buckets"] = day
         learn["dhw_prev_ts"], learn["dhw_prev_temp"], learn["dhw_prev_on"] = now.isoformat(), tank_temp, heating_on
 
-    def _plan_dhw(self, zone, now, tank_temp, setpoint, external_curve, rate_curve):
+    def _plan_dhw(self, zone, now, tank_temp, setpoint, external_curve, rate_curve,
+                  grid_rate_curve=None, pricing_mode="tariff"):
         """When the DHW circuit gets power (see core/dhw_plan.py): the
         cheapest window by price / predicted COP that finishes before
         the deadline -- the learned usage peak if one is coming, else
@@ -3138,7 +3144,8 @@ class GridLock(hass.Hass):
         slot_hours = SLOT_MIN / 60.0
         idx = list(range(0, len(external_curve), per_slot))
         ext = [external_curve[j] for j in idx]
-        rates = [rate_curve[j] for j in idx]
+        rates = [rate_curve[j] * 100.0 for j in idx]           # £ -> p
+        grid_rates = [(grid_rate_curve or rate_curve)[j] * 100.0 for j in idx]
         setpoint = setpoint if setpoint is not None else 53.0
         hyst = (self.get_float_state(d["start_hysteresis_entity"], 10.0)
                 if d.get("start_hysteresis_entity") else 10.0)
@@ -3201,6 +3208,7 @@ class GridLock(hass.Hass):
         w_price = (sum(rates[window[0]:window[1]]) / run_slots) if window else None
         return {"heat_now": committed is not None,
                 "committed": committed is not None,
+                "pricing_mode": pricing_mode,
                 "needed": needed,
                 "skipped_covered": skipped,
                 "window_start": start_iso, "window_end": end_iso,
@@ -3219,7 +3227,8 @@ class GridLock(hass.Hass):
                 "usage_days_learned": int(learn.get("dhw_profile_days", 0)),
                 "expected_24h_kwh": round(sum(expected[:48]) / 1000.0, 2),
                 "slots": [{"x": (self._slot_floor(now) + timedelta(minutes=SLOT_MIN * i)).isoformat(),
-                           "price": round(rates[i], 2), "cop": round(cops[i], 2),
+                           "price": round(rates[i], 2), "grid_price": round(grid_rates[i], 2),
+                           "cop": round(cops[i], 2),
                            "score": round(scores[i], 2)} for i in range(min(48, len(scores)))]}
 
     @staticmethod
@@ -3228,7 +3237,8 @@ class GridLock(hass.Hass):
         of every per-slot curve here actually covers."""
         return now.replace(minute=(now.minute // SLOT_MIN) * SLOT_MIN, second=0, microsecond=0)
 
-    def _plan_flow(self, zone, now, internal_temp, external_curve, plan_curve, rate_curve):
+    def _plan_flow(self, zone, now, internal_temp, external_curve, plan_curve, rate_curve,
+                   grid_rate_curve=None, pricing_mode="tariff"):
         """The flow-temperature plan for one tick (see core/flow_control.py):
         a least-cost heat schedule over the horizon at half-hour
         resolution, then the flow setpoint that delivers its first slot
@@ -3238,8 +3248,10 @@ class GridLock(hass.Hass):
         idx = list(range(0, len(external_curve), per_slot))
         ext = [external_curve[j] for j in idx]
         tgt = [plan_curve[j] for j in idx]
-        rates = ([rate_curve[j] for j in idx] if zone["tariff_optimise"]
+        # Curves arrive in £/kWh; the planner and the dashboard work in pence.
+        rates = ([rate_curve[j] * 100.0 for j in idx] if zone["tariff_optimise"]
                  else [1.0] * len(idx))
+        grid_rates = [(grid_rate_curve or rate_curve)[j] * 100.0 for j in idx]
         params = zone["params"]
         emitter, eta = zone["emitter_rated_w_at_dt50"], zone["cop_eta"]
         max_w = params.heat_max_power or 7000.0
@@ -3264,6 +3276,7 @@ class GridLock(hass.Hass):
         heat_kwh = sum(p["heat_kwh"] for p in today)
         elec_kwh = sum(p["heat_kwh"] / max(p["cop"], 0.1) for p in today)
         return {"required_w": required_w,
+                "pricing_mode": pricing_mode,
                 "required_kw": round(required_w / 1000.0, 2),
                 "flow_setpoint_wanted": wanted,
                 "predicted_cop": round(core_flow.cop_estimate(wanted, ext_now, eta), 2),
@@ -3275,7 +3288,8 @@ class GridLock(hass.Hass):
                 "plan": [{"x": (self._slot_floor(now) + timedelta(minutes=SLOT_MIN * i)).isoformat(),
                           "heat_kwh": round(p["heat_kwh"], 3), "temp": round(p["temp"], 2),
                           "target": round(tgt[i], 2), "external": round(ext[i], 1),
-                          "price": round(p["price"], 2), "cop": round(p["cop"], 2),
+                          "price": round(p["price"], 2), "grid_price": round(grid_rates[i], 2),
+                          "cop": round(p["cop"], 2),
                           "flow": core_flow.flow_setpoint_for_power(
                               p["heat_kwh"] * 1000.0 / slot_hours, p["temp"], emitter,
                               zone["water_dt"], zone["flow_min"], zone["flow_max"], 1.0)
@@ -3380,6 +3394,39 @@ class GridLock(hass.Hass):
             curve.append(parsed[idx][1] if parsed else fallback_temp)
         return curve
 
+    def _heating_rate_curve(self, slots, mode):
+        """What the heat pump planners should price a kWh at, per 5-min
+        step, in £/kWh (same shape as _thermal_rate_curve):
+        - "tariff": the raw import rate, as if there were no battery.
+        - "cop": flat (the battery's own energy cost), so the plan just
+          minimises electricity -- maximises COP.
+        - "battery": from the last solved battery plan (see
+          core/effective_price.py): the battery's energy cost where it
+          covers the load, the import rate where it runs flat or is
+          charging, the export rate where it would otherwise export.
+          Falls back to the tariff before the first solve."""
+        raw = self._thermal_rate_curve(slots)
+        if mode == "tariff":
+            return raw
+        plan = self._last_plan
+        batt_cost_p = core_effective_price.battery_energy_cost_p(
+            plan["slots"] if plan else [], plan["cost_trace"] if plan else [],
+            self.cheap_rate, getattr(self.cfg, "efficiency", 0.9), self.degradation)
+        if mode == "cop" or not plan:
+            return [batt_cost_p / 100.0] * len(raw)
+        eff_p = core_effective_price.effective_prices_p(plan["slots"], plan["cost_trace"], batt_cost_p)
+        by_start = {plan["slots"][i]["start"]: eff_p[i] / 100.0 for i in range(len(eff_p))}
+        step_ratio = SLOT_MIN // THERMAL_STEP_MIN
+        curve = []
+        for s in slots:
+            v = by_start.get(s["start"])
+            if v is None:
+                v = s["imp"] if math.isfinite(s["imp"]) else self.default_import
+            curve.extend([v] * step_ratio)
+        if len(curve) < THERMAL_HORIZON_STEPS:
+            curve.extend([curve[-1] if curve else batt_cost_p / 100.0] * (THERMAL_HORIZON_STEPS - len(curve)))
+        return curve[:THERMAL_HORIZON_STEPS]
+
     def _thermal_rate_curve(self, slots):
         """One import rate per 5-min thermal step, aligned to the battery
         plan's own 30-min slots (self.build_slots) — used only to price
@@ -3483,7 +3530,8 @@ class GridLock(hass.Hass):
         state["observation_count"] = len(state["observations"])
         self._save_json("thermal_learning_state.json", self.thermal_learning_state)
 
-    def _run_thermal_forecast(self, zone, now, rate_curve):
+    def _run_thermal_forecast(self, zone, now, rate_curve, heat_rate_curve=None, pricing_mode="tariff"):
+        heat_rate_curve = heat_rate_curve if heat_rate_curve is not None else rate_curve
         internal_temp = self._thermal_internal_temp(zone)
         if internal_temp is None:
             return None
@@ -3548,14 +3596,16 @@ class GridLock(hass.Hass):
         dhw = None
         if zone.get("dhw"):
             try:
-                dhw = self._plan_dhw(zone, now, internal_temp, target_temp, external_curve, rate_curve)
+                dhw = self._plan_dhw(zone, now, internal_temp, target_temp, external_curve,
+                                     heat_rate_curve, rate_curve, pricing_mode)
             except Exception as exc:  # noqa: BLE001 — a plan failure must not drop the zone
                 self.log(f"GridWarm: hot water plan for '{zone['name']}' failed: {exc!r}", level="WARNING")
                 dhw = None
         flow = None
         if zone["flow_entity"]:
             try:
-                flow = self._plan_flow(zone, now, internal_temp, external_curve, plan_curve, rate_curve)
+                flow = self._plan_flow(zone, now, internal_temp, external_curve, plan_curve,
+                                       heat_rate_curve, rate_curve, pricing_mode)
             except Exception as exc:  # noqa: BLE001 — a plan failure must not drop the zone
                 self.log(f"GridWarm: flow plan for '{zone['name']}' failed: {exc!r}", level="WARNING")
                 flow = None
@@ -3945,11 +3995,14 @@ class GridLock(hass.Hass):
                                        "space_heating_settings": ui_settings,
                                        "hot_water_settings": ui_settings["hot_water"]})
             return
-        rate_curve = self._thermal_rate_curve(self.build_slots(now))
+        slots = self.build_slots(now)
+        rate_curve = self._thermal_rate_curve(slots)
+        pricing_mode = ui_settings.get("heat_pricing", "battery")
+        heat_rate_curve = self._heating_rate_curve(slots, pricing_mode)
         zones_out = []
         for zone in zones:
             try:
-                result = self._run_thermal_forecast(zone, now, rate_curve)
+                result = self._run_thermal_forecast(zone, now, rate_curve, heat_rate_curve, pricing_mode)
             except Exception as exc:  # noqa: BLE001 — one bad zone shouldn't drop the rest
                 self.log(f"Thermal forecast for zone '{zone['name']}' failed: {exc!r}",
                          level="WARNING")
@@ -4486,6 +4539,7 @@ class GridLock(hass.Hass):
                        "Fault (safe mode)", "Optimiser reported infeasible", "")
             return
         slots, trace, cost_trace, grid_cost = result.slots, result.trace, result.cost_trace, result.grid_cost
+        self._last_plan = {"slots": slots, "cost_trace": cost_trace, "ts": now.isoformat()}
         self._track_plan_accuracy(now, grid_cost, slots, soc0)
         self._check_solar_deficit(now, slots, cost_trace)
 

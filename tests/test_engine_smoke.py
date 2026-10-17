@@ -86,6 +86,10 @@ def engine(tmp_path, monkeypatch):
     g.get_float_state = lambda eid, default=0.0: _as_float(g.get_state(eid), default)
     g.registry = None
     g._control_listeners = {}
+    g._last_plan = None
+    g.cheap_rate = 0.10
+    g.degradation = 0.01
+    g.cfg = types.SimpleNamespace(efficiency=0.9)
     return g, gridlock
 
 
@@ -292,3 +296,28 @@ def test_hot_water_floor_forces_a_run_outside_the_window(engine):
     g.calls.clear()
     g._publish_thermal_forecast(now + timedelta(hours=3))
     assert ("switch/turn_on", {"target": {"entity_id": "switch.loft_heatpump_controller_power_dhw_t5s"}}) in g.calls
+
+
+def test_battery_plan_pricing_flattens_the_heating_price_where_the_battery_covers_it(engine):
+    g, _ = engine
+    _seed_house(g)
+    from datetime import timedelta
+    now = g.get_now()
+    # A fake solved battery plan: a cheap 7p charge slot, then peak-rate
+    # slots the battery covers, then one where it runs flat.
+    starts = [now.replace(minute=0, second=0, microsecond=0) + timedelta(minutes=30 * i) for i in range(96)]
+    slots = [{"start": st, "imp": 0.07 if i == 0 else 0.30, "exp": 0.15, "export": 0.0} for i, st in enumerate(starts)]
+    ct = [{"grid_in": 2.0 if i == 0 else (1.0 if i == 20 else 0.0), "charge_in": 2.0 if i == 0 else 0.0,
+           "battery_kwh": 0.0 if i in (0, 20) else 1.0} for i in range(96)]
+    g._last_plan = {"slots": slots, "cost_trace": ct, "ts": now.isoformat()}
+    g.build_slots = lambda now_: slots
+    g._publish_thermal_forecast(now)
+    house = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]
+    plan = house["flow"]["plan"]
+    assert house["flow"]["pricing_mode"] == "battery"
+    batt_p = (0.07 / 0.9 + 0.01) * 100
+    # Slots 1-19 are battery-covered but the battery runs flat at slot 20,
+    # so an extra kWh there is really paid at 30p; after slot 20 the
+    # battery covers again at its own cost.
+    assert plan[5]["price"] == pytest.approx(30.0, abs=0.05) and plan[5]["grid_price"] == pytest.approx(30.0, abs=0.05)
+    assert plan[25]["price"] == pytest.approx(batt_p, abs=0.05) and plan[25]["grid_price"] == pytest.approx(30.0, abs=0.05)
