@@ -415,6 +415,14 @@ this was built against (a Midea air-to-water heat pump on the Mosibi
 "Heatpump Controller" ESPHome integration, one radiator loop); every
 field is editable, and "Show this zone" unticked hides it entirely.
 
+**Fallback room sensor.** A second room temperature entity is used whenever
+the main one is unavailable (a dead battery, a Thread border router down).
+The Midea controller's own wired panel has a thermometer: enable the unit's
+"supports room temperature sensor Ta" flag (it's a switch on the ESPHome
+integration, accepted over Modbus) and `sensor.<device>_room_temperature_ta`
+turns from a fixed 25 into a live 1°C-resolution reading, which is the
+default fallback. The panel says when the fallback is in use.
+
 **GridLock owns the target.** There's deliberately no thermostat in the
 loop for this zone — the target is a number you set from the tab (the ✏️
 next to it, or the form), and GridWarm regulates the heat pump's

@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.46.1 - 2026-10-17
+
+### New
+- Fallback room temperature: a second sensor used whenever the main one is unavailable — the panel says when the fallback is in use
+- Default room sensor is now the heat pump's own controller thermometer (its Ta reading, once "supports room temperature sensor Ta" is enabled on the unit) with the Tado as fallback, and the default target is 15 °C
+
 ## 3.46.0 - 2026-10-17
 
 ### New

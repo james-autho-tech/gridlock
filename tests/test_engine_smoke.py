@@ -91,10 +91,11 @@ def _as_float(v, default):
         return default
 
 
-def _seed_house(g, room_temp="18.4", mode="active"):
+def _seed_house(g, room_temp="13.4", mode="active"):
     s = g.states
     s["input_select.gridlock_gridwarm_mode"] = {"state": mode, "attributes": {}}
-    s["climate.bedroom_4_qing_thermo"] = {"state": "heat", "attributes": {"current_temperature": room_temp}}
+    s["sensor.loft_heatpump_controller_room_temperature_ta"] = {"state": room_temp, "attributes": {}}
+    s["climate.bedroom_4_qing_thermo"] = {"state": "unavailable", "attributes": {}}
     s["sensor.openweathermap_temperature"] = {"state": "4.0", "attributes": {}}
     s["switch.loft_heatpump_controller_water_flow_temperature_control_zone_1"] = {"state": "off", "attributes": {}}
     s["sensor.loft_heatpump_controller_active_state"] = {"state": "Idle", "attributes": {}}
@@ -117,7 +118,8 @@ def test_dashboard_zone_plans_flow_and_commands_the_heat_pump(engine):
     assert pub["space_heating_settings"]["name"] == "House"
     zones = {z["name"]: z for z in pub["zones"]}
     house = zones["House"]
-    assert house["current_temp"] == 18.4
+    assert house["current_temp"] == 13.4
+    assert not house.get("reading_from_fallback")
     assert house["flow"]["plan_status"] in ("optimal", "fallback")
     assert house["flow"]["required_kw"] > 0
     assert 35.0 <= house["flow"]["flow_setpoint_wanted"] <= 50.0
@@ -135,10 +137,22 @@ def test_dashboard_zone_plans_flow_and_commands_the_heat_pump(engine):
     assert any("GridWarm: House" in e["state"] for e in g.decision_log)
 
 
+def test_fallback_room_sensor_is_used_when_the_primary_is_unavailable(engine):
+    g, _ = engine
+    _seed_house(g)
+    g.states["sensor.loft_heatpump_controller_room_temperature_ta"] = {"state": "unavailable", "attributes": {}}
+    g.states["climate.bedroom_4_qing_thermo"] = {"state": "heat", "attributes": {"current_temperature": "22"}}
+    g._publish_thermal_forecast(g.get_now())
+    house = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]
+    assert house["current_temp"] == 22.0
+    assert house["reading_from_fallback"] == "climate.bedroom_4_qing_thermo"
+    assert house["flow"] is not None  # a real plan, not the no-reading stub
+
+
 def test_no_room_reading_runs_weather_compensation_not_just_on(engine):
     g, _ = engine
     _seed_house(g)
-    g.states["climate.bedroom_4_qing_thermo"] = {"state": "unavailable", "attributes": {}}
+    g.states["sensor.loft_heatpump_controller_room_temperature_ta"] = {"state": "unavailable", "attributes": {}}
     # 4 °C outside: the house needs real heat -> on, flow capped low.
     g._publish_thermal_forecast(g.get_now())
     house = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]

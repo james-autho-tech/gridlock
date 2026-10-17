@@ -2911,6 +2911,10 @@ class GridLock(hass.Hass):
         return {"name": z.get("name", "Zone"),
                 "internal_temp_entity": z.get("internal_temp_entity"),
                 "internal_temp_attribute": z.get("internal_temp_attribute"),
+                # Second-choice room reading for when the first is
+                # unavailable -- the heat pump's own controller sensor,
+                # typically. Read the same way (climate.* auto-detected).
+                "internal_temp_fallback_entity": z.get("internal_temp_fallback_entity"),
                 "target_temp_entity": z.get("target_temp_entity"),
                 "target_temp_attribute": z.get("target_temp_attribute"),
                 "external_temp_entity": z.get("external_temp_entity"),
@@ -3143,18 +3147,25 @@ class GridLock(hass.Hass):
         pointed at a climate entity (the common case) works with no
         extra config; internal_temp_attribute can still override it for
         anything that doesn't follow that convention."""
-        ent = zone["internal_temp_entity"]
-        if not ent:
-            return None
-        attr = zone["internal_temp_attribute"] or (
-            "current_temperature" if ent.startswith("climate.") else None)
-        if attr:
-            v = self.get_state(ent, attribute=attr)
-            try:
-                return float(v) if v not in (None, "unknown", "unavailable") else None
-            except (ValueError, TypeError):
-                return None
-        return self.get_float_state(ent, None)
+        for ent, is_fallback in ((zone["internal_temp_entity"], False),
+                                 (zone.get("internal_temp_fallback_entity"), True)):
+            if not ent:
+                continue
+            attr = (None if is_fallback else zone["internal_temp_attribute"]) or (
+                "current_temperature" if ent.startswith("climate.") else None)
+            if attr:
+                v = self.get_state(ent, attribute=attr)
+                try:
+                    value = float(v) if v not in (None, "unknown", "unavailable") else None
+                except (ValueError, TypeError):
+                    value = None
+            else:
+                value = self.get_float_state(ent, None)
+            if value is not None:
+                zone["_reading_source"] = ent if is_fallback else None
+                return value
+        zone["_reading_source"] = None
+        return None
 
     def _thermal_target_temp(self, zone):
         ent = zone["target_temp_entity"]
@@ -3414,6 +3425,10 @@ class GridLock(hass.Hass):
                 "external_temp": round(external_now, 2),
                 "heating_on": heating_on,
                 "no_reading": False,
+                # Set when the primary room sensor was unavailable and the
+                # fallback (the heat pump's own controller sensor, say) is
+                # being used instead -- the dashboard says so.
+                "reading_from_fallback": zone.get("_reading_source"),
                 "is_tank": zone["is_tank"],
                 # Only the dashboard zone's target is GridLock's own to
                 # change; a yaml zone's comes from its target entity.

@@ -24,12 +24,18 @@ DEFAULTS = {
     # commanded) without losing the rest of the settings.
     "configured": True,
     "name": "House",
-    # The one room thermometer the model treats as "the house". A
-    # climate.* entity's current_temperature is read automatically.
-    "internal_temp_entity": "climate.bedroom_4_qing_thermo",
+    # The one room thermometer the model treats as "the house". The heat
+    # pump's own wired controller has a thermometer in it: with the
+    # unit's "supports room temperature sensor Ta" installer flag on it
+    # reports it here at 1 °C resolution -- coarse, but always there,
+    # which a battery/Thread thermostat is not. A climate.* entity's
+    # current_temperature is read automatically if one is chosen instead.
+    "internal_temp_entity": "sensor.loft_heatpump_controller_room_temperature_ta",
+    # Used whenever the room sensor above is unavailable.
+    "internal_temp_fallback_entity": "climate.bedroom_4_qing_thermo",
     # GridLock owns the target itself — there's deliberately no
-    # thermostat in the loop. Set from the GridWarm tab's ✏️.
-    "target_temp": 20.0,
+    # thermostat in the loop. Set from the GridWarm tab's ✏️ or −/+.
+    "target_temp": 15.0,
     "external_temp_entity": "sensor.openweathermap_temperature",
     "weather_entity": "weather.openweathermap",
     # The heat pump's own space-heating power switch (zone 1). Commanded
@@ -137,7 +143,8 @@ NUMERIC_BOUNDS = {
     "comfort_above": (0.0, 5.0),
 }
 
-ENTITY_FIELDS = ("internal_temp_entity", "external_temp_entity", "weather_entity",
+ENTITY_FIELDS = ("internal_temp_entity", "internal_temp_fallback_entity",
+                 "external_temp_entity", "weather_entity",
                  "control_entity", "heating_entity", "cop_entity", "flow_entity",
                  "thermal_power_entity", "flow_temp_entity", "return_temp_entity",
                  "compressor_entity")
@@ -205,6 +212,7 @@ def to_zone_cfg(settings):
     return {
         "name": settings["name"],
         "internal_temp_entity": settings["internal_temp_entity"],
+        "internal_temp_fallback_entity": settings["internal_temp_fallback_entity"],
         "target_temp_constant": settings["target_temp"],
         "external_temp_entity": settings["external_temp_entity"],
         "weather_entity": settings["weather_entity"],
