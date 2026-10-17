@@ -298,6 +298,11 @@ class GridLock(hass.Hass):
             prefix="sensor.edf_energy_", suffix="_flextras_bonus_hours"))
         self.ent_edf_flextras_join_button = self.registry.find(
             prefix="button.edf_energy_", suffix="_flextras_join")
+        # Every free session the integration knows about, any source --
+        # booked Flextras hours above all (the real data shape, seen
+        # populated: events: [{code, source, start, end, ...}]).
+        self.ent_edf_free_sessions = (a.get("edf_free_sessions_entity") or self.registry.find(
+            prefix="event.edf_energy_", suffix="_free_electricity_session_events"))
         self.ent_edf_power_perks_button = self.registry.find(
             prefix="button.edf_energy_", suffix="_flextras_register_power_perks")
         self.ent_edf_bonus_hours_button = self.registry.find(
@@ -2377,6 +2382,15 @@ class GridLock(hass.Hass):
                     windows.append((self._iso(period["start"]), self._iso(period["end"])))
                 except (KeyError, ValueError, TypeError):
                     continue
+        if self.ent_edf_free_sessions:
+            # Booked Flextras hours (and anything else the integration
+            # lists as a free session). Flextras hours are only ever
+            # listed once booked, so no enrollment gate is needed.
+            for ev in self._attr_list(self.ent_edf_free_sessions, "events"):
+                try:
+                    windows.append((self._iso(ev["start"]), self._iso(ev["end"])))
+                except (KeyError, ValueError, TypeError):
+                    continue
         if self.ent_edf_sunday_saver_start and self.ent_edf_sunday_saver_end:
             enrolled = self.get_state(self.ent_edf_sunday_saver_start, attribute="is_enrolled")
             start = self.get_state(self.ent_edf_sunday_saver_start)
@@ -2387,7 +2401,8 @@ class GridLock(hass.Hass):
                     windows.append((self._iso(start), self._iso(end)))
                 except (ValueError, TypeError):
                     pass
-        return windows
+        # The same window can arrive from more than one entity.
+        return sorted(set(windows))
 
     def build_slots(self, now):
         live_imp = self.get_float_state(self.ent_import_rate, self.default_import)
@@ -2998,6 +3013,7 @@ class GridLock(hass.Hass):
                 "comfort_below": float(z.get("comfort_below", 1.0)),
                 "comfort_above": float(z.get("comfort_above", 1.0)),
                 "tariff_optimise": bool(z.get("tariff_optimise", True)),
+                "comfort_priority": str(z.get("comfort_priority", "cop")),
                 "thermal_power_entity": z.get("thermal_power_entity"),
                 "flow_temp_entity": z.get("flow_temp_entity"),
                 "return_temp_entity": z.get("return_temp_entity"),
@@ -3216,8 +3232,19 @@ class GridLock(hass.Hass):
             start_iso = end_iso = None
         w_cop = (sum(cops[window[0]:window[1]]) / run_slots) if window else None
         w_price = (sum(rates[window[0]:window[1]]) / run_slots) if window else None
+        # A plain word for the dashboard -- booleans that are False don't
+        # survive the trip through HA's attribute store (see _never_zero_deep).
+        if committed is not None:
+            status = "running"
+        elif skipped:
+            status = "skipped"
+        elif not needed:
+            status = "not_needed"
+        else:
+            status = "waiting"
         return {"heat_now": committed is not None,
                 "committed": committed is not None,
+                "status": status,
                 "pricing_mode": pricing_mode,
                 "needed": needed,
                 "skipped_covered": skipped,
@@ -3269,11 +3296,17 @@ class GridLock(hass.Hass):
             zone["flow_min"] - zone["water_dt"] / 2.0, tgt[0] if tgt else internal_temp, emitter))
         cop_low = [core_flow.cop_estimate(zone["flow_min"], e, eta) for e in ext]
         cop_high = [core_flow.cop_estimate(zone["flow_max"], e, eta) for e in ext]
+        hp = self._hp_live(zone)
+        delivering_kwh = ((hp["thermal_kw"] or 0.0) * slot_hours
+                          if self._thermal_heating_on(zone) else 0.0)
         plan, status = core_flow.plan_heating(
             internal_temp, ext, rates, tgt, params,
             comfort_below=zone["comfort_below"], comfort_above=zone["comfort_above"],
             slot_hours=slot_hours, low_flow_power_w=low_w, cop_low_curve=cop_low,
-            cop_high_curve=cop_high, max_power_w=max_w, solver=core_optimizer._solver())
+            cop_high_curve=cop_high, max_power_w=max_w, solver=core_optimizer._solver(),
+            heat_kwh_prev=delivering_kwh,
+            comfort_cost_per_degree_slot=core_flow.COMFORT_COST_BY_PRIORITY.get(
+                zone.get("comfort_priority", "cop"), core_flow.COMFORT_COST_PER_DEGREE_SLOT))
         if plan:
             required_w = max(0.0, plan[0]["heat_kwh"] * 1000.0 / slot_hours)
         else:
@@ -4142,6 +4175,16 @@ class GridLock(hass.Hass):
         if isinstance(entity_ids, str):
             entity_ids = [entity_ids]
         watched = [e for e in (entity_ids or []) if e in self.gridwarm_diagnostic_entities]
+        # GridWarm's own writes (a zone's on/off switch, its flow
+        # setpoint) go through this same event bus and used to be
+        # reported as "external" -- a notification for every command
+        # GridLock itself sent. Anything GridWarm controls is excluded;
+        # a genuinely external flip of those is caught by the read-back
+        # check and the live listener instead, and logged there.
+        own = set()
+        for zone in list(self.thermal_zones) + list((self._ui_zone_cache[1] or []) if self._ui_zone_cache else []):
+            own.update(e for e in (zone.get("control_entity"), zone.get("flow_entity")) if e)
+        watched = [e for e in watched if e not in own]
         if not watched:
             return
         now = self.get_now()
@@ -4156,11 +4199,15 @@ class GridLock(hass.Hass):
                 "value": value})
         self.heatpump_events = self.heatpump_events[-100:]
         self._save_json("heatpump_events.json", self.heatpump_events)
-        self._notify(
-            "GridLock: external command on a watched heat pump entity",
-            f"{', '.join(watched)} — {data.get('domain')}.{data.get('service')}"
-            f"{f' (value: {value})' if value is not None else ''}. "
-            "Not from GridLock — GridWarm never calls this service on this entity.")
+        # Logged on the GridWarm tab regardless; a push/persistent
+        # notification only if asked for (off by default -- it got noisy).
+        settings = self._ui_zone_cache[2] if self._ui_zone_cache else None
+        if settings and settings.get("notify_external_commands"):
+            self._notify(
+                "GridLock: external command on a watched heat pump entity",
+                f"{', '.join(watched)} — {data.get('domain')}.{data.get('service')}"
+                f"{f' (value: {value})' if value is not None else ''}. "
+                "Not from GridLock.")
 
     def poll_heatpump_diagnostics(self, kwargs):
         self._refresh_diagnostic_entities()

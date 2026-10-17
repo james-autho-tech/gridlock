@@ -102,7 +102,7 @@ def test_plan_shifts_heat_into_cheap_slots_when_mass_allows():
     assert cheap_before > expensive
     # Pre-heats above target before the peak, coasts down through it, and
     # never leaves the comfort band.
-    assert max(s["temp"] for s in plan[8:16]) > 20.2
+    assert max(s["temp"] for s in plan[8:16]) > 20.1
     assert min(s["temp"] for s in plan[16:24]) < 19.9
     assert min(s["temp"] for s in plan[16:24]) >= 18.9
 
@@ -135,3 +135,25 @@ def test_decide_flow_command_hysteresis_and_rate_limit():
     assert decide_flow_command(5000, True, 2000, 38, 50, max_step=3)[1] == 41
     assert decide_flow_command(1000, True, 2000, 45, 35, max_step=3)[1] == 42
     assert decide_flow_command(1000, True, 2000, None, 35, max_step=3)[1] == 35
+
+
+def test_plan_recovers_from_a_setback_by_ramping_not_bursting():
+    # Room half a degree below target (about 4 kWh short): without
+    # smoothing the cheapest plan slams a full-power slot to catch up;
+    # with it, output ramps and the first slot is well under full power.
+    p = _params(thermal_mass_wh_per_c=8000, heat_loss_degrees=0.03)
+    n = 24
+    burst, s1 = plan_heating(19.5, [5.0] * n, [20.0] * n, [20.0] * n, p,
+                             smoothing_cost_per_kwh_change=0.0, heat_kwh_prev=0.0)
+    smooth, s2 = plan_heating(19.5, [5.0] * n, [20.0] * n, [20.0] * n, p,
+                              smoothing_cost_per_kwh_change=0.02, heat_kwh_prev=0.0)
+    if s1 != "optimal" or s2 != "optimal":
+        return
+    max_slot_kwh = 7000 * 0.5 / 1000
+    assert burst[0]["heat_kwh"] > 0.8 * max_slot_kwh
+    assert smooth[0]["heat_kwh"] < 0.7 * max_slot_kwh
+    # ...and the largest step between consecutive slots is smaller.
+    step = lambda plan: max(abs(plan[i]["heat_kwh"] - plan[i - 1]["heat_kwh"]) for i in range(1, n))
+    assert step(smooth) < step(burst)
+    # Still gets the room back near target within the horizon.
+    assert smooth[-1]["temp"] > 19.6

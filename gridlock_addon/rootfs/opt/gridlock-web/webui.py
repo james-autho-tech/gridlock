@@ -1154,7 +1154,8 @@ function renderSpaceHeatingSettings(s) {
         + num('target_temp', 'Target °C', 0.5)
         + num('control_safety_min_temp', 'Safety floor °C', 0.5, 'Heat regardless of plan below this.')
         + inp('name', 'Zone name')
-        + chk('configured', 'Show this zone', 'predicted and shown on this tab'))}
+        + chk('configured', 'Show this zone', 'predicted and shown on this tab')
+        + chk('notify_external_commands', 'Notify on external heat pump commands', 'push a notification when something other than GridLock commands a watched entity (always listed on this tab anyway)'))}
       ${section('Flow temperature & comfort', 'How far the flow temperature may go, and how much the room may drift to chase cheaper half-hours.',
         num('flow_min', 'Lowest flow °C', 1, 'The unit\'s own heating-mode minimum is 35 °C unless its T1S low-temperature setting is enabled.')
         + num('flow_max', 'Highest flow °C', 1)
@@ -1163,6 +1164,11 @@ function renderSpaceHeatingSettings(s) {
         + num('water_dt', 'Flow/return split °C', 0.5)
         + num('emitter_rated_w_at_dt50', 'Radiator output at ΔT50, W', 100, 'Total for the loop, as datasheets quote it. Self-refines from the heat pump\'s measured output.')
         + num('cop_eta', 'COP factor (fraction of Carnot)', 0.01, 'Self-refines from the live COP sensor.')
+        + `<div><div class="lbl">Priority inside the comfort band</div><select class="gl-inp" data-key="comfort_priority" onchange="shEdit(this)">
+            <option value="cop" ${shVal(s, 'comfort_priority') === 'cop' ? 'selected' : ''}>COP — drift anywhere in the band for the warmest hours and lowest flow</option>
+            <option value="balanced" ${shVal(s, 'comfort_priority') === 'balanced' ? 'selected' : ''}>balanced</option>
+            <option value="comfort" ${shVal(s, 'comfort_priority') === 'comfort' ? 'selected' : ''}>comfort — hug the target</option>
+          </select><div style="color:var(--dim);font-size:10px;margin-top:2px">The band edges (drift below / pre-heat above) are always enforced — that is what keeps the house heated.</div></div>`
         + `<div><div class="lbl">Price a kWh of heating electricity by</div><select class="gl-inp" data-key="heat_pricing" onchange="shEdit(this)">
             <option value="battery" ${shVal(s, 'heat_pricing') === 'battery' ? 'selected' : ''}>the battery plan — COP first while the battery covers it</option>
             <option value="cop" ${shVal(s, 'heat_pricing') === 'cop' ? 'selected' : ''}>nothing — just maximise COP</option>
@@ -1296,11 +1302,16 @@ function renderHotWaterHero(d) {
   const t = iso => iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
   const day = iso => iso ? (new Date(iso).toDateString() === new Date().toDateString() ? 'today' : 'tomorrow') : '';
   const tankTile = `<div class="gl-tile"><div class="lbl">Tank</div><div class="val num">${n1(z.current_temp, 1, '°C')}</div><div class="sub">setpoint ${n1(w.setpoint, 0, '°C')} · unit starts a run below ${n1(Number(w.setpoint) - Number(w.start_hysteresis), 0, '°C')}${z.showers_available != null ? ` · ${n1(z.showers_available, 1)} showers in it` : ''}</div></div>`;
-  const runTile = w.committed
-    ? `<div class="gl-tile"><div class="lbl">Run</div><div class="val" style="font-size:16px;color:var(--green)">🔥 Running now</div><div class="sub">until ${t(w.window_end)} · ${w.will_heat ? 'tank below the start point, so it is heating' : 'tank already above the unit\'s start point — nothing to do'}</div></div>`
-    : w.skipped_covered
+  const startPoint = n1(Number(w.setpoint) - Number(w.start_hysteresis), 0, '°C');
+  const status = w.status || (w.committed ? 'running' : w.skipped_covered ? 'skipped' : (w.needed ? 'waiting' : 'not_needed'));
+  const windowText = `${t(w.window_start)}–${t(w.window_end)} ${day(w.window_start)} at ${n1(w.window_price, 1, 'p')} / COP ${n1(w.window_cop, 2)}`;
+  const runTile = status === 'running'
+    ? `<div class="gl-tile"><div class="lbl">Run</div><div class="val" style="font-size:16px;color:var(--green)">🔥 Running now</div><div class="sub">until ${t(w.window_end)} · ${w.will_heat ? 'tank below the start point, so it is heating' : 'tank already above the unit’s start point — nothing to do'}</div></div>`
+    : status === 'skipped'
       ? `<div class="gl-tile"><div class="lbl">Run</div><div class="val" style="font-size:16px">Skipped</div><div class="sub">tank already covers the usage expected before the next chance</div></div>`
-      : `<div class="gl-tile"><div class="lbl">Next run</div><div class="val num" style="font-size:18px">${t(w.window_start)}–${t(w.window_end)} <span style="font-size:11px;color:var(--dim)">${day(w.window_start)}</span></div><div class="sub">cheapest by price ÷ COP: ${n1(w.window_price, 1, 'p')} at COP ${n1(w.window_cop, 2)} (now ${n1(w.price_now, 1, 'p')} / ${n1(w.cop_now, 2)}) · must finish within ${n1(w.deadline_hours, 1, ' h')}${w.ready_by ? `, before the ${t(w.ready_by)} usage` : ''}</div></div>`;
+      : status === 'not_needed'
+        ? `<div class="gl-tile"><div class="lbl">Run</div><div class="val" style="font-size:16px">Not needed</div><div class="sub">tank ${n1(z.current_temp, 0, '°C')} — the unit only starts a run below ${startPoint}. Once it drops, the cheapest window as of now would be ${windowText}; forced within ${n1(w.deadline_hours, 1, ' h')} regardless</div></div>`
+        : `<div class="gl-tile"><div class="lbl">Next run</div><div class="val num" style="font-size:18px">${t(w.window_start)}–${t(w.window_end)} <span style="font-size:11px;color:var(--dim)">${day(w.window_start)}</span></div><div class="sub">tank below ${startPoint}, waiting for the cheapest window: ${n1(w.window_price, 1, 'p')} at COP ${n1(w.window_cop, 2)} (now ${n1(w.price_now, 1, 'p')} / ${n1(w.cop_now, 2)}) · must finish within ${n1(w.deadline_hours, 1, ' h')}${w.ready_by ? `, before the ${t(w.ready_by)} usage` : ''}</div></div>`;
   const usageTile = `<div class="gl-tile"><div class="lbl">Usage learned</div><div class="val num">${n1(w.expected_24h_kwh, 1, ' kWh')}</div><div class="sub">expected next 24 h, from ${w.usage_days_learned || 0} day${w.usage_days_learned === 1 ? '' : 's'} of watching the tank${(w.usage_days_learned || 0) < 3 ? ' — still learning' : ''}</div></div>`;
   const pauseBtn = c.pause_helper
     ? (c.paused && d.gridwarm_control_mode === 'active'

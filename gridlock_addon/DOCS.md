@@ -464,6 +464,14 @@ controller should:
   Demand hysteresis stops the compressor being started for a trickle it
   can't modulate down to (on at half the unit's minimum output, off below
   a fifth), and setpoint moves are rate-limited per tick.
+- **Low and slow, COP over comfort.** Heat delivered gently (at the
+  lowest flow) is priced at a better COP than heat delivered hard, and
+  every change in output between half-hours carries a smoothing cost, so
+  the plan spreads heat thinly across many hours and ramps rather than
+  bursts after a setback. "Priority inside the comfort band" (default
+  COP) lets the room drift anywhere inside the band to catch the warmest
+  hours; leaving the band is always penalised heavily, which is what
+  keeps the house heated.
 - **Learn.** From the unit's own readings while heating: the radiator
   rating from measured thermal output vs mean water temperature above the
   room, the COP factor (fraction of Carnot) from the live COP sensor, and
@@ -498,14 +506,16 @@ COP they get there.
 
 **How low can the flow go?** Only as low as the unit allows. The Midea
 controller reports its heating setpoint range in
-`sensor.<device>_temperature_lower/upper_limit_of_t1s_heating_zone_1` —
-35 to 65°C with the installer setting "T1S heating high/low temperature"
-on HIGH (the radiator range); anything written below the lower limit is
-snapped straight back to it within seconds. The LOW range (25 to 55°C) is
-an installer-menu setting on the unit's wired controller; on the unit
-this was built against, writing that parameter bit over Modbus was
-silently reverted too, so it has to be changed on the controller itself.
-Set "Lowest flow °C" in the form to whatever the unit then reports.
+`sensor.<device>_temperature_lower/upper_limit_of_t1s_heating_zone_1`:
+35 to 65°C with the zone 1 emission type on "Radiator", and anything
+written below the lower limit is snapped straight back within seconds.
+Setting `select.<device>_zone_1_end_heating_mode_emission_type` to
+"Underfloor Heating" switches the range to 25 to 55°C — confirmed on real
+hardware, accepted over Modbus, no fault, no other parameter bit
+disturbed (the "high/low" bit itself is derived from it and can't be
+written directly). With radiators that only changes the allowed
+setpoint range, which is the point: the plan can run genuinely low on
+mild days. "Lowest flow °C" in the form defaults to 25 accordingly.
 
 The house panel at the top of the tab shows room, target (−/+), flow
 setpoint (commanded, what the unit has, actual outlet/return water),
@@ -543,6 +553,11 @@ gets power*:
   finishes a run before the first expected draw-off of the day, and skips
   a window entirely when the tank already covers what's expected before
   the next chance. The panel shows how many days it has learned from.
+- **Free electricity hours.** EDF Flextras hours you've booked (and
+  Power Perks / Sunday Saver windows) are read from the integration's
+  free-session entities and priced at 0p in the plan, so the heating
+  plan pre-heats to the top of the comfort band and the hot water run
+  lands in them whenever they're within reach.
 - **The unit's own timer.** There's no Modbus register for it, so it
   can't be deleted from HA — turn it off on the wired controller if you
   can. If it fires anyway, GridWarm watches the DHW switch live and puts

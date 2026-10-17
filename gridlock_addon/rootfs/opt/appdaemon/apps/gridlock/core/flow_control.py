@@ -62,6 +62,23 @@ COMFORT_PENALTY_PER_DEGREE_SLOT = 100.0
 # peak/off-peak gap, not a fraction of a penny.
 COMFORT_COST_PER_DEGREE_SLOT = 0.02
 
+# Heat pumps like low and slow: a long gentle run at low flow beats
+# bursts at high flow (better COP at part load, no start-up losses, no
+# cycling). The COP split above already prices gentle heat below hard
+# heat, but after a setback the comfort cost alone would still reward
+# recovering fast. This charges every kWh of change in heat output
+# between consecutive slots, so the plan ramps rather than steps. £ per
+# kWh of change -- about half a typical kWh-of-heat cost, enough to
+# smooth, not enough to stop a genuine shift into a cheap slot.
+SMOOTHING_COST_PER_KWH_CHANGE = 0.02
+
+# How hard the plan tracks the target inside the band (£ per °C per
+# slot). "cop": nearly free to drift anywhere in the band to catch the
+# warmest hours and the lowest flow -- the band edges are what keep the
+# house heated. "comfort": hugs the target. Leaving the band is always
+# penalised heavily (COMFORT_PENALTY_PER_DEGREE_SLOT) whatever this is.
+COMFORT_COST_BY_PRIORITY = {"cop": 0.005, "balanced": COMFORT_COST_PER_DEGREE_SLOT, "comfort": 0.05}
+
 
 def emitter_output_w(mean_water_temp, room_temp, rated_w_at_dt50, exponent=EMITTER_EXPONENT):
     """Radiator output at a given mean water temperature. Zero at or
@@ -154,7 +171,9 @@ def plan_heating(temp0, external_curve, rate_curve, target_curve, params, *,
                  comfort_below=1.0, comfort_above=1.0, slot_hours=0.5,
                  low_flow_power_w=None, cop_low_curve=None, cop_high_curve=None,
                  max_power_w=None, solver=None,
-                 comfort_cost_per_degree_slot=COMFORT_COST_PER_DEGREE_SLOT):
+                 comfort_cost_per_degree_slot=COMFORT_COST_PER_DEGREE_SLOT,
+                 smoothing_cost_per_kwh_change=SMOOTHING_COST_PER_KWH_CHANGE,
+                 heat_kwh_prev=None):
     """The heating plan: heat to deliver per slot (kWh) over the horizon
     at least cost, keeping the room inside [target - comfort_below,
     target + comfort_above]. Linear programme (PuLP) -- see the module
@@ -211,6 +230,7 @@ def plan_heating(temp0, external_curve, rate_curve, target_curve, params, *,
         over = [pulp.LpVariable(f"over_{i}", 0) for i in range(n)]
         dev_lo = [pulp.LpVariable(f"dev_lo_{i}", 0) for i in range(n)]
         dev_hi = [pulp.LpVariable(f"dev_hi_{i}", 0) for i in range(n)]
+        ramp = [pulp.LpVariable(f"ramp_{i}", 0) for i in range(n)]
         cost_terms = []
         prev = temp0
         for i in range(n):
@@ -230,6 +250,15 @@ def plan_heating(temp0, external_curve, rate_curve, target_curve, params, *,
             cost_terms.append(q_hi[i] / max(cop_high_curve[i], 0.1) * price)
             cost_terms.append((under[i] + over[i]) * COMFORT_PENALTY_PER_DEGREE_SLOT)
             cost_terms.append((dev_lo[i] + dev_hi[i]) * comfort_cost_per_degree_slot)
+            # |heat_i - heat_{i-1}| <= ramp_i, charged in the objective.
+            # heat_kwh_prev anchors slot 0 to what's being delivered now,
+            # so a re-plan doesn't itself cause a step.
+            q_i = q_lo[i] + q_hi[i]
+            q_prev = (q_lo[i - 1] + q_hi[i - 1]) if i > 0 else heat_kwh_prev
+            if q_prev is not None:
+                prob += ramp[i] >= q_i - q_prev
+                prob += ramp[i] >= q_prev - q_i
+                cost_terms.append(ramp[i] * smoothing_cost_per_kwh_change)
             prev = temp[i]
         # Don't let the plan coast to the bottom of the band right at the
         # horizon's end just because nothing after it is priced.

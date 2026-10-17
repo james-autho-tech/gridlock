@@ -91,9 +91,11 @@ DEFAULTS = {
     # the plan, instead of just switching heating on and off at whatever
     # the unit's fixed setpoint is -- that's where the COP comes from.
     "flow_entity": "number.loft_heatpump_controller_set_water_temperature_t1s_zone_1",
-    # The unit's own heating-mode T1S range is 35-65 °C; 50 is plenty for
-    # radiators, and the plan should rarely need anything near it.
-    "flow_min": 35.0,
+    # With the unit's zone 1 emission type set to "Underfloor Heating"
+    # its T1S range is 25-55 °C (on "Radiator" it's 35-65 and anything
+    # lower is snapped back). 25 lets the plan run genuinely low on
+    # mild days; 50 is plenty for radiators at the other end.
+    "flow_min": 25.0,
     "flow_max": 50.0,
     "flow_max_step": 3.0,      # °C per 5-min tick, rate limit on setpoint moves
     "flow_fallback": 38.0,     # flow CAP while there's no room reading (weather compensation only)
@@ -119,6 +121,13 @@ DEFAULTS = {
     #   "cop"     -- ignore prices entirely, minimise electricity.
     #   "tariff"  -- the raw import rate, as if there were no battery.
     "heat_pricing": "battery",
+    # COP over comfort: inside the comfort band the plan drifts freely to
+    # catch the warmest hours and the lowest flow; the band edges are
+    # what make sure the house is actually heated.
+    "comfort_priority": "cop",
+    # A persistent/push notification for every external service call on
+    # a watched heat pump entity. Off: still listed on the GridWarm tab.
+    "notify_external_commands": False,
     # Live readings for learning the emitter curve, COP factor and
     # thermal mass (all optional -- without them the starting values
     # above just stay put).
@@ -283,7 +292,7 @@ ENTITY_FIELDS = ("internal_temp_entity", "internal_temp_fallback_entity",
                  "control_entity", "heating_entity", "cop_entity", "flow_entity",
                  "thermal_power_entity", "flow_temp_entity", "return_temp_entity",
                  "compressor_entity")
-BOOL_FIELDS = ("configured", "tariff_optimise")
+BOOL_FIELDS = ("configured", "tariff_optimise", "notify_external_commands")
 
 
 def _clean_entity(value):
@@ -337,6 +346,8 @@ def merge_settings(saved):
         out["control_requires"] = clean_requirements(saved["control_requires"])
     if str(saved.get("heat_pricing", "")).lower() in ("battery", "cop", "tariff"):
         out["heat_pricing"] = str(saved["heat_pricing"]).lower()
+    if str(saved.get("comfort_priority", "")).lower() in ("cop", "balanced", "comfort"):
+        out["comfort_priority"] = str(saved["comfort_priority"]).lower()
     if out["flow_max"] < out["flow_min"]:
         out["flow_max"] = out["flow_min"]
     # The hot water zone rides along in the same file under its own key.
@@ -384,6 +395,7 @@ def to_zone_cfg(settings):
         "comfort_above": settings["comfort_above"],
         "tariff_optimise": settings["tariff_optimise"],
         "heat_pricing": settings["heat_pricing"],
+        "comfort_priority": settings["comfort_priority"],
         "thermal_power_entity": settings["thermal_power_entity"],
         "flow_temp_entity": settings["flow_temp_entity"],
         "return_temp_entity": settings["return_temp_entity"],

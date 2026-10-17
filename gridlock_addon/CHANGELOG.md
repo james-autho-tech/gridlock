@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.50.0 - 2026-10-17
+
+### New
+- COP over comfort: a "Priority inside the comfort band" setting, defaulting to COP — the plan drifts freely within the band to catch the warmest hours and the lowest flow, while leaving the band stays heavily penalised, so the house is still kept heated
+- Low and slow: the heating plan now charges every change in heat output between half-hours, anchored to what the unit is delivering right now, so after a setback it ramps up at low flow rather than slamming full power like a boiler
+- Booked EDF Flextras hours (and any other free session the integration lists) are read from the free-session events entity and priced at 0p in the plan, so heating pre-heats and hot water runs land in them
+- Flow floor of 25 °C: with the unit's zone 1 emission type set to "Underfloor Heating" its setpoint range becomes 25–55 °C (confirmed on real hardware, accepted over Modbus, no fault); "Lowest flow °C" now defaults to 25
+- Hot water panel says "Not needed" with the unit's start point when the tank is warm, instead of implying a run is about to start
+
+### Fix
+- GridWarm's own switch and setpoint commands were being reported as "external commands" by the diagnostics watcher, with a notification each time — its own controlled entities are now excluded, and the external-command notification is opt-in (still listed on the tab)
+
 ## 3.49.0 - 2026-10-17
 
 ### New
