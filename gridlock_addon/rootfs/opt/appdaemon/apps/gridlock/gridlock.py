@@ -48,7 +48,12 @@ PLAN_TABLE_COLS = ["slot", "import_p", "export_p", "pv_kwh", "load_kwh",
                    "session_reward_p",
                    "session_baseline_kwh", "session_export_baseline_kwh",
                    "soc_pct", "cost_delta_p", "total_gbp",
-                   "import_rank", "export_rank"]
+                   "import_rank", "export_rank",
+                   # GridWarm's planned heat pump electricity in this slot
+                   # (space heating + hot water run), already inside
+                   # load_kwh -- carried separately so the plan view can
+                   # show what the battery is being asked to carry for it.
+                   "heatpump_kwh"]
 
 # Every HA integration whose entities this app auto-discovers by name
 # that's actually a Kraken-platform fork sharing BottlecapDave's own
@@ -2656,7 +2661,8 @@ class GridLock(hass.Hass):
                 round(session_baseline_kwh, 3),
                 round(session_export_baseline_kwh, 3),
                 trace[i], round(delta_p, 2), cost_trace[i]["total"],
-                imp_rank[i], exp_rank[i]]
+                imp_rank[i], exp_rank[i],
+                round(self._heatpump_slot_kwh(s["start"]), 3)]
             plan_row = [self._json_safe(v) for v in plan_row]
             if len(plan_row) != len(PLAN_TABLE_COLS):
                 self.log(f"plan_table row has {len(plan_row)} values, expected "
@@ -3932,7 +3938,15 @@ class GridLock(hass.Hass):
                               "blocked": unmet, "blocked_items": blocked_items,
                               "rejected": state["rejected"], "live_state": live_state,
                               "flow_entity": zone["flow_entity"],
-                              "flow_setpoint": state.get("flow_setpoint")}
+                              "flow_setpoint": state.get("flow_setpoint"),
+                              # A plain word -- False booleans don't survive the
+                              # trip through HA's attribute store, so "off" and
+                              # "never decided" looked identical on the dashboard.
+                              "status": ("paused" if paused else "blocked" if unmet
+                                         else "rejected" if state["rejected"]
+                                         else "heating" if state["last_commanded"]
+                                         else "off" if state["last_commanded"] is False
+                                         else "pending")}
         if paused:
             state["blocked_key"] = None
             return
@@ -4004,6 +4018,7 @@ class GridLock(hass.Hass):
                 zone["control_safety_min_temp"], off_duration_hours, zone["control_max_off_hours"])
         state["off_since"] = None if command else (state["off_since"] or now)
         result["control"]["commanded"] = command
+        result["control"]["status"] = "heating" if command else "off"
         # Flow setpoint first, then the on/off switch -- so the unit starts
         # at the temperature the plan wants, not at whatever was left.
         if flow_entity and setpoint is not None and command:
@@ -4129,6 +4144,22 @@ class GridLock(hass.Hass):
                                    "space_heating_settings": ui_settings,
                                    "hot_water_settings": ui_settings["hot_water"],
                                    "zones": zones_out})
+
+    def _heatpump_slot_kwh(self, slot_start):
+        """GridWarm's planned heat pump electricity for one plan slot --
+        the figure the load forecast is already carrying (planned where
+        there is a plan, else that circuit's learned profile)."""
+        try:
+            planned = self.load_provider.planned_circuit_kwh.get(HEATPUMP_POWER_ENTITY) or {}
+            v = planned.get(self.load_provider.slot_key(slot_start))
+            if v is not None:
+                return float(v)
+            if HEATPUMP_POWER_ENTITY in (self.load_provider.circuit_power_entities or []):
+                slot_idx = str(slot_start.hour * 2 + (1 if slot_start.minute >= 30 else 0))
+                return float(self.load_provider.circuit_profiles.get(HEATPUMP_POWER_ENTITY, {}).get(slot_idx, 0.0))
+        except Exception:  # noqa: BLE001 — a display figure, never worth failing the plan over
+            pass
+        return 0.0
 
     def _publish_heatpump_load(self, zones, zones_out, now):
         """Tell the battery plan what the heat pump will draw (see

@@ -845,6 +845,7 @@ const PLAN_CSV_HEADERS = {
   soc_pct: 'SoC (%)',
   cost_delta_p: 'Grid cost delta (p)', total_gbp: 'Grid total (£)',
   import_rank: 'Import rank', export_rank: 'Export rank',
+  heatpump_kwh: 'Heat pump kWh (planned, part of Load)',
 };
 function downloadPlanCsv() {
   const cols = latestPlanTable.columns || [];
@@ -1216,11 +1217,12 @@ function houseStatusPill(z, d) {
   const c = z.control;
   if (!c) return '<span class="gl-pill gl-pill-eco">Predict only</span>';
   if (d.gridwarm_control_mode !== 'active') return '<span class="gl-pill gl-pill-eco">READ-ONLY — not commanding</span>';
-  if (c.paused) return '<span class="gl-pill gl-pill-eco">⏸️ Paused</span>';
-  if (c.blocked && c.blocked.length) return '<span class="gl-pill gl-pill-bypass">⛔ Blocked</span>';
-  if (c.rejected) return '<span class="gl-pill gl-pill-storm">⚠️ Reverted by the unit</span>';
-  if (c.commanded) return '<span class="gl-pill gl-pill-charge">🔥 Heating</span>';
-  if (c.commanded === false) return '<span class="gl-pill gl-pill-eco">Off — warm enough</span>';
+  const st = c.status || (c.paused ? 'paused' : (c.blocked && c.blocked.length) ? 'blocked' : c.rejected ? 'rejected' : c.commanded ? 'heating' : 'pending');
+  if (st === 'paused') return '<span class="gl-pill gl-pill-eco">⏸️ Paused</span>';
+  if (st === 'blocked') return '<span class="gl-pill gl-pill-bypass">⛔ Blocked</span>';
+  if (st === 'rejected') return '<span class="gl-pill gl-pill-storm">⚠️ Reverted by the unit</span>';
+  if (st === 'heating') return '<span class="gl-pill gl-pill-charge">🔥 Heating</span>';
+  if (st === 'off') return `<span class="gl-pill gl-pill-eco">Off — ${z.dhw ? 'tank warm enough' : 'warm enough'}</span>`;
   return '<span class="gl-pill gl-pill-eco">Waiting for first tick</span>';
 }
 let hwBusy = false;
@@ -1922,6 +1924,7 @@ function renderPlanTable(table, opts) {
       <td style="background:${heatColor(r.export_p, cheapP)}">${Number(r.export_p).toFixed(1)}p</td>
       <td style="background:${magnitudeColor(r.pv_kwh, maxPv, true)}">${Number(r.pv_kwh).toFixed(2)}</td>
       <td style="background:${magnitudeColor(r.load_kwh, maxLoad, false)}">${Number(r.load_kwh).toFixed(2)}</td>
+      <td class="num" title="GridWarm's planned heat pump electricity this slot (space heating + hot water) — already included in Load">${Number(r.heatpump_kwh) > 0.0005 ? Number(r.heatpump_kwh).toFixed(2) : '—'}</td>
       <td style="background:${magnitudeColor(r.grid_kwh, maxGrid, false)}">${Number(r.grid_kwh).toFixed(2)}</td>
       <td style="background:${magnitudeColor(r.charge_kwh, maxCharge, false)}">${Number(r.charge_kwh).toFixed(2)}</td>
       <td class="num" style="background:${magnitudeColor(r.battery_kwh, maxBattery, false)}" title="Battery-side kWh discharged this slot (self-consumption + export combined) — read directly off this row, not a SoC difference against the row above">${Number(r.battery_kwh).toFixed(2)}</td>
@@ -1935,7 +1938,7 @@ function renderPlanTable(table, opts) {
     </tr>`;
   }).join('');
   return `<table class="gl-plan">
-    <tr><th>Slot</th><th>Import</th><th>Export</th><th>PV kWh</th><th>Load kWh</th>
+    <tr><th>Slot</th><th>Import</th><th>Export</th><th>PV kWh</th><th>Load kWh</th><th title="Planned heat pump electricity, part of Load">of which HP</th>
         <th>Grid kWh</th><th>Charge kWh</th><th title="Battery kWh discharged this slot, self-consumption + export combined">Battery kWh</th>
         <th>Action</th>
         <th>EV kWh</th>
@@ -2160,12 +2163,16 @@ function renderForecastTriad(table) {
   const yS = pct => H - 6 - (Math.min(100, Math.max(0, pct)) / 100) * (H - 16);
   const pvPts = triadRows.map((r, i) => `${triadX(i, n).toFixed(1)},${yE(Number(r.pv_kwh)).toFixed(1)}`).join(' ');
   const loadPts = triadRows.map((r, i) => `${triadX(i, n).toFixed(1)},${yE(Number(r.load_kwh)).toFixed(1)}`).join(' ');
+  const hasHp = triadRows.some(r => Number(r.heatpump_kwh) > 0.0005);
+  const hpPts = triadRows.map((r, i) => `${triadX(i, n).toFixed(1)},${yE(Number(r.heatpump_kwh) || 0).toFixed(1)}`).join(' ');
+  const hpArea = `M0,${H} L${hpPts} L${VB_W},${H} Z`;
   const socPts = triadRows.map((r, i) => `${triadX(i, n).toFixed(1)},${yS(Number(r.soc_pct)).toFixed(1)}`).join(' ');
   const pvArea = `M0,${H} L${pvPts} L${VB_W},${H} Z`;
   const chart1 = `
     <svg class="gl-triad-chart" viewBox="0 0 ${VB_W} ${H}" preserveAspectRatio="none"
          onmousemove="triadHover(event,this)" onmouseleave="triadLeave()">
       <path d="${pvArea}" fill="var(--amber)" opacity="0.25" />
+      ${hasHp ? `<path d="${hpArea}" fill="var(--green)" opacity="0.28" /><polyline points="${hpPts}" fill="none" stroke="var(--green)" stroke-width="1.5" />` : ''}
       <polyline points="${pvPts}" fill="none" stroke="var(--amber)" stroke-width="2" />
       <polyline points="${loadPts}" fill="none" stroke="var(--violet)" stroke-width="2" stroke-dasharray="4,3" />
       <polyline points="${socPts}" fill="none" stroke="var(--cyan)" stroke-width="2.5" />
@@ -2204,6 +2211,7 @@ function renderForecastTriad(table) {
       <div class="gl-combo-legend" style="margin-bottom:4px">
         <span><span class="gl-legend-dot" style="background:var(--amber)"></span>Solar PV (kWh)</span>
         <span><span class="gl-legend-dot" style="background:var(--violet)"></span>Home load (kWh)</span>
+        ${hasHp ? '<span><span class="gl-legend-dot" style="background:var(--green)"></span>of which heat pump, as GridWarm plans it (kWh)</span>' : ''}
         <span><span class="gl-legend-dot" style="background:var(--cyan)"></span>Battery SoC (%)</span>
       </div>
       <span style="color:var(--dim);font-size:11px">kWh: 0–${maxE.toFixed(1)} · SoC: 0–100%</span>
@@ -2239,7 +2247,7 @@ function triadHover(evt, svgEl) {
   tt.style.display = 'block';
   tt.style.left = `${(frac * 100).toFixed(1)}%`;
   tt.innerHTML = `<b>${esc(row.slot)}</b><br>
-    PV ${Number(row.pv_kwh).toFixed(2)}kWh · Load ${Number(row.load_kwh).toFixed(2)}kWh<br>
+    PV ${Number(row.pv_kwh).toFixed(2)}kWh · Load ${Number(row.load_kwh).toFixed(2)}kWh${Number(row.heatpump_kwh) > 0.0005 ? ` (heat pump ${Number(row.heatpump_kwh).toFixed(2)})` : ''}<br>
     SoC ${Number(row.soc_pct).toFixed(0)}%<br>
     Import ${Number(row.import_p).toFixed(1)}p · Export ${Number(row.export_p).toFixed(1)}p<br>
     ${actionPill(row.action)}`;

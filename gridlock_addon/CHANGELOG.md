@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.52.0 - 2026-10-17
+
+### New
+- The heat pump's planned electricity is now a column of GridLock's own plan (`heatpump_kwh`, part of Load): shown as its own series on the Forecast chart, a column in the Plan table and the CSV export, so you can see what the battery plan is being asked to carry for heating and hot water, slot by slot
+
+### Fix
+- House and Hot water panels said "Waiting for first tick" for a zone that had decided "off" — a false boolean doesn't survive HA's attribute store; the engine now publishes a plain status word
+
 ## 3.51.2 - 2026-10-17
 
 ### Fix
