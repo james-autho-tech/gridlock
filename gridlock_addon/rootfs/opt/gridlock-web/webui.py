@@ -1247,6 +1247,18 @@ function houseStatusPill(z, d) {
   }
   return '<span class="gl-pill gl-pill-eco">Waiting for first tick</span>';
 }
+let tankSpBusy = false;
+async function setTankSetpoint(value) {
+  if (tankSpBusy) return;
+  tankSpBusy = true;
+  try {
+    const r = await fetch('api/gridwarm-tank-setpoint', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value }),
+    });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); window.alert(j.error || 'Could not set the tank temperature'); }
+  } catch (e) { window.alert('Could not reach GridLock.'); }
+  setTimeout(() => { tankSpBusy = false; refresh(); }, 2500);
+}
 let hwBusy = false;
 async function hwSet(key, el) {
   if (hwBusy) return;
@@ -1322,7 +1334,10 @@ function renderHotWaterSettings(hw) {
         ${hwEntitySelect(hw, 'cop_entity', 'Live COP', ['sensor'])}
         ${hwEntitySelect(hw, 'external_temp_entity', 'Outdoor temperature', ['temperature', 'sensor'], 'Blank = auto, from the weather entity.')}
         ${hwEntitySelect(hw, 'weather_entity', 'Weather forecast', ['weather'], 'Blank = auto: any weather entity that serves forecasts.')}
-        ${num('tank_litres', 'Tank size, litres', 10)}
+        <div><div class="lbl">Tank size</div><select class="gl-inp" onchange="hwSet('tank_litres', this)">
+          ${[90, 120, 150, 170, 180, 200, 210, 250, 300, 400].concat([Number(hw.tank_litres)]).filter((v, i, a) => a.indexOf(v) === i).sort((a, b) => a - b)
+            .map(v => `<option value="${v}" ${Number(hw.tank_litres) === v ? 'selected' : ''}>${v} litres</option>`).join('')}
+        </select><div style="color:var(--dim);font-size:10px;margin-top:2px">Sets run lengths, how long the tank lasts, and the shower estimate.</div></div>
         ${num('heat_loss_watts', 'Standing loss, W', 5)}
         ${num('heat_max_power', 'Heat pump DHW output, W', 100)}
         ${num('heating_cop', 'Assumed DHW COP (no live sensor)', 0.05)}
@@ -1341,7 +1356,9 @@ function renderHotWaterHero(d) {
   const winter = (w.daily_target && Number(w.daily_target) > Number(w.setpoint) + 0.5)
     ? ` · tonight to ${n1(w.daily_target, 0, '°C')} to last the day (loses ~${n1(w.daily_loss_c, 0)}°C/day to ${n1(w.tank_ambient_temp, 0, '°C')} surroundings)`
     : (w.daily_loss_c ? ` · loses ~${n1(w.daily_loss_c, 0)}°C/day` : '');
-  const tankTile = `<div class="gl-tile"><div class="lbl">Tank</div><div class="val num">${n1(z.current_temp, 1, '°C')}</div><div class="sub">setpoint ${n1(w.setpoint, 0, '°C')} · topped up when below ${n1(Number(w.setpoint) - Number(w.start_hysteresis), 0, '°C')}${z.showers_available != null ? (Number(z.showers_available) < 0.5 ? ' · below shower temperature' : ` · about ${Math.round(Number(z.showers_available))} showers in it`) : ''}${winter}</div></div>`;
+  const spNow = Number(w.setpoint);
+  const spCtl = Number.isFinite(spNow) ? `<span class="gl-stepper" title="Everyday tank temperature (written to the unit)"><button onclick="setTankSetpoint(${spNow - 1})">−</button><button onclick="setTankSetpoint(${spNow + 1})">+</button></span>` : '';
+  const tankTile = `<div class="gl-tile"><div class="lbl">Tank</div><div class="val num">${n1(z.current_temp, 1, '°C')}</div><div class="sub"><b style="color:var(--ink)">heats to ${n1(w.setpoint, 0, '°C')}</b>${spCtl} · topped up when below ${n1(Number(w.setpoint) - Number(w.start_hysteresis), 0, '°C')}${z.showers_available != null ? (Number(z.showers_available) < 0.5 ? ' · below shower temperature' : ` · about ${Math.round(Number(z.showers_available))} showers in it`) : ''}${winter}</div></div>`;
   const startPoint = n1(Number(w.setpoint) - Number(w.start_hysteresis), 0, '°C');
   const status = w.status || (w.committed ? 'running' : w.skipped_covered ? 'skipped' : (w.needed ? 'waiting' : 'not_needed'));
   const windowText = `${t(w.window_start)}–${t(w.window_end)} ${day(w.window_start)} at ${n1(w.window_price, 1, 'p')} / COP ${n1(w.window_cop, 2)}`;
@@ -3148,6 +3165,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_gridwarm_settings()
         elif path.endswith("/api/gridwarm-hot-water"):
             self._handle_gridwarm_hot_water()
+        elif path.endswith("/api/gridwarm-tank-setpoint"):
+            self._handle_gridwarm_tank_setpoint()
         elif path.endswith("/api/gridwarm-fix-requirement"):
             self._handle_gridwarm_fix_requirement()
         elif path.endswith("/api/warranty-add"):
@@ -3266,6 +3285,33 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 merged = merge_space_heating_settings(body)
             save_gridwarm_settings(space_heating_diff(merged))
             self._send(200, json.dumps({"ok": True, "settings": merged}).encode(), "application/json")
+        except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
+            self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
+
+    def _handle_gridwarm_tank_setpoint(self):
+        """The hot water tank's everyday temperature, written straight to
+        the unit's own DHW setpoint (the entity configured as the tank's
+        target). Bounded: below 40 °C a tank can't give a shower worth
+        having, above 60 °C is the legionella cycle's job, not daily use."""
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+            try:
+                value = float(body.get("value"))
+            except (TypeError, ValueError):
+                self._send(400, json.dumps({"error": "value must be a number"}).encode(), "application/json")
+                return
+            if not 40.0 <= value <= 60.0:
+                self._send(400, json.dumps({"error": "tank temperature must be between 40 and 60 °C"}).encode(),
+                           "application/json")
+                return
+            entity = merge_space_heating_settings(load_gridwarm_settings())["hot_water"].get("target_temp_entity")
+            if not entity:
+                self._send(400, json.dumps({"error": "no tank setpoint entity configured"}).encode(),
+                           "application/json")
+                return
+            ha_call_service("number/set_value", entity, value=round(value))
+            self._send(200, json.dumps({"ok": True, "value": round(value)}).encode(), "application/json")
         except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
             self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
 

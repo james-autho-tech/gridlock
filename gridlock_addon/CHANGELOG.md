@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.62.0 - 2026-10-18
+
+### New
+- Hot water panel: the tank's everyday temperature has −/+ buttons on the Tank tile, written straight to the unit's DHW setpoint (40–60 °C; the legionella cycle still goes to 60 °C on its own)
+- Tank size is a dropdown of common cylinder sizes in the hot water settings
+
 ## 3.61.1 - 2026-10-18
 
 ### Fix
