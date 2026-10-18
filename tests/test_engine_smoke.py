@@ -621,3 +621,20 @@ def test_compressor_minimum_output_is_learned_from_steady_low_speed_running(engi
     house = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]
     assert house["min_output_learned"] == "yes"
     assert 1150 < house["learned_min_output_w"] < 1500       # from the 2000 default toward 1200
+
+
+def test_a_30c_tank_in_the_evening_gets_a_long_enough_run_before_the_morning(engine):
+    g, _ = engine
+    _seed_house(g)
+    _seed_tank(g)
+    from datetime import timedelta
+    with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
+        json.dump({"hot_water": {"legionella_enabled": False}}, f)
+    g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "30.0"
+    now = g.get_now()
+    g._publish_thermal_forecast(now)
+    hw = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]
+    start, end = g._iso(hw["dhw"]["window_start"]), g._iso(hw["dhw"]["window_end"])
+    # 23 C x 174 Wh/C = 4 kWh at 3.5 kW ~ 69 min + 10 -> 1.5 h, not a flat hour
+    assert end - start >= timedelta(hours=1, minutes=30)
+    assert hw["dhw"]["status"] in ("waiting", "running")

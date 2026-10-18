@@ -3304,6 +3304,19 @@ class GridLock(hass.Hass):
             d.get("top_up_below", 25.0), base_sp, max(base_sp, d.get("max_daily_setpoint", 55.0)),
             zone["params"].thermal_mass_wh_per_c, zone["params"].heat_loss_watts,
             zone["params"].heat_loss_degrees, ambient, sum(expected[:48]))
+        # A normal run long enough to actually get there: the heat pump's
+        # share from the tank's temperature up to tonight's target (to the
+        # unit's own limit), the immersion's share above it, plus a margin.
+        # A fixed hour cut a cool tank off short of its setpoint.
+        if not lg.get("phase") and not lg_due:
+            t0n = tank_temp if tank_temp is not None else daily_target - hyst
+            hp_lim_n = d.get("hp_max_tank_temp", 55.0)
+            mass_n = max(zone["params"].thermal_mass_wh_per_c, 1.0)
+            need_min = ((max(0.0, min(daily_target, hp_lim_n) - t0n) * mass_n)
+                        / max(zone["params"].heat_max_power or 3500.0, 500.0)
+                        + (max(0.0, daily_target - max(t0n, hp_lim_n)) * mass_n)
+                        / max(d.get("immersion_power_w", 2000.0), 500.0)) * 60.0 + 10.0
+            run_slots = max(run_slots, core_dhw.run_slots_needed(min(need_min, 240.0), SLOT_MIN))
         if by is not None and core_dhw.unit_will_heat(tank_temp, daily_target, hyst):
             deadline = min(deadline, max(run_slots, by))
         # Genuinely low tank: top it up in the cheapest slot of the next

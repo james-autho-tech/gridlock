@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.59.1 - 2026-10-18
+
+### Fix
+- Ordinary hot water runs are sized from the tank's actual temperature (heat pump share to its limit, immersion share above, plus 10 minutes) instead of a fixed hour, which cut a cool tank off short of its setpoint — 30 °C to 53 °C now gets about 90 minutes
+
 ## 3.59.0 - 2026-10-18
 
 ### New
