@@ -501,3 +501,17 @@ def test_legionella_never_holds_the_circuit_past_the_window_or_retries_the_same_
     g._publish_thermal_forecast(now + timedelta(hours=3, minutes=10))
     hw = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]
     assert hw["dhw"]["legionella"]["phase"] in ("idle", "due") and hw["dhw"]["legionella"]["due"] is not True
+
+
+def test_legionella_window_is_sized_from_the_tank_not_a_fixed_three_hours(engine):
+    g, _ = engine
+    _seed_house(g)
+    _seed_tank(g)
+    from datetime import timedelta
+    g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "57.0"
+    now = g.get_now()
+    g._publish_thermal_forecast(now)
+    hw = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]
+    start, end = (g._iso(hw["dhw"]["window_start"]), g._iso(hw["dhw"]["window_end"]))
+    # 3 C on the immersion (~16 min) + 60 min hold + 10 min margin -> 1.5 h
+    assert (end - start) <= timedelta(hours=1, minutes=30)

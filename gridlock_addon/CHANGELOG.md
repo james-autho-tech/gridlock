@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.55.3 - 2026-10-18
+
+### Fix
+- Legionella window sized from the actual tank (heat pump share, immersion share, the hold and a 10-minute margin) instead of a fixed 3 hours
+
 ## 3.55.2 - 2026-10-18
 
 ### Fix

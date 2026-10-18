@@ -3206,7 +3206,19 @@ class GridLock(hass.Hass):
             except (ValueError, TypeError):
                 pass
             if lg_due and not lg.get("phase"):
-                run_slots = max(run_slots, core_dhw.run_slots_needed(lg_cfg["window_minutes"], SLOT_MIN))
+                # Window sized from the actual tank: the heat pump's share at
+                # its DHW output, the rest at the immersion's, plus the hold
+                # and a 10-minute margin -- capped by the configured maximum.
+                mass = max(zone["params"].thermal_mass_wh_per_c, 1.0)
+                t0 = tank_temp if tank_temp is not None else setpoint - hyst
+                hp_lim = d.get("hp_max_tank_temp", 55.0)
+                hp_wh = max(0.0, min(lg_cfg["temp"], hp_lim) - t0) * mass
+                imm_wh = max(0.0, lg_cfg["temp"] - max(t0, hp_lim)) * mass
+                imm_w = d.get("immersion_power_w", 2000.0)
+                heat_min = (hp_wh / max(zone["params"].heat_max_power or 3500.0, 500.0)
+                            + imm_wh / max(imm_w, 500.0)) * 60.0
+                cycle_min = min(lg_cfg["window_minutes"], heat_min + lg_cfg["hold_minutes"] + 10.0)
+                run_slots = max(run_slots, core_dhw.run_slots_needed(cycle_min, SLOT_MIN))
         # Cost of a kWh of hot water per slot: the COP at the flow the run
         # needs (setpoint + margin, or the legionella temperature on a cycle
         # night) in that slot's outdoor temperature -- colder air, worse COP
