@@ -3266,7 +3266,18 @@ class GridLock(hass.Hass):
         # by the evening) bound the deadline whenever a run is actually
         # needed -- the tank is below the point the unit starts at.
         by = core_dhw.slots_until_ready_by(now.astimezone(), d.get("ready_by_times") or [], SLOT_MIN)
-        if by is not None and core_dhw.unit_will_heat(tank_temp, setpoint, hyst):
+        # Winter: tonight's target, from the tank's learned losses against
+        # its surroundings and the learned usage, so it lasts the day.
+        base_sp = state.get("dhw_base_sp") or setpoint
+        if d.get("tank_ambient") == "outdoor":
+            ambient = sum(ext[:48]) / max(len(ext[:48]), 1) if ext else 10.0
+        else:
+            ambient = getattr(self, "_house_temp_now", None) or 18.0
+        daily_target, daily_loss_c = core_dhw.daily_target_temp(
+            d.get("top_up_below", 25.0), base_sp, max(base_sp, d.get("max_daily_setpoint", 55.0)),
+            zone["params"].thermal_mass_wh_per_c, zone["params"].heat_loss_watts,
+            zone["params"].heat_loss_degrees, ambient, sum(expected[:48]))
+        if by is not None and core_dhw.unit_will_heat(tank_temp, daily_target, hyst):
             deadline = min(deadline, max(run_slots, by))
         # Genuinely low tank: top it up in the cheapest slot of the next
         # couple of hours rather than waiting for the night.
@@ -3283,7 +3294,7 @@ class GridLock(hass.Hass):
         # before it gets chosen), when it's below the low threshold, on a
         # legionella night, or when a configured forced-run timer is up.
         needed = (low or lg_due or deadline <= run_slots
-                  or (by is not None and core_dhw.unit_will_heat(tank_temp, setpoint, hyst)))
+                  or (by is not None and core_dhw.unit_will_heat(tank_temp, daily_target, hyst)))
         skipped = False
         # A running legionella cycle never gets a fresh window booked under
         # it -- when its window ends the cycle stops (below), full stop.
@@ -3376,6 +3387,14 @@ class GridLock(hass.Hass):
                                           " on the heat pump alone"))
             lg_changed = lg_changed or lg.get("phase") != phase
         lg_active = bool(lg.get("phase"))
+        if not lg_active and setpoint_wanted is None:
+            if committed is not None and daily_target > base_sp + 0.5:
+                state["dhw_base_sp"] = base_sp
+                setpoint_wanted = daily_target
+            elif committed is None and state.get("dhw_base_sp"):
+                setpoint_wanted = state["dhw_base_sp"]
+                if abs(setpoint - state["dhw_base_sp"]) < 0.5:
+                    state["dhw_base_sp"] = None
         if lg_due and lg.get("last_done") == now.isoformat():
             lg_due = False   # finished this tick
         if lg_changed:
@@ -3432,6 +3451,8 @@ class GridLock(hass.Hass):
                 "committed": committed is not None,
                 "reason": reason,
                 "setpoint_wanted": setpoint_wanted,
+                "daily_target": daily_target, "daily_loss_c": daily_loss_c,
+                "tank_ambient_temp": round(ambient, 1),
                 "legionella": {"enabled": bool(lg_cfg.get("enabled")), "due": lg_due,
                                "phase": lg.get("phase") or ("due" if lg_due else "idle"),
                                "temp": lg_cfg.get("temp"), "hold_minutes": lg_cfg.get("hold_minutes"),
@@ -3868,6 +3889,8 @@ class GridLock(hass.Hass):
             target_temp = internal_temp
         external_now = self._thermal_external_temp(zone)
         heating_on = self._thermal_heating_on(zone)
+        if not zone["is_tank"]:
+            self._house_temp_now = internal_temp
         hp = self._hp_live(zone)
         self._update_flow_learning(zone, now, internal_temp, external_now, heating_on, hp)
         if zone.get("dhw"):

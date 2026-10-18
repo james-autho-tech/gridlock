@@ -1304,6 +1304,11 @@ function renderHotWaterSettings(hw) {
         ${txt('heating_entity_state', '…and the value that means heating', 'e.g. DHW')}
         ${num('control_safety_min_temp', 'Floor °C — force a run below this', 1, '20 = effectively off; the ready-by times and the daily guarantee do the work.')}
         ${txt('ready_by_times', 'Ready by (times, comma-separated)', 'The tank is heated to its setpoint before each of these, in the cheapest window — e.g. 06:30 for the morning.')}
+        <div><div class="lbl">Tank loses heat to</div><select class="gl-inp" onchange="hwSet('tank_ambient', this)">
+          <option value="house" ${hw.tank_ambient === 'house' ? 'selected' : ''}>the house (indoors, airing cupboard)</option>
+          <option value="outdoor" ${hw.tank_ambient === 'outdoor' ? 'selected' : ''}>the outdoors (loft, garage, outhouse)</option></select>
+          <div style="color:var(--dim);font-size:10px;margin-top:2px">Sets how much hotter the nightly run goes in winter so the tank lasts the day.</div></div>
+        ${num('max_daily_setpoint', 'Nightly run: never above °C', 1, '55 keeps it on the heat pump alone — above that the unit uses the immersion.')}
         ${num('top_up_below', 'Otherwise only top up below °C', 1, 'The tank stratifies — a cool sensor still leaves hot water at the top. Outside the ready-by run, heat only if the sensor drops below this.')}
         ${num('run_minutes', 'Window length, minutes', 5, 'How long the circuit is powered for per run.')}
         ${num('max_interval_hours', 'Run at least every … hours', 1, '0 = no guarantee, only the floor and learned usage.')}
@@ -1332,7 +1337,10 @@ function renderHotWaterHero(d) {
   const n1 = (v, dp = 1, unit = '') => (v === null || v === undefined || v === '' || Number.isNaN(Number(v))) ? '—' : `${Number(v).toFixed(dp)}${unit}`;
   const t = iso => iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
   const day = iso => iso ? (new Date(iso).toDateString() === new Date().toDateString() ? 'today' : 'tomorrow') : '';
-  const tankTile = `<div class="gl-tile"><div class="lbl">Tank</div><div class="val num">${n1(z.current_temp, 1, '°C')}</div><div class="sub">setpoint ${n1(w.setpoint, 0, '°C')} · topped up when below ${n1(Number(w.setpoint) - Number(w.start_hysteresis), 0, '°C')}${z.showers_available != null ? (Number(z.showers_available) < 0.5 ? ' · below shower temperature' : ` · about ${Math.round(Number(z.showers_available))} showers in it`) : ''}</div></div>`;
+  const winter = (w.daily_target && Number(w.daily_target) > Number(w.setpoint) + 0.5)
+    ? ` · tonight to ${n1(w.daily_target, 0, '°C')} to last the day (loses ~${n1(w.daily_loss_c, 0)}°C/day to ${n1(w.tank_ambient_temp, 0, '°C')} surroundings)`
+    : (w.daily_loss_c ? ` · loses ~${n1(w.daily_loss_c, 0)}°C/day` : '');
+  const tankTile = `<div class="gl-tile"><div class="lbl">Tank</div><div class="val num">${n1(z.current_temp, 1, '°C')}</div><div class="sub">setpoint ${n1(w.setpoint, 0, '°C')} · topped up when below ${n1(Number(w.setpoint) - Number(w.start_hysteresis), 0, '°C')}${z.showers_available != null ? (Number(z.showers_available) < 0.5 ? ' · below shower temperature' : ` · about ${Math.round(Number(z.showers_available))} showers in it`) : ''}${winter}</div></div>`;
   const startPoint = n1(Number(w.setpoint) - Number(w.start_hysteresis), 0, '°C');
   const status = w.status || (w.committed ? 'running' : w.skipped_covered ? 'skipped' : (w.needed ? 'waiting' : 'not_needed'));
   const windowText = `${t(w.window_start)}–${t(w.window_end)} ${day(w.window_start)} at ${n1(w.window_price, 1, 'p')} / COP ${n1(w.window_cop, 2)}`;

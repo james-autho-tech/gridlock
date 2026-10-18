@@ -88,3 +88,14 @@ def test_slots_until_ready_by_wraps_to_tomorrow_and_takes_the_nearest():
     assert slots_until_ready_by(datetime(2026, 10, 17, 12, 0), ["06:30", "18:30"], 30) == 13
     assert slots_until_ready_by(now, [], 30) is None
     assert slots_until_ready_by(now, ["garbage"], 30) is None
+
+
+
+def test_daily_target_rises_when_the_tank_loses_more():
+    from core.dhw_plan import daily_target_temp
+    mass = 174.0
+    mild, _ = daily_target_temp(25.0, 53.0, 55.0, mass, 60.0, 0.002, 18.0, 700.0)
+    assert mild == 53.0                                  # summer-ish: the normal setpoint lasts
+    cold, loss = daily_target_temp(25.0, 53.0, 55.0, mass, 60.0, 0.02, 2.0, 700.0)
+    assert cold == 55.0 and loss > 20                     # cold surroundings: goes up, capped at 55
+    assert daily_target_temp(25.0, 53.0, 60.0, mass, 60.0, 0.02, 2.0, 700.0)[0] > 55.0

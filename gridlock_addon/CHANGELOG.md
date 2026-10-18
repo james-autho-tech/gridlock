@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.57.0 - 2026-10-18
+
+### New
+- Winter-aware hot water: the nightly run heats hot enough that, after a day of the tank's learned standing loss (against the house, or the outdoors for a loft/garage tank) plus learned usage, it's still above the top-up line by the next night — never below the unit's setpoint, capped at 55 °C (the heat pump's own limit) by default; the setpoint is raised for the run and restored after. The tank tile shows the daily loss and tonight's target when it's above the setpoint
+
 ## 3.56.1 - 2026-10-18
 
 ### Fix

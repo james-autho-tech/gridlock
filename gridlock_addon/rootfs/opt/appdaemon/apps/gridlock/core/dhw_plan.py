@@ -171,3 +171,22 @@ def tank_can_cover(tank_temp, setpoint, start_hysteresis, mass_wh_per_c, expecte
     usable_wh = (tank_temp - (setpoint - start_hysteresis)) * mass_wh_per_c
     needed_wh = expected_wh_until_next_window + standing_loss_w * hours_until_next_window
     return usable_wh > needed_wh * 1.25
+
+
+
+def daily_target_temp(keep_above, base_setpoint, max_setpoint, mass_wh_per_c,
+                      loss_watts, loss_degrees_per_hour_per_c, ambient_temp,
+                      draw_wh_next_day, hours=24.0):
+    """How hot to make the tank tonight so it's still above keep_above
+    after `hours` of standing loss and the expected draw. Loss is the
+    learned fixed term plus the term proportional to tank-minus-ambient,
+    evaluated at the average of the start and end temperatures (a few
+    fixed-point passes). Never below the unit's normal setpoint, never
+    above max_setpoint."""
+    mass = max(mass_wh_per_c, 1.0)
+    target = base_setpoint
+    for _ in range(5):
+        avg = (target + keep_above) / 2.0
+        loss_c = (loss_watts * hours) / mass + loss_degrees_per_hour_per_c * max(0.0, avg - ambient_temp) * hours
+        target = keep_above + loss_c + draw_wh_next_day / mass
+    return round(min(max_setpoint, max(base_setpoint, target)), 0), round(loss_c, 1)

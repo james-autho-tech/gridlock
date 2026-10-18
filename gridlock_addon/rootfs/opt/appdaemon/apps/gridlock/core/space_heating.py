@@ -200,6 +200,16 @@ HOT_WATER_DEFAULTS = {
     # below this. The tank stratifies: with the sensor at 25 °C there's
     # still hot water at the top for showers, so the day doesn't need a run.
     "top_up_below": 25.0,
+    # Winter: the nightly run heats hot enough that, after a day of
+    # standing loss plus learned usage, the tank is still above
+    # top_up_below by the next night -- never below the unit's setpoint,
+    # never above this (55 °C: the heat pump's own limit, so the immersion
+    # isn't pulled in for it). The setpoint is raised for the run and put
+    # back after.
+    "max_daily_setpoint": 55.0,
+    # What the tank loses heat to: "house" (indoors -- the house zone's
+    # room temperature) or "outdoor" (loft, garage, outhouse).
+    "tank_ambient": "house",
     "run_minutes": 60.0,               # length of the window the circuit is powered for
     # Legionella: once every interval, heat the tank to legionella_temp
     # and hold it there for legionella_hold_minutes, in the cheapest
@@ -245,6 +255,7 @@ HOT_WATER_NUMERIC_BOUNDS = {
     "control_safety_min_temp": (20.0, 55.0),
     "run_minutes": (15.0, 240.0),
     "top_up_below": (15.0, 55.0),
+    "max_daily_setpoint": (40.0, 65.0),
     "legionella_temp": (55.0, 70.0),
     "hp_max_tank_temp": (40.0, 65.0),
     "immersion_power_w": (500.0, 6000.0),
@@ -294,6 +305,8 @@ def merge_hot_water(saved):
         out["control_requires"] = clean_requirements(saved["control_requires"])
     if "ready_by_times" in saved:
         out["ready_by_times"] = clean_times(saved["ready_by_times"])
+    if str(saved.get("tank_ambient", "")).lower() in ("house", "outdoor"):
+        out["tank_ambient"] = str(saved["tank_ambient"]).lower()
     return out
 
 
@@ -347,6 +360,8 @@ def to_hot_water_zone_cfg(hw):
         "dhw": {"start_hysteresis_entity": hw["start_hysteresis_entity"],
                 "ready_by_times": hw.get("ready_by_times", []),
                 "top_up_below": hw.get("top_up_below", 25.0),
+                "max_daily_setpoint": hw.get("max_daily_setpoint", 55.0),
+                "tank_ambient": hw.get("tank_ambient", "house"),
                 "immersion_entity": hw.get("immersion_entity"),
                 "hp_max_tank_temp": hw.get("hp_max_tank_temp", 55.0),
                 "immersion_power_w": hw.get("immersion_power_w", 2000.0),
