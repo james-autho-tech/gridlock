@@ -286,7 +286,7 @@ def test_hot_water_window_completes_and_is_not_rerun_until_the_interval(engine):
     _seed_tank(g)
     # Ordinary windows only -- the legionella cycle has its own tests.
     with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
-        json.dump({"hot_water": {"legionella_enabled": False, "max_interval_hours": 24}}, f)
+        json.dump({"hot_water": {"legionella_enabled": False, "max_interval_hours": 24, "tank_litres": 150}}, f)
     from datetime import timedelta
     now = g.get_now()
     g._publish_thermal_forecast(now)
@@ -513,6 +513,8 @@ def test_legionella_window_is_sized_from_the_tank_not_a_fixed_three_hours(engine
     g, _ = engine
     _seed_house(g)
     _seed_tank(g)
+    with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
+        json.dump({"hot_water": {"tank_litres": 150}}, f)
     from datetime import timedelta
     g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "57.0"
     now = g.get_now()

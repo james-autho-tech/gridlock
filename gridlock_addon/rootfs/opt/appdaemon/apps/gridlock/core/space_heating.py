@@ -258,7 +258,7 @@ HOT_WATER_DEFAULTS = {
          "state": "on"},
     ],
     # Tank model (prediction only -- the plan above doesn't need it).
-    "tank_litres": 150.0,
+    "tank_litres": 250.0,              # the reference install's vented cylinder
     "heat_loss_watts": 60.0,
     "heat_max_power": 3500.0,
     "heat_min_power": 1500.0,

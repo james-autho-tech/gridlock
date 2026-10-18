@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.61.1 - 2026-10-18
+
+### Fix
+- Hot water tank defaults to 250 litres (the reference install's cylinder), so run lengths, thermal mass and the winter target are sized for the real tank
+
 ## 3.61.0 - 2026-10-18
 
 ### New
