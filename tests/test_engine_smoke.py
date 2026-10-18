@@ -603,3 +603,21 @@ def test_cool_tank_waits_for_the_night_and_only_a_cold_one_tops_up_by_day(engine
     g._publish_thermal_forecast(now + timedelta(minutes=5))
     hw = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]
     assert g._iso(hw["dhw"]["window_start"]) <= now + timedelta(hours=3)
+
+
+def test_compressor_minimum_output_is_learned_from_steady_low_speed_running(engine):
+    g, _ = engine
+    _seed_house(g)
+    from datetime import timedelta
+    st = g.states
+    st["sensor.loft_heatpump_controller_active_state"]["state"] = "Heating"
+    st["sensor.loft_heatpump_controller_compressor_operating_frequency"]["state"] = "22"
+    st["sensor.loft_heatpump_controller_ability_of_hydraulic_module"]["state"] = "1.2"
+    st["sensor.loft_heatpump_controller_total_water_outlet_temperature_t1"]["state"] = "30.0"
+    st["sensor.loft_heatpump_controller_water_inlet_temperature"]["state"] = "26.0"
+    now = g.get_now()
+    for m in range(0, 120, 5):
+        g._publish_thermal_forecast(now + timedelta(minutes=m))
+    house = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]
+    assert house["min_output_learned"] == "yes"
+    assert 1150 < house["learned_min_output_w"] < 1500       # from the 2000 default toward 1200

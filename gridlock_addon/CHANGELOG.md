@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.59.0 - 2026-10-18
+
+### New
+- Learns the compressor's real minimum output: after 15 minutes of steady running, the heat delivered while the compressor sits within a few Hz of its slowest observed speed is blended into the minimum the plan uses (replacing the 2 kW default), so the plan runs at the coolest flow the unit can actually sustain. Shown with the other learned figures
+
 ## 3.58.0 - 2026-10-18
 
 ### New

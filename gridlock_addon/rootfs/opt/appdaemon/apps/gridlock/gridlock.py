@@ -3067,6 +3067,8 @@ class GridLock(hass.Hass):
             zone["emitter_rated_w_at_dt50"] = saved["emitter_w_at_dt50"]
         if saved.get("cop_eta") is not None:
             zone["cop_eta"] = saved["cop_eta"]
+        if saved.get("min_output_w") is not None:
+            params.heat_min_power = saved["min_output_w"]
 
     def _hp_live(self, zone):
         """The heat pump's own live readings a flow-controlled zone uses
@@ -3114,6 +3116,29 @@ class GridLock(hass.Hass):
             # factor from it per tick would just learn a constant. eta
             # stays at its configured value until a real per-run COP
             # source exists.
+            # The compressor's real minimum output: once it's been running
+            # steadily for 15 min, note its speed; whenever it sits within a
+            # few Hz of the slowest it's ever been seen running, the heat it
+            # delivers there is what it can turn down to. Blended in, so one
+            # odd reading (a defrost, a start-up) can't swing it.
+            hz = hp.get("compressor_hz")
+            if hz and hz > 5:
+                on_since = state.get("comp_on_since")
+                if not on_since:
+                    state["comp_on_since"] = now.isoformat()
+                else:
+                    try:
+                        steady_min = (now - self._iso(on_since)).total_seconds() / 60.0
+                    except (ValueError, TypeError):
+                        steady_min = 0.0
+                    if steady_min >= 15:
+                        state["min_hz"] = min(state.get("min_hz") or hz, hz)
+                        if hz <= state["min_hz"] + 3 and 300 < thermal_w < 15000:
+                            learned = core_flow.blend(params.heat_min_power or thermal_w, thermal_w, alpha=0.2)
+                            params.heat_min_power = min(max(learned, 300.0), params.heat_max_power or 7000.0)
+                            state["min_output_w"] = params.heat_min_power
+            else:
+                state["comp_on_since"] = None
             run = state.get("heat_run")
             if run is None or not prior_on or elapsed_h is None or elapsed_h > 0.3:
                 run = {"start_ts": now.isoformat(), "start_temp": internal_temp, "wh": 0.0, "loss_wh": 0.0}
@@ -3134,6 +3159,8 @@ class GridLock(hass.Hass):
             state["heat_run"] = run
         else:
             state["heat_run"] = None
+            if not (hp.get("compressor_hz") or 0) > 5:
+                state["comp_on_since"] = None
         state["emitter_w_at_dt50"] = zone["emitter_rated_w_at_dt50"]
         state["cop_eta"] = zone["cop_eta"]
         state["thermal_mass_wh_per_c"] = params.thermal_mass_wh_per_c
@@ -4010,6 +4037,8 @@ class GridLock(hass.Hass):
                 "config_cop_eta": round(zone["config_cop_eta"], 3),
                 "learned_thermal_mass": round(zone["params"].thermal_mass_wh_per_c, 0),
                 "config_thermal_mass": round(zone["config_thermal_mass_wh_per_c"], 0),
+                "learned_min_output_w": round(zone["params"].heat_min_power or 0.0, 0),
+                "min_output_learned": "yes" if self.thermal_learning_state.get(zone["name"], {}).get("min_output_w") else "no",
                 "cop": round(live_cop, 2) if live_cop is not None else zone["params"].heating_cop,
                 "predicted_kwh_today": round(predicted_kwh_today, 2),
                 "predicted_kwh_today_baseline": round(baseline_kwh_today, 2),
