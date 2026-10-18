@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.60.1 - 2026-10-18
+
+### Fix
+- Hot water chart showed the "cheapest slot if needed" in green like a booked run even when the tank needs nothing; it's now a dashed outline labelled as such, and green only marks a run that's due or happening
+
 ## 3.60.0 - 2026-10-18
 
 ### New

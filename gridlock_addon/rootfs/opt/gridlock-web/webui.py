@@ -1379,7 +1379,7 @@ function renderHotWaterHero(d) {
       ${pauseBtn}
     </div>
     <div class="gl-hero">${tankTile}${runTile}${lgTile}${usageTile}</div>
-    ${w.slots && w.slots.length ? `<div style="margin-top:12px"><div class="lbl" style="margin-bottom:6px">Next 24 hours — cost of a kWh of hot water per half-hour (price ÷ COP), planned window highlighted; learned usage below</div>${renderDhwChart(w)}</div>` : ''}`;
+    ${w.slots && w.slots.length ? `<div style="margin-top:12px"><div class="lbl" style="margin-bottom:6px">Next 24 hours — cost of a kWh of hot water per half-hour (price ÷ COP)${w.status === 'running' || w.status === 'waiting' ? ', planned run in green' : ', no run needed'}; learned usage below</div>${renderDhwChart(w)}</div>` : ''}`;
 }
 // A chart with axes: gridlines inside the SVG, tick labels as HTML on
 // either side (an SVG scaled with preserveAspectRatio=none stretches
@@ -1418,11 +1418,17 @@ function renderDhwChart(w) {
   const y = yScale(lo, hi, H);
   const ws = w.window_start ? new Date(w.window_start).getTime() : null;
   const we = w.window_end ? new Date(w.window_end).getTime() : null;
+  // Green only for a run that's actually due or happening; otherwise the
+  // window is just "where it would go if needed" -- an outline, not a run.
+  const booked = w.status === 'running' || w.status === 'waiting';
   const bars = slots.map((s, i) => {
     const tms = new Date(s.x).getTime();
     const inWin = ws !== null && tms >= ws - 1000 && tms < we;
     const top = y(s.score), base = y(0);
-    return `<rect x="${(i * colW + 1).toFixed(1)}" y="${top.toFixed(1)}" width="${Math.max(1, colW - 2).toFixed(1)}" height="${(base - top).toFixed(1)}" fill="${inWin ? 'var(--green)' : 'var(--cyan)'}" opacity="${inWin ? 0.9 : 0.35}"><title>${esc(hhmm(s.x))}: ${s.price.toFixed(1)}p${s.grid_price !== undefined && Math.abs(s.grid_price - s.price) > 0.05 ? ` (tariff ${s.grid_price.toFixed(1)}p)` : ''} ÷ COP ${s.cop.toFixed(2)} = ${s.score.toFixed(1)}p per kWh of hot water</title></rect>`;
+    const fill = inWin && booked ? 'var(--green)' : 'var(--cyan)';
+    const op = inWin && booked ? 0.9 : 0.35;
+    const outline = inWin && !booked ? ' stroke="var(--green)" stroke-width="1.5" stroke-dasharray="3,2"' : '';
+    return `<rect x="${(i * colW + 1).toFixed(1)}" y="${top.toFixed(1)}" width="${Math.max(1, colW - 2).toFixed(1)}" height="${(base - top).toFixed(1)}" fill="${fill}" opacity="${op}"${outline}><title>${esc(hhmm(s.x))}: ${s.price.toFixed(1)}p${s.grid_price !== undefined && Math.abs(s.grid_price - s.price) > 0.05 ? ` (tariff ${s.grid_price.toFixed(1)}p)` : ''} ÷ COP ${s.cop.toFixed(2)} = ${s.score.toFixed(1)}p per kWh of hot water</title></rect>`;
   }).join('');
   const xRow = barAxisLabels(n, 4, i => hhmm(slots[i].x));
   // Predicted tank temperature over the same timeline, right-hand axis.
@@ -1438,7 +1444,7 @@ function renderDhwChart(w) {
   }
   const legend = `<div class="gl-combo-legend" style="margin-bottom:4px">
       <span><span class="gl-legend-dot" style="background:var(--cyan);opacity:.5"></span>Cost of a kWh of hot water (p, left)</span>
-      <span><span class="gl-legend-dot" style="background:var(--green)"></span>Planned run</span>
+      ${booked ? '<span><span class="gl-legend-dot" style="background:var(--green)"></span>Planned run</span>' : '<span><span class="gl-legend-dot" style="background:transparent;border:1px dashed var(--green)"></span>Cheapest slot if a run were needed (none is)</span>'}
       ${tankLine ? '<span><span class="gl-legend-dot" style="background:var(--amber)"></span>Tank temperature, predicted (°C, right)</span>' : ''}
     </div>`;
   const main = legend + chartFrame(bars + tankLine, H, niceTicks(lo, hi).map(t => ({ ...t, label: `${t.label}p` })), rightTicks, xRow);
