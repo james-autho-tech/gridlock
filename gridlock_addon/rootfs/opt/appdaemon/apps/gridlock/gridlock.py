@@ -3021,6 +3021,11 @@ class GridLock(hass.Hass):
                 "comfort_above": float(z.get("comfort_above", 1.0)),
                 "tariff_optimise": bool(z.get("tariff_optimise", True)),
                 "comfort_priority": str(z.get("comfort_priority", "cop")),
+                "min_on_minutes": float(z.get("min_on_minutes", 0.0 if is_tank else 30.0)),
+                "min_off_minutes": float(z.get("min_off_minutes", 0.0 if is_tank else 20.0)),
+                "emergency_temp": float(z.get("emergency_temp", 10.0)),
+                "emergency_stop_temp": float(z.get("emergency_stop_temp", 12.0)),
+                "emergency_flow": float(z.get("emergency_flow", 25.0)),
                 "solar_gain_w_per_kw_pv": float(z.get("solar_gain_w_per_kw_pv", 0.0)),
                 "thermal_power_entity": z.get("thermal_power_entity"),
                 "flow_temp_entity": z.get("flow_temp_entity"),
@@ -4255,6 +4260,49 @@ class GridLock(hass.Hass):
             command = core_thermal.decide_heating_command(
                 result["desired_heating_on"], result["current_temp"],
                 zone["control_safety_min_temp"], off_duration_hours, zone["control_max_off_hours"])
+        # Power cut: the battery is all there is. Hot water waits; space
+        # heating only runs if the house is getting dangerously cold, then
+        # at the gentlest flow until it's back above the stop temperature.
+        try:
+            off_grid = bool(self.grid_connection_off())
+        except Exception:  # noqa: BLE001 — unknown grid state is treated as on-grid
+            off_grid = False
+        if off_grid:
+            if zone.get("dhw"):
+                command = False
+                flow_reason = "Power cut — hot water suspended to save the battery"
+            elif result.get("current_temp") is not None:
+                t = result["current_temp"]
+                em = state.get("emergency", False)
+                if t <= zone["emergency_temp"] or (em and t < zone["emergency_stop_temp"]):
+                    command, em = True, True
+                    if flow_entity:
+                        setpoint = zone["emergency_flow"]
+                    flow_reason = (f"Power cut — house at {t:.1f}°C, emergency heat at "
+                                   f"{zone['emergency_flow']:.0f}°C flow until {zone['emergency_stop_temp']:.0f}°C")
+                else:
+                    command, em = False, False
+                    flow_reason = "Power cut — heating held off to save the battery"
+                state["emergency"] = em
+        else:
+            state["emergency"] = False
+        # Anti short-cycling: hold the last command for its minimum time,
+        # unless the safety floor is hit or the grid is down.
+        if not off_grid and not no_reading and state["last_commanded"] is not None \
+                and command != state["last_commanded"]:
+            try:
+                since_min = (now - self._iso(state["switched_at"])).total_seconds() / 60.0
+            except (ValueError, TypeError, KeyError):
+                since_min = 1e9
+            floor_hit = (result.get("current_temp") is not None
+                         and result["current_temp"] <= zone["control_safety_min_temp"])
+            if not floor_hit:
+                if state["last_commanded"] and since_min < zone["min_on_minutes"]:
+                    command = True
+                    setpoint = state.get("flow_setpoint") if flow_entity else setpoint
+                elif not state["last_commanded"] and since_min < zone["min_off_minutes"]:
+                    command = False
+        result["control"]["off_grid"] = "yes" if off_grid else "no"
         state["off_since"] = None if command else (state["off_since"] or now)
         result["control"]["commanded"] = command
         result["control"]["status"] = "heating" if command else "off"
@@ -4292,6 +4340,7 @@ class GridLock(hass.Hass):
                              "so it's checked up front next time.")
             return
         state["last_commanded"] = command
+        state["switched_at"] = now.isoformat()
         state["rejected"] = False
         state["rejected_notified"] = False
         result["control"]["rejected"] = False
@@ -4301,7 +4350,9 @@ class GridLock(hass.Hass):
         self.call_service(service, target={"entity_id": entity})
         # decide_heating_command only ever forces ON, never OFF -- so "off"
         # can only mean the plan itself wanted off, no override needed.
-        if no_reading:
+        if off_grid:
+            reason = flow_reason or "Power cut"
+        elif no_reading:
             reason = (flow_reason or "No usable room temperature reading") + (
                 " — heating on" if command else " — not enough demand, heating off")
         elif not command:

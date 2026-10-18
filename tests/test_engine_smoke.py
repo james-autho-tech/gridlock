@@ -95,6 +95,7 @@ def engine(tmp_path, monkeypatch):
     g._thermal_forecast_warned = {}
     g._control_listeners = {}
     g._last_plan = None
+    g.grid_connection_off = lambda: None
     g.load_provider = types.SimpleNamespace(planned_circuit_kwh={}, slot_key=lambda dt: int(dt.timestamp()) // 1800)
     g.cheap_rate = 0.10
     g.degradation = 0.01
@@ -533,3 +534,46 @@ def test_warm_tank_is_not_forced_into_a_peak_slot_by_a_timer(engine):
         hw = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]
         assert hw["dhw"]["status"] == "not_needed", (h, hw["dhw"]["status"])
         assert ("switch/turn_on", {"target": {"entity_id": "switch.loft_heatpump_controller_power_dhw_t5s"}}) not in g.calls
+
+
+def test_heating_keeps_its_minimum_run_and_rest_times(engine):
+    g, _ = engine
+    _seed_house(g)
+    from datetime import timedelta
+    room = "sensor.loft_heatpump_controller_room_temperature_ta"
+    sw = ("switch/turn_off", {"target": {"entity_id": "switch.loft_heatpump_controller_water_flow_temperature_control_zone_1"}})
+    now = g.get_now()
+    g._publish_thermal_forecast(now)                       # cold room -> on
+    g.states["switch.loft_heatpump_controller_water_flow_temperature_control_zone_1"]["state"] = "on"
+    g.states[room]["state"] = "25.0"                        # suddenly warm
+    g.calls.clear()
+    g._publish_thermal_forecast(now + timedelta(minutes=10))
+    assert sw not in g.calls                                # held on: 10 < 30 min
+    g._publish_thermal_forecast(now + timedelta(minutes=35))
+    assert sw in g.calls                                    # minimum run done -> off
+
+
+def test_power_cut_holds_heating_off_until_the_house_is_cold(engine):
+    g, _ = engine
+    _seed_house(g, room_temp="13.0")
+    _seed_tank(g)
+    g.grid_connection_off = lambda: "inverter reports off-grid"
+    on = ("switch/turn_on", {"target": {"entity_id": "switch.loft_heatpump_controller_water_flow_temperature_control_zone_1"}})
+    g._publish_thermal_forecast(g.get_now())
+    assert on not in g.calls                                # 13 C: battery saved
+    assert ("switch/turn_on", {"target": {"entity_id": "switch.loft_heatpump_controller_power_dhw_t5s"}}) not in g.calls
+    g.states["sensor.loft_heatpump_controller_room_temperature_ta"]["state"] = "9.5"
+    g.calls.clear()
+    from datetime import timedelta
+    g._publish_thermal_forecast(g.get_now() + timedelta(minutes=5))
+    assert on in g.calls
+    sp = next(kw for svc, kw in g.calls if svc == "number/set_value"
+              and kw["target"]["entity_id"].endswith("t1s_zone_1"))
+    assert sp["value"] == 25.0
+
+
+def test_dashboard_saves_only_what_differs_from_the_defaults():
+    from core.space_heating import diff_from_defaults, merge_settings
+    assert diff_from_defaults(merge_settings({})) == {}
+    d = diff_from_defaults(merge_settings({"target_temp": 16, "hot_water": {"run_minutes": 45}}))
+    assert d == {"target_temp": 16.0, "hot_water": {"run_minutes": 45.0}}

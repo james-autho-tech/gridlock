@@ -16,6 +16,7 @@ import urllib.request
 sys.path.insert(0, "/opt/appdaemon/apps/gridlock")
 from core.warranty import parse_install_date  # noqa: E402 — needs the path insert above first
 from core.space_heating import merge_settings as merge_space_heating_settings  # noqa: E402
+from core.space_heating import diff_from_defaults as space_heating_diff  # noqa: E402
 
 SUPERVISOR_TOKEN = os.environ["SUPERVISOR_TOKEN"]
 PORT = 8099
@@ -1163,6 +1164,10 @@ function renderSpaceHeatingSettings(s) {
         + num('control_safety_min_temp', 'Safety floor °C', 0.5, 'Heat regardless of plan below this.')
         + inp('name', 'Zone name')
         + chk('configured', 'Show this zone', 'predicted and shown on this tab')
+        + num('min_on_minutes', 'Minimum run, minutes', 5, 'Once on, stays on at least this long — no short cycling.')
+        + num('min_off_minutes', 'Minimum rest, minutes', 5)
+        + num('emergency_temp', 'Power cut: heat only below °C', 0.5, 'With the grid down, heating stays off to save the battery unless the house falls this low.')
+        + num('emergency_flow', 'Power cut: flow °C', 1, 'The unit won\'t go below 25.')
         + chk('notify_external_commands', 'Notify on external heat pump commands', 'push a notification when something other than GridLock commands a watched entity (always listed on this tab anyway)'))}
       ${section('Flow temperature & comfort', 'How far the flow temperature may go, and how much the room may drift to chase cheaper half-hours.',
         num('flow_min', 'Lowest flow °C', 1, 'The unit\'s own heating-mode minimum is 35 °C unless its T1S low-temperature setting is enabled.')
@@ -3223,7 +3228,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
             saved = load_gridwarm_settings()
             saved["target_temp"] = value
-            save_gridwarm_settings(merge_space_heating_settings(saved))
+            save_gridwarm_settings(space_heating_diff(saved))
             self._send(200, json.dumps({"ok": True, "value": value}).encode(), "application/json")
         except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
             self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
@@ -3243,7 +3248,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 merged = merge_space_heating_settings({})
             else:
                 merged = merge_space_heating_settings(body)
-            save_gridwarm_settings(merged)
+            save_gridwarm_settings(space_heating_diff(merged))
             self._send(200, json.dumps({"ok": True, "settings": merged}).encode(), "application/json")
         except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
             self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
@@ -3265,7 +3270,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 hw.update(body)
                 saved["hot_water"] = hw
             merged = merge_space_heating_settings(saved)
-            save_gridwarm_settings(merged)
+            save_gridwarm_settings(space_heating_diff(merged))
             self._send(200, json.dumps({"ok": True, "hot_water": merged["hot_water"]}).encode(),
                        "application/json")
         except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server

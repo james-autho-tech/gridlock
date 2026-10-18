@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.56.0 - 2026-10-18
+
+### New
+- Anti short-cycling: once space heating is switched on it stays on at least 30 minutes, once off it rests at least 20 (both configurable; the safety floor overrides)
+- Power-cut mode: with the grid down, hot water is suspended and space heating held off to save the battery — unless the house falls to 10 °C, then it runs at the unit's gentlest 25 °C flow until it's back to 12 °C (all configurable)
+
+### Fix
+- The dashboard saved the whole default settings block whenever anything changed, freezing every default into the file so improved defaults (like dropping the hot water forced-run timer) never reached an install that had saved once; it now saves only what differs from the defaults
+
 ## 3.55.5 - 2026-10-18
 
 ### Fix

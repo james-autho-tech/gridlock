@@ -90,6 +90,20 @@ DEFAULTS = {
     "thermal_mass_wh_per_c": 8000.0,
     "hysteresis": 0.5,
     "hysteresis_off": 0.1,
+    # Anti short-cycling: once the heating is switched on it stays on at
+    # least this long, once off it stays off at least this long (the
+    # safety floor overrides). Compressor starts are where wear and the
+    # worst COP live.
+    "min_on_minutes": 30.0,
+    "min_off_minutes": 20.0,
+    # Power cut (GridLock sees the grid as down): the battery is all
+    # there is, so heating is held off -- unless the house falls to
+    # emergency_temp, then it runs at emergency_flow (the unit's minimum)
+    # until the house is back to emergency_stop_temp. Hot water is
+    # suspended.
+    "emergency_temp": 10.0,
+    "emergency_stop_temp": 12.0,
+    "emergency_flow": 25.0,
     # Sunshine through the windows, as a share of the PV forecast: watts
     # of passive room gain per kW of forecast PV output. A 4 kW array in
     # full sun means roughly a kilowatt into the rooms for most houses.
@@ -368,6 +382,11 @@ NUMERIC_BOUNDS = {
     "comfort_below": (0.0, 5.0),
     "comfort_above": (0.0, 5.0),
     "battery_wear_p_per_kwh": (0.0, 30.0),
+    "min_on_minutes": (0.0, 180.0),
+    "min_off_minutes": (0.0, 180.0),
+    "emergency_temp": (3.0, 18.0),
+    "emergency_stop_temp": (4.0, 20.0),
+    "emergency_flow": (20.0, 45.0),
     "solar_gain_w_per_kw_pv": (0.0, 2000.0),
 }
 
@@ -480,9 +499,29 @@ def to_zone_cfg(settings):
         "tariff_optimise": settings["tariff_optimise"],
         "heat_pricing": settings["heat_pricing"],
         "comfort_priority": settings["comfort_priority"],
+        "min_on_minutes": settings["min_on_minutes"],
+        "min_off_minutes": settings["min_off_minutes"],
+        "emergency_temp": settings["emergency_temp"],
+        "emergency_stop_temp": settings["emergency_stop_temp"],
+        "emergency_flow": settings["emergency_flow"],
         "solar_gain_w_per_kw_pv": settings["solar_gain_w_per_kw_pv"],
         "thermal_power_entity": settings["thermal_power_entity"],
         "flow_temp_entity": settings["flow_temp_entity"],
         "return_temp_entity": settings["return_temp_entity"],
         "compressor_entity": settings["compressor_entity"],
     }
+
+
+
+def diff_from_defaults(settings):
+    """Only the keys whose value differs from the defaults -- what the
+    dashboard should actually persist. Saving the whole merged block
+    froze every default into the file, so a better default shipped later
+    (say, dropping a forced-run timer) could never reach an install that
+    had ever saved anything."""
+    merged = merge_settings(settings)
+    out = {k: v for k, v in merged.items() if k != "hot_water" and DEFAULTS.get(k) != v}
+    hw = {k: v for k, v in merged["hot_water"].items() if HOT_WATER_DEFAULTS.get(k) != v}
+    if hw:
+        out["hot_water"] = hw
+    return out
