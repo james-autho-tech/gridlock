@@ -195,6 +195,11 @@ HOT_WATER_DEFAULTS = {
     "legionella_interval_days": 7.0,
     "legionella_window_minutes": 180.0,
     "legionella_max_hours": 5.0,
+    # The highest tank temperature the heat pump reaches on its own; the
+    # unit hands the rest to the immersion (seen on real hardware: the
+    # compressor stopped around 55-57 °C and the immersion took it to 59).
+    # Heat above this is costed at COP 1 when choosing a window.
+    "hp_max_tank_temp": 55.0,
     # The immersion heater's output, to report whether a cycle needed it.
     "immersion_entity": "binary_sensor.loft_heatpump_controller_load_output_electric_heater_tbh",
     "max_interval_hours": 24.0,        # never longer than this between windows
@@ -218,6 +223,7 @@ HOT_WATER_NUMERIC_BOUNDS = {
     "control_safety_min_temp": (20.0, 55.0),
     "run_minutes": (15.0, 240.0),
     "legionella_temp": (55.0, 70.0),
+    "hp_max_tank_temp": (40.0, 65.0),
     "legionella_hold_minutes": (5.0, 180.0),
     "legionella_interval_days": (1.0, 31.0),
     "legionella_window_minutes": (60.0, 480.0),
@@ -317,6 +323,7 @@ def to_hot_water_zone_cfg(hw):
         "dhw": {"start_hysteresis_entity": hw["start_hysteresis_entity"],
                 "ready_by_times": hw.get("ready_by_times", []),
                 "immersion_entity": hw.get("immersion_entity"),
+                "hp_max_tank_temp": hw.get("hp_max_tank_temp", 55.0),
                 "legionella": {"enabled": hw["legionella_enabled"],
                                "temp": hw["legionella_temp"],
                                "hold_minutes": hw["legionella_hold_minutes"],

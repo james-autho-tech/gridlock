@@ -302,6 +302,8 @@ def test_hot_water_floor_forces_a_run_outside_the_window(engine):
     g, _ = engine
     _seed_house(g)
     _seed_tank(g)
+    with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
+        json.dump({"hot_water": {"legionella_enabled": False, "control_safety_min_temp": 40}}, f)
     from datetime import timedelta
     now = g.get_now()
     g._publish_thermal_forecast(now)
@@ -436,8 +438,8 @@ def test_legionella_cycle_raises_holds_and_restores_the_setpoint(engine):
     assert hw["dhw"]["legionella"]["phase"] == "heating"
     assert ("number/set_value", {"target": {"entity_id": sp}, "value": 60.0}) in g.calls
     g.states[sp]["state"] = "60.0"
-    # Tank reaches 60 an hour later -> holding.
-    g.states[tank]["state"] = "60.0"
+    # Tank reaches 59 (whole-degree sensor, unit stops just short) an hour later -> holding.
+    g.states[tank]["state"] = "59.0"
     g._publish_thermal_forecast(now + timedelta(hours=1))
     hw = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]
     assert hw["dhw"]["legionella"]["phase"] == "holding"
@@ -461,7 +463,7 @@ def test_legionella_cycle_is_abandoned_and_setpoint_restored_after_the_cap(engin
     g._publish_thermal_forecast(now)
     g.states[sp]["state"] = "60.0"
     g.calls.clear()
-    g._publish_thermal_forecast(now + timedelta(hours=6))   # tank never got there
+    g._publish_thermal_forecast(now + timedelta(hours=6))   # window over, tank never got there
     hw = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]
     assert hw["dhw"]["legionella"]["last_failed"]
     assert ("number/set_value", {"target": {"entity_id": sp}, "value": 53.0}) in g.calls
@@ -477,3 +479,25 @@ def test_hot_water_slots_carry_a_predicted_tank_temperature(engine):
     assert len(tanks) == 48 and all(t is not None for t in tanks)
     assert max(tanks) >= 59.0          # legionella night: climbs to 60
     assert tanks[-1] < max(tanks)      # and cools afterwards
+
+
+def test_legionella_never_holds_the_circuit_past_the_window_or_retries_the_same_night(engine):
+    g, _ = engine
+    _seed_house(g)
+    _seed_tank(g)
+    from datetime import timedelta
+    sw = "switch.loft_heatpump_controller_power_dhw_t5s"
+    now = g.get_now()
+    g._publish_thermal_forecast(now)                         # cycle starts, 3 h window
+    g.states[sw]["state"] = "on"
+    g.calls.clear()
+    g._publish_thermal_forecast(now + timedelta(hours=3, minutes=5))   # window over, never reached 60
+    hw = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]
+    assert hw["dhw"]["legionella"]["last_failed"]
+    assert hw["dhw"]["legionella"]["phase"] != "heating"
+    assert ("switch/turn_off", {"target": {"entity_id": sw}}) in g.calls
+    # Five minutes later it must NOT start another cycle the same night.
+    g.calls.clear()
+    g._publish_thermal_forecast(now + timedelta(hours=3, minutes=10))
+    hw = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]
+    assert hw["dhw"]["legionella"]["phase"] in ("idle", "due") and hw["dhw"]["legionella"]["due"] is not True

@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.55.2 - 2026-10-18
+
+### Fix
+- Legionella cycle never counted its hold: the tank sensor reads whole degrees and the unit stops just short of its setpoint, so the tank sat at 59 °C for hours while the cycle waited for 59.5. "At temperature" now means within 1 °C, and a big draw-off during the hold restarts it
+- A cycle that didn't finish kept the hot water circuit powered past its window (into peak hours) and immediately started another; it now stops when its window ends, restores the setpoint and retries the next night
+- Hot water slots on a legionella night are costed at the COP of the higher flow, with the share above the heat pump's own limit (default 55 °C) at COP 1 for the immersion
+- The hot water panel said "tank is below 51 °C" when a run was booked for the legionella cycle; it now says why a run is booked
+
 ## 3.55.1 - 2026-10-17
 
 ### New

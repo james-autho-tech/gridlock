@@ -3183,9 +3183,6 @@ class GridLock(hass.Hass):
         setpoint = setpoint if setpoint is not None else 53.0
         hyst = (self.get_float_state(d["start_hysteresis_entity"], 2.0)
                 if d.get("start_hysteresis_entity") else 2.0)
-        flow = setpoint + d["flow_margin"]
-        cops = [core_flow.cop_estimate(flow, e, d["cop_eta"]) for e in ext]
-        scores = core_dhw.slot_scores(rates, ext, flow, d["cop_eta"])
         run_slots = core_dhw.run_slots_needed(d["run_minutes"], SLOT_MIN)
         state = self._thermal_control_state.setdefault(
             zone["name"], {"off_since": None, "last_commanded": None, "rejected": False,
@@ -3203,8 +3200,29 @@ class GridLock(hass.Hass):
             except (ValueError, TypeError):
                 lg_days_since = None
             lg_due = lg_days_since is None or lg_days_since >= lg_cfg["interval_days"]
+            try:
+                if lg_due and lg.get("retry_after") and now < self._iso(lg["retry_after"]):
+                    lg_due = False   # failed recently -- not again until the next night
+            except (ValueError, TypeError):
+                pass
             if lg_due and not lg.get("phase"):
                 run_slots = max(run_slots, core_dhw.run_slots_needed(lg_cfg["window_minutes"], SLOT_MIN))
+        # Cost of a kWh of hot water per slot: the COP at the flow the run
+        # needs (setpoint + margin, or the legionella temperature on a cycle
+        # night) in that slot's outdoor temperature -- colder air, worse COP
+        # -- with the share above the heat pump's own DHW limit priced at
+        # COP 1, because the immersion does that part.
+        heat_target = lg_cfg.get("temp", setpoint) if (lg_due or lg.get("phase")) else setpoint
+        hp_limit = d.get("hp_max_tank_temp", 55.0)
+        flow = min(heat_target, hp_limit) + d["flow_margin"]
+        start_t = min(tank_temp if tank_temp is not None else setpoint - hyst, heat_target - 1.0)
+        hp_part = max(0.0, min(heat_target, hp_limit) - start_t)
+        imm_part = max(0.0, heat_target - max(start_t, hp_limit))
+        cops = []
+        for e in ext:
+            c = core_flow.cop_estimate(flow, e, d["cop_eta"])
+            cops.append((hp_part + imm_part) / (hp_part / c + imm_part / 1.0) if (hp_part + imm_part) > 0 else c)
+        scores = [rates[i] / max(cops[i], 0.5) for i in range(min(len(rates), len(cops)))]
         committed = state.get("dhw_window")
         if committed:
             try:
@@ -3239,7 +3257,9 @@ class GridLock(hass.Hass):
         # tariff would run the circuit back to back for ever.
         needed = core_dhw.unit_will_heat(tank_temp, setpoint, hyst) or deadline <= run_slots or lg_due
         skipped = False
-        if not committed and window and window[0] == 0 and needed:
+        # A running legionella cycle never gets a fresh window booked under
+        # it -- when its window ends the cycle stops (below), full stop.
+        if not committed and window and window[0] == 0 and needed and not lg.get("phase"):
             horizon = max(run_slots, deadline)
             if profile and core_dhw.tank_can_cover(
                     tank_temp, setpoint, hyst, zone["params"].thermal_mass_wh_per_c,
@@ -3289,27 +3309,38 @@ class GridLock(hass.Hass):
                     and not lg.get("immersion_used"):
                 lg["immersion_used"] = True
                 lg_changed = True
+            # The tank sensor reads whole degrees and the unit stops a hair
+            # short of its setpoint, so "at temperature" means within 1 °C.
+            reached = tank_temp is not None and tank_temp >= lg_cfg["temp"] - 1.0
             if not lg_cfg.get("enabled"):
                 lg["phase"] = None
                 setpoint_wanted = orig
-            elif elapsed_h > lg_cfg["max_hours"]:
-                lg.update({"phase": None, "last_failed": now.isoformat()})
+            elif elapsed_h > lg_cfg["max_hours"] or committed is None:
+                # Out of time, or the planned window is over: never hold the
+                # circuit on into dearer hours chasing it. Try tomorrow night.
+                lg.update({"phase": None, "last_failed": now.isoformat(),
+                           "retry_after": (now + timedelta(hours=12)).isoformat()})
                 setpoint_wanted = orig
                 self._log_decision(f"GridWarm: {zone['name']} legionella cycle abandoned",
-                                   f"Tank didn't hold {lg_cfg['temp']:.0f}°C within "
-                                   f"{lg_cfg['max_hours']:.0f} h — setpoint restored, retrying next window")
+                                   f"Tank didn't hold {lg_cfg['temp']:.0f}°C "
+                                   + ("before the window ended" if committed is None else
+                                      f"within {lg_cfg['max_hours']:.0f} h")
+                                   + " — setpoint restored, retrying tomorrow night")
             elif phase == "heating":
                 setpoint_wanted = lg_cfg["temp"]
-                if tank_temp is not None and tank_temp >= lg_cfg["temp"] - 0.5:
+                if reached:
                     lg.update({"phase": "holding", "hold_start": now.isoformat()})
             elif phase == "holding":
                 setpoint_wanted = lg_cfg["temp"]
+                if tank_temp is not None and tank_temp < lg_cfg["temp"] - 2.0:
+                    # Dropped out of the band (a big draw-off) -- the hold restarts.
+                    lg.update({"phase": "heating", "hold_start": None})
                 try:
                     held_min = (now - self._iso(lg["hold_start"])).total_seconds() / 60.0
                 except (ValueError, TypeError, KeyError):
                     held_min = 0.0
-                if held_min >= lg_cfg["hold_minutes"]:
-                    lg.update({"phase": None, "last_done": now.isoformat()})
+                if lg.get("phase") == "holding" and held_min >= lg_cfg["hold_minutes"]:
+                    lg.update({"phase": None, "last_done": now.isoformat(), "retry_after": None})
                     setpoint_wanted = orig
                     self._log_decision(f"GridWarm: {zone['name']} legionella cycle done",
                                        f"Held {lg_cfg['temp']:.0f}°C for {lg_cfg['hold_minutes']:.0f} min"
@@ -3364,8 +3395,14 @@ class GridLock(hass.Hass):
                 if lg.get("last_done") else None
         except (ValueError, TypeError):
             lg_next = None
-        return {"heat_now": committed is not None or lg_active,
-                "committed": committed is not None or lg_active,
+        # Why a run is booked, for the panel: the tank needs it, the weekly
+        # legionella cycle is due, or only the daily guarantee is.
+        reason = ("legionella" if (lg_due or lg_active) else
+                  "top_up" if core_dhw.unit_will_heat(tank_temp, setpoint, hyst) else
+                  "guarantee" if needed else "none")
+        return {"heat_now": committed is not None,
+                "committed": committed is not None,
+                "reason": reason,
                 "setpoint_wanted": setpoint_wanted,
                 "legionella": {"enabled": bool(lg_cfg.get("enabled")), "due": lg_due,
                                "phase": lg.get("phase") or ("due" if lg_due else "idle"),
