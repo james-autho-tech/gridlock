@@ -1461,7 +1461,12 @@ function renderHouseHero(d) {
   const hpTile = `<div class="gl-tile"><div class="lbl">Heat pump</div><div class="val" style="font-size:16px"><span class="gl-legend-dot" style="background:${z.heating_on ? 'var(--green)' : 'var(--dim)'}"></span>${z.heating_on ? 'Heating' : 'Not heating'}</div><div class="sub">${hp.compressor_hz !== undefined && hp.compressor_hz !== null ? `compressor ${n1(hp.compressor_hz, 0, ' Hz')} · ` : ''}${n1(hp.thermal_kw, 1, ' kW')} out · lifetime COP ${n1(hp.live_cop, 2)}</div></div>`;
   const planTile = f
     ? (Number(f.required_kw) < 0.05
-        ? `<div class="gl-tile"><div class="lbl">Plan</div><div class="val" style="font-size:16px">No heat needed</div><div class="sub">room is above target · today ${n1(f.plan_elec_kwh_today, 1, ' kWh')} ≈ £${n1(f.plan_cost_today, 2)} if the forecast holds</div></div>`
+        ? (() => {
+            const nxt = (f.plan || []).find(p => Number(p.heat_kwh) > 0.001);
+            const when = nxt ? new Date(nxt.x) : null;
+            const label = when ? `${when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${when.toDateString() === new Date().toDateString() ? '' : ' tomorrow'}` : null;
+            return `<div class="gl-tile"><div class="lbl">Plan</div><div class="val" style="font-size:16px">${label ? `Off now · heats from ${label}` : 'No heat in the next 24 h'}</div><div class="sub">${label ? `at ${nxt.flow || '—'}°C flow, COP ${n1(nxt.cop, 1)}` : 'the house stays in its band on its own'} · next 24 h ${n1(f.plan_elec_kwh_today, 1, ' kWh')} ≈ £${n1(f.plan_cost_today, 2)}</div></div>`;
+          })()
         : `<div class="gl-tile"><div class="lbl">Plan</div><div class="val num">${n1(f.required_kw, 1, ' kW')}</div><div class="sub">needed now · predicted COP ${n1(f.predicted_cop, 2)} · today ${n1(f.plan_elec_kwh_today, 1, ' kWh')} ≈ £${n1(f.plan_cost_today, 2)}${f.plan_status === 'fallback' ? ' · <span style="color:var(--amber)">solver unavailable, steady-state plan</span>' : ''}</div></div>`)
     : '';
   const fixes = (c.blocked_items || []).map(b =>

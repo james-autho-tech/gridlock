@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.55.4 - 2026-10-18
+
+### Fix
+- House Plan tile said "No heat needed" whenever the current half-hour needed none, even with heating planned later; it now says "Off now · heats from 23:00" (flow and COP of that slot) or "No heat in the next 24 h"
+
 ## 3.55.3 - 2026-10-18
 
 ### Fix
