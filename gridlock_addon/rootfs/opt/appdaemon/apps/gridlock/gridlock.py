@@ -3258,21 +3258,32 @@ class GridLock(hass.Hass):
         profile = learn.get("dhw_profile")
         bucket = core_dhw.profile_bucket(now.astimezone())
         expected = core_dhw.expected_draw(profile, bucket, len(scores))
+        # Learned usage informs the "skip, the tank covers it" check below,
+        # but never forces a run: the tank stratifies, so a cool sensor still
+        # has showers at the top. Runs are driven by the ready-by times.
         ready = core_dhw.ready_by_slot(expected, d.get("draw_threshold_wh", 300.0), lead_slots=1)
-        if ready is not None:
-            deadline = min(deadline, max(run_slots, ready))
         # The configured ready-by times (hot tank for the morning, showers
         # by the evening) bound the deadline whenever a run is actually
         # needed -- the tank is below the point the unit starts at.
         by = core_dhw.slots_until_ready_by(now.astimezone(), d.get("ready_by_times") or [], SLOT_MIN)
         if by is not None and core_dhw.unit_will_heat(tank_temp, setpoint, hyst):
             deadline = min(deadline, max(run_slots, by))
+        # Genuinely low tank: top it up in the cheapest slot of the next
+        # couple of hours rather than waiting for the night.
+        low = tank_temp is not None and tank_temp < d.get("top_up_below", 25.0)
+        if low:
+            deadline = min(deadline, run_slots + 4)
         window = core_dhw.cheapest_window(scores, run_slots, deadline)
         # A window only starts when there's something to heat: the tank
         # is below the point the unit would start a run at, or the daily
         # guarantee is up. Otherwise "cheapest window is now" on a flat
         # tariff would run the circuit back to back for ever.
-        needed = core_dhw.unit_will_heat(tank_temp, setpoint, hyst) or deadline <= run_slots or lg_due
+        # A run is due when the tank is below the unit's top-up point AND
+        # the next ready-by is what the window is racing (the cheapest slot
+        # before it gets chosen), when it's below the low threshold, on a
+        # legionella night, or when a configured forced-run timer is up.
+        needed = (low or lg_due or deadline <= run_slots
+                  or (by is not None and core_dhw.unit_will_heat(tank_temp, setpoint, hyst)))
         skipped = False
         # A running legionella cycle never gets a fresh window booked under
         # it -- when its window ends the cycle stops (below), full stop.

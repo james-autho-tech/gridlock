@@ -195,7 +195,11 @@ HOT_WATER_DEFAULTS = {
     # A needed run (tank below the unit's start point) must have finished
     # before the next of these local times: hot tank for the morning,
     # enough for showers by the evening. Blank list = daily guarantee only.
-    "ready_by_times": ["06:30", "18:30"],
+    "ready_by_times": ["06:30"],
+    # Outside the ready-by run, only top the tank up if its sensor falls
+    # below this. The tank stratifies: with the sensor at 25 °C there's
+    # still hot water at the top for showers, so the day doesn't need a run.
+    "top_up_below": 25.0,
     "run_minutes": 60.0,               # length of the window the circuit is powered for
     # Legionella: once every interval, heat the tank to legionella_temp
     # and hold it there for legionella_hold_minutes, in the cheapest
@@ -240,6 +244,7 @@ HOT_WATER_DEFAULTS = {
 HOT_WATER_NUMERIC_BOUNDS = {
     "control_safety_min_temp": (20.0, 55.0),
     "run_minutes": (15.0, 240.0),
+    "top_up_below": (15.0, 55.0),
     "legionella_temp": (55.0, 70.0),
     "hp_max_tank_temp": (40.0, 65.0),
     "immersion_power_w": (500.0, 6000.0),
@@ -341,6 +346,7 @@ def to_hot_water_zone_cfg(hw):
         "active": False,   # no anticipation curve for a tank
         "dhw": {"start_hysteresis_entity": hw["start_hysteresis_entity"],
                 "ready_by_times": hw.get("ready_by_times", []),
+                "top_up_below": hw.get("top_up_below", 25.0),
                 "immersion_entity": hw.get("immersion_entity"),
                 "hp_max_tank_temp": hw.get("hp_max_tank_temp", 55.0),
                 "immersion_power_w": hw.get("immersion_power_w", 2000.0),

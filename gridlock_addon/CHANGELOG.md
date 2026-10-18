@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.56.1 - 2026-10-18
+
+### Fix
+- Hot water heats once, before the morning ready-by (default 06:30 only), in the cheapest window; by day it only tops up if the tank sensor falls below 25 °C (configurable) — the tank stratifies, so a cool sensor still has showers at the top. Learned usage no longer pulls runs into the afternoon; it still lets a warm tank skip a night it doesn't need
+
 ## 3.56.0 - 2026-10-18
 
 ### New

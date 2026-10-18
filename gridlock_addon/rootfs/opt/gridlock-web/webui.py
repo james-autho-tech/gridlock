@@ -1303,7 +1303,8 @@ function renderHotWaterSettings(hw) {
         ${hwEntitySelect(hw, 'heating_entity', '"Heating hot water now" sensor', ['sensor', 'switch'])}
         ${txt('heating_entity_state', '…and the value that means heating', 'e.g. DHW')}
         ${num('control_safety_min_temp', 'Floor °C — force a run below this', 1, '20 = effectively off; the ready-by times and the daily guarantee do the work.')}
-        ${txt('ready_by_times', 'Ready by (times, comma-separated)', 'A needed run finishes before the next of these — e.g. 06:30 for the morning, 18:30 for the evening. Blank = only the daily guarantee.')}
+        ${txt('ready_by_times', 'Ready by (times, comma-separated)', 'The tank is heated to its setpoint before each of these, in the cheapest window — e.g. 06:30 for the morning.')}
+        ${num('top_up_below', 'Otherwise only top up below °C', 1, 'The tank stratifies — a cool sensor still leaves hot water at the top. Outside the ready-by run, heat only if the sensor drops below this.')}
         ${num('run_minutes', 'Window length, minutes', 5, 'How long the circuit is powered for per run.')}
         ${num('max_interval_hours', 'Run at least every … hours', 1, '0 = no guarantee, only the floor and learned usage.')}
         ${num('flow_margin', 'DHW flow above setpoint, °C', 1, 'For the COP estimate per slot.')}

@@ -577,3 +577,29 @@ def test_dashboard_saves_only_what_differs_from_the_defaults():
     assert diff_from_defaults(merge_settings({})) == {}
     d = diff_from_defaults(merge_settings({"target_temp": 16, "hot_water": {"run_minutes": 45}}))
     assert d == {"target_temp": 16.0, "hot_water": {"run_minutes": 45.0}}
+
+
+def test_cool_tank_waits_for_the_night_and_only_a_cold_one_tops_up_by_day(engine):
+    g, _ = engine
+    _seed_house(g)
+    _seed_tank(g)
+    from datetime import timedelta
+    with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
+        json.dump({"hot_water": {"legionella_enabled": False}}, f)
+    now = g.get_now()   # 07:00 UTC
+    start = now.replace(minute=0, second=0, microsecond=0)
+    # Daytime peak, cheap 23:00-05:30 local: a 35 C tank waits for the night.
+    slots = [{"start": start + timedelta(minutes=30 * i),
+              "imp": 0.0666 if 22 <= (start + timedelta(minutes=30 * i)).hour or (start + timedelta(minutes=30 * i)).hour < 4 else 0.34,
+              "exp": 0.04, "export": 0.0, "pv": 0.0} for i in range(96)]
+    g.build_slots = lambda now_: slots
+    g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "35.0"
+    g._publish_thermal_forecast(now)
+    hw = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]
+    assert hw["dhw"]["status"] == "waiting"
+    assert g._iso(hw["dhw"]["window_start"]).hour in (22, 23, 0, 1, 2, 3)
+    # Below 25 C by day: topped up within a couple of hours, not left for the night.
+    g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "23.0"
+    g._publish_thermal_forecast(now + timedelta(minutes=5))
+    hw = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]
+    assert g._iso(hw["dhw"]["window_start"]) <= now + timedelta(hours=3)
