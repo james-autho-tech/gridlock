@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.61.0 - 2026-10-18
+
+### New
+- Measured COP: each heat pump run's real efficiency is measured — heat out from the flow meter and flow/return temperatures, electricity in from the outdoor unit's voltage × current plus the indoor pump — over steady running only (first 10 minutes and defrosts skipped). A run of 20+ minutes calibrates the COP model's Carnot factor for your unit: heating runs for the heating planner, hot water runs for the hot water planner. Each measured run is logged, and the latest shows with the learned figures
+
 ## 3.60.1 - 2026-10-18
 
 ### Fix

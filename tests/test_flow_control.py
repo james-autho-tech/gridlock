@@ -228,3 +228,13 @@ def test_integer_plan_falls_back_to_the_continuous_one_if_the_solver_gives_up():
                                 min_power_w=2000.0, solver=GivesUp(msg=False))
     assert status == "optimal"
     assert sum(x["heat_kwh"] for x in plan) > 5.0     # still heats the house
+
+
+def test_measured_thermal_and_electric_power_and_run_cop():
+    from core.flow_control import measured_thermal_w, measured_electric_w, run_cop
+    assert abs(measured_thermal_w(1.3, 26.0, 23.0) - 4535) < 5      # matches the unit's own ~4.5 kW
+    assert measured_thermal_w(0.0, 30.0, 25.0) is None
+    assert measured_electric_w(240.0, 4.0) == 1030.0
+    assert abs(run_cop(4000.0, 1000.0) - 4.0) < 1e-9
+    assert run_cop(4000.0, 100.0) is None      # too small to trust
+    assert run_cop(10000.0, 1000.0) is None    # implausible

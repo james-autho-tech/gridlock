@@ -130,6 +130,10 @@ def _seed_house(g, room_temp="13.4", mode="active"):
     s["sensor.loft_heatpump_controller_total_water_outlet_temperature_t1"] = {"state": "20.0", "attributes": {}}
     s["sensor.loft_heatpump_controller_water_inlet_temperature"] = {"state": "19.0", "attributes": {}}
     s["sensor.loft_heatpump_controller_compressor_operating_frequency"] = {"state": "0", "attributes": {}}
+    s["sensor.loft_heatpump_controller_water_flow"] = {"state": "0.0", "attributes": {}}
+    s["sensor.loft_heatpump_controller_outdoor_unit_voltage"] = {"state": "240", "attributes": {}}
+    s["sensor.loft_heatpump_controller_outdoor_unit_current"] = {"state": "0", "attributes": {}}
+    s["binary_sensor.loft_heatpump_controller_status_bit_1_defrosting"] = {"state": "off", "attributes": {}}
 
 
 def test_dashboard_zone_plans_flow_and_commands_the_heat_pump(engine):
@@ -658,3 +662,29 @@ def test_hot_water_runs_switch_silent_mode_on_and_back_off(engine):
     g.calls.clear()
     g._publish_thermal_forecast(now + timedelta(hours=3))  # run over
     assert ("switch/turn_off", {"target": {"entity_id": q}}) in g.calls
+
+
+def test_a_measured_heating_run_calibrates_the_cop_factor(engine):
+    g, _ = engine
+    _seed_house(g)
+    from datetime import timedelta
+    st = g.states
+    def set_running(on):
+        st["sensor.loft_heatpump_controller_active_state"]["state"] = "Heating" if on else "Idle"
+        st["sensor.loft_heatpump_controller_compressor_operating_frequency"]["state"] = "35" if on else "0"
+        st["sensor.loft_heatpump_controller_water_flow"]["state"] = "1.2" if on else "0"
+        st["sensor.loft_heatpump_controller_total_water_outlet_temperature_t1"]["state"] = "35.0"
+        st["sensor.loft_heatpump_controller_water_inlet_temperature"]["state"] = "31.0"     # 4 C split -> 5.58 kW
+        st["sensor.loft_heatpump_controller_outdoor_unit_current"]["state"] = "6" if on else "0"  # 1440 + 70 W
+    now = g.get_now()
+    set_running(True)
+    for m in range(0, 65, 5):
+        g._publish_thermal_forecast(now + timedelta(minutes=m))
+    set_running(False)
+    g._publish_thermal_forecast(now + timedelta(minutes=70))
+    runs = g.thermal_learning_state["House"]["cop_runs"]
+    assert len(runs) == 1 and runs[0]["mode"] == "heating"
+    assert 3.5 < runs[0]["cop"] < 3.9          # 5.58 kW / 1.51 kW = 3.70
+    house = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]
+    assert house["learned_cop_eta"] != 0.45      # calibrated away from the default
+    assert any("measured heating run" in e["state"] for e in g.decision_log)

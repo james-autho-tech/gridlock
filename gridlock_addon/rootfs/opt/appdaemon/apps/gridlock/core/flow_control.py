@@ -411,3 +411,32 @@ def decide_flow_command(required_w, currently_on, min_power_w, prev_setpoint, ne
 
 
 blend = core_thermal.blend_learned_value
+
+
+
+WATER_WH_PER_M3_PER_C = 1162.8   # 1000 kg/m3 x 4186 J/kgK / 3600
+
+
+def measured_thermal_w(flow_m3h, flow_temp, return_temp):
+    """Heat actually delivered: water flow x (flow - return) x water's heat
+    capacity. None when any reading is missing or the flow has stopped."""
+    if flow_m3h is None or flow_temp is None or return_temp is None or flow_m3h <= 0.05:
+        return None
+    return max(0.0, flow_m3h * WATER_WH_PER_M3_PER_C * (flow_temp - return_temp))
+
+
+def measured_electric_w(voltage, current, pump_w=70.0):
+    """Electricity in: the outdoor unit's V x A, plus the indoor pump and
+    controller (not on the outdoor unit's meter)."""
+    if voltage is None or current is None:
+        return None
+    return max(0.0, voltage * current) + pump_w
+
+
+def run_cop(thermal_wh, electric_wh, min_electric_wh=200.0):
+    """A run's measured COP, or None if it's too small to trust or the
+    figure is implausible (a sensor dropout, a defrost misread)."""
+    if electric_wh < min_electric_wh:
+        return None
+    cop = thermal_wh / electric_wh
+    return cop if 1.0 < cop < 8.0 else None

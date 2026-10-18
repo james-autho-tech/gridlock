@@ -3031,6 +3031,12 @@ class GridLock(hass.Hass):
                 "flow_temp_entity": z.get("flow_temp_entity"),
                 "return_temp_entity": z.get("return_temp_entity"),
                 "compressor_entity": z.get("compressor_entity"),
+                "water_flow_entity": z.get("water_flow_entity"),
+                "outdoor_voltage_entity": z.get("outdoor_voltage_entity"),
+                "outdoor_current_entity": z.get("outdoor_current_entity"),
+                "defrost_entity": z.get("defrost_entity"),
+                "mode_entity": z.get("mode_entity"),
+                "pump_power_w": float(z.get("pump_power_w", 70.0)),
                 # Hot water scheduling (core/dhw_plan.py) -- set by the
                 # dashboard hot water zone; None for everything else.
                 "dhw": z.get("dhw"),
@@ -3080,6 +3086,78 @@ class GridLock(hass.Hass):
                 "compressor_hz": g("compressor_entity"),
                 "live_cop": g("cop_entity"),
                 "flow_setpoint_live": g("flow_entity")}
+
+    def _measure_run_cop(self, zone, now, hp, outdoor_temp):
+        """Measures each heat pump run's real COP and calibrates the COP
+        model from it (core/flow_control.py). The unit's own COP sensor is
+        a lifetime average, useless for this; instead: heat out = water
+        flow x (flow - return), electricity in = outdoor unit V x A + the
+        indoor pump. Only steady running counts -- the first 10 minutes of
+        a run and any defrost are skipped -- integrated over the whole run
+        so the sensors' whole-degree and whole-amp steps average out. A
+        finished run of 20+ minutes and 0.2+ kWh in gives one measured
+        COP, which with the run's average flow and outdoor temperature
+        gives the unit's true Carnot factor: heating runs calibrate the
+        heating planner, hot water runs the hot water planner."""
+        g = lambda key: (self.get_float_state(zone[key], None) if zone.get(key) else None)  # noqa: E731
+        learn = self.thermal_learning_state.setdefault(zone["name"], {})
+        mode_raw = str(self.get_state(zone["mode_entity"]) or "").lower() if zone.get("mode_entity") else ""
+        defrost = bool(zone.get("defrost_entity")) and self.get_state(zone["defrost_entity"]) == "on"
+        running = (hp.get("compressor_hz") or 0) > 5
+        mode = ("heating" if "heat" in mode_raw else "dhw" if "dhw" in mode_raw else None) if running else None
+        run = learn.get("cop_run")
+        if run and run.get("mode") != mode:
+            self._finish_cop_run(zone, run, now)
+            run = None
+        if mode and run is None:
+            run = {"mode": mode, "start": now.isoformat(), "prev": now.isoformat(),
+                   "th_wh": 0.0, "el_wh": 0.0, "flow_t": 0.0, "out_t": 0.0, "steady_h": 0.0}
+        if run is not None:
+            try:
+                dt_h = (now - self._iso(run["prev"])).total_seconds() / 3600.0
+                age_min = (now - self._iso(run["start"])).total_seconds() / 60.0
+            except (ValueError, TypeError, KeyError):
+                dt_h, age_min = 0.0, 0.0
+            th = core_flow.measured_thermal_w(g("water_flow_entity"), hp.get("flow_temp"), hp.get("return_temp"))
+            el = core_flow.measured_electric_w(g("outdoor_voltage_entity"), g("outdoor_current_entity"),
+                                               zone.get("pump_power_w", 70.0))
+            if 0.0 < dt_h <= 0.3 and age_min >= 10 and not defrost and th is not None and el is not None:
+                run["th_wh"] += th * dt_h
+                run["el_wh"] += el * dt_h
+                run["flow_t"] += (hp.get("flow_temp") or 0.0) * dt_h
+                run["out_t"] += (outdoor_temp or 0.0) * dt_h
+                run["steady_h"] += dt_h
+            run["prev"] = now.isoformat()
+        learn["cop_run"] = run
+
+    def _finish_cop_run(self, zone, run, now):
+        if run.get("steady_h", 0.0) < 20 / 60.0:
+            return
+        cop = core_flow.run_cop(run["th_wh"], run["el_wh"])
+        if cop is None:
+            return
+        avg_flow = run["flow_t"] / run["steady_h"]
+        avg_out = run["out_t"] / run["steady_h"]
+        eta = core_flow.implied_eta(cop, avg_flow, avg_out)
+        learn = self.thermal_learning_state.setdefault(zone["name"], {})
+        runs = learn.setdefault("cop_runs", [])
+        runs.append({"ts": now.isoformat(), "mode": run["mode"], "cop": round(cop, 2),
+                     "flow": round(avg_flow, 1), "outdoor": round(avg_out, 1),
+                     "heat_kwh": round(run["th_wh"] / 1000.0, 2), "elec_kwh": round(run["el_wh"] / 1000.0, 2),
+                     "eta": round(eta, 3) if eta is not None else None})
+        learn["cop_runs"] = runs[-30:]
+        if eta is not None and 0.2 <= eta <= 0.8:
+            if run["mode"] == "heating":
+                zone["cop_eta"] = min(0.8, max(0.2, core_flow.blend(zone["cop_eta"], eta, alpha=0.2)))
+                learn["cop_eta"] = zone["cop_eta"]
+            else:
+                hw_learn = self.thermal_learning_state.setdefault("Hot water", {})
+                prev = hw_learn.get("dhw_cop_eta") or 0.45
+                hw_learn["dhw_cop_eta"] = min(0.8, max(0.2, core_flow.blend(prev, eta, alpha=0.2)))
+        self._log_decision(f"GridWarm: measured {'heating' if run['mode'] == 'heating' else 'hot water'} run",
+                           f"COP {cop:.2f} at {avg_flow:.0f}°C flow, {avg_out:.0f}°C outside "
+                           f"({run['th_wh'] / 1000:.1f} kWh heat for {run['el_wh'] / 1000:.1f} kWh)")
+        self._save_json("thermal_learning_state.json", self.thermal_learning_state)
 
     def _update_flow_learning(self, zone, now, internal_temp, external_temp, heating_on, hp):
         """Learns the three numbers dynamic flow control depends on, from
@@ -3215,6 +3293,8 @@ class GridLock(hass.Hass):
         setpoint = setpoint if setpoint is not None else 53.0
         hyst = (self.get_float_state(d["start_hysteresis_entity"], 2.0)
                 if d.get("start_hysteresis_entity") else 2.0)
+        # Measured hot water runs calibrate this zone's COP factor.
+        d = dict(d, cop_eta=self.thermal_learning_state.get(zone["name"], {}).get("dhw_cop_eta") or d["cop_eta"])
         run_slots = core_dhw.run_slots_needed(d["run_minutes"], SLOT_MIN)
         state = self._thermal_control_state.setdefault(
             zone["name"], {"off_since": None, "last_commanded": None, "rejected": False,
@@ -3933,6 +4013,8 @@ class GridLock(hass.Hass):
         if not zone["is_tank"]:
             self._house_temp_now = internal_temp
         hp = self._hp_live(zone)
+        if zone.get("water_flow_entity"):
+            self._measure_run_cop(zone, now, hp, external_now)
         self._update_flow_learning(zone, now, internal_temp, external_now, heating_on, hp)
         if zone.get("dhw"):
             self._update_dhw_learning(zone, now, internal_temp, heating_on)
@@ -4051,6 +4133,7 @@ class GridLock(hass.Hass):
                 "learned_thermal_mass": round(zone["params"].thermal_mass_wh_per_c, 0),
                 "config_thermal_mass": round(zone["config_thermal_mass_wh_per_c"], 0),
                 "learned_min_output_w": round(zone["params"].heat_min_power or 0.0, 0),
+                "measured_runs": (self.thermal_learning_state.get(zone["name"], {}).get("cop_runs") or [])[-10:],
                 "min_output_learned": "yes" if self.thermal_learning_state.get(zone["name"], {}).get("min_output_w") else "no",
                 "cop": round(live_cop, 2) if live_cop is not None else zone["params"].heating_cop,
                 "predicted_kwh_today": round(predicted_kwh_today, 2),

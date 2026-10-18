@@ -164,6 +164,15 @@ DEFAULTS = {
     "flow_temp_entity": "sensor.loft_heatpump_controller_total_water_outlet_temperature_t1",
     "return_temp_entity": "sensor.loft_heatpump_controller_water_inlet_temperature",
     "compressor_entity": "sensor.loft_heatpump_controller_compressor_operating_frequency",
+    # Measuring each run's real COP: heat out from the flow meter and the
+    # flow/return temperatures, electricity in from the outdoor unit's
+    # voltage and current plus the indoor pump. Feeds the COP model.
+    "water_flow_entity": "sensor.loft_heatpump_controller_water_flow",
+    "outdoor_voltage_entity": "sensor.loft_heatpump_controller_outdoor_unit_voltage",
+    "outdoor_current_entity": "sensor.loft_heatpump_controller_outdoor_unit_current",
+    "defrost_entity": "binary_sensor.loft_heatpump_controller_status_bit_1_defrosting",
+    "mode_entity": "sensor.loft_heatpump_controller_active_state",
+    "pump_power_w": 70.0,
 }
 
 # --- Hot water (DHW) zone, same dashboard-configured arrangement ---
@@ -413,6 +422,7 @@ NUMERIC_BOUNDS = {
     "cop_eta": (0.2, 0.8),
     "comfort_below": (0.0, 5.0),
     "comfort_above": (0.0, 5.0),
+    "pump_power_w": (0.0, 500.0),
     "battery_wear_p_per_kwh": (0.0, 30.0),
     "min_on_minutes": (0.0, 180.0),
     "min_off_minutes": (0.0, 180.0),
@@ -426,7 +436,8 @@ ENTITY_FIELDS = ("internal_temp_entity", "internal_temp_fallback_entity",
                  "external_temp_entity", "weather_entity",
                  "control_entity", "heating_entity", "cop_entity", "flow_entity",
                  "thermal_power_entity", "flow_temp_entity", "return_temp_entity",
-                 "compressor_entity")
+                 "compressor_entity", "water_flow_entity", "outdoor_voltage_entity",
+                 "outdoor_current_entity", "defrost_entity", "mode_entity")
 BOOL_FIELDS = ("configured", "tariff_optimise", "notify_external_commands")
 
 
@@ -541,6 +552,12 @@ def to_zone_cfg(settings):
         "flow_temp_entity": settings["flow_temp_entity"],
         "return_temp_entity": settings["return_temp_entity"],
         "compressor_entity": settings["compressor_entity"],
+        "water_flow_entity": settings["water_flow_entity"],
+        "outdoor_voltage_entity": settings["outdoor_voltage_entity"],
+        "outdoor_current_entity": settings["outdoor_current_entity"],
+        "defrost_entity": settings["defrost_entity"],
+        "mode_entity": settings["mode_entity"],
+        "pump_power_w": settings["pump_power_w"],
     }
 
 
