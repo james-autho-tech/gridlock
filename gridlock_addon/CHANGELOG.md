@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.60.0 - 2026-10-18
+
+### New
+- Low and slow hot water: the unit's silent mode is switched on for each hot water run (capping compressor speed, so the coil runs cooler for the same tank — better COP, quieter at night) and off after; GridWarm only ever switches off what it switched on. Runs are sized at 70 % of full output to suit. On by default, a checkbox in hot water settings
+
 ## 3.59.1 - 2026-10-18
 
 ### Fix

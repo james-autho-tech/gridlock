@@ -249,6 +249,7 @@ def _seed_tank(g):
     s["number.loft_heatpump_controller_dt5_on"] = {"state": "10.0", "attributes": {}}
     s["switch.loft_heatpump_controller_power_dhw_t5s"] = {"state": "off", "attributes": {}}
     s["switch.loft_heatpump_controller_parameter_setting_1_enable_water_heating"] = {"state": "on", "attributes": {}}
+    s["switch.loft_heatpump_controller_function_setting_silent_mode"] = {"state": "off", "attributes": {}}
 
 
 def test_hot_water_zone_plans_a_window_and_powers_the_circuit_when_it_starts(engine):
@@ -638,3 +639,22 @@ def test_a_30c_tank_in_the_evening_gets_a_long_enough_run_before_the_morning(eng
     # 23 C x 174 Wh/C = 4 kWh at 3.5 kW ~ 69 min + 10 -> 1.5 h, not a flat hour
     assert end - start >= timedelta(hours=1, minutes=30)
     assert hw["dhw"]["status"] in ("waiting", "running")
+
+
+def test_hot_water_runs_switch_silent_mode_on_and_back_off(engine):
+    g, _ = engine
+    _seed_house(g)
+    _seed_tank(g)
+    from datetime import timedelta
+    with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
+        json.dump({"hot_water": {"legionella_enabled": False}}, f)
+    q = "switch.loft_heatpump_controller_function_setting_silent_mode"
+    g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "30.0"
+    now = g.get_now()
+    g._publish_thermal_forecast(now)                     # flat prices: run starts now
+    assert ("switch/turn_on", {"target": {"entity_id": q}}) in g.calls
+    g.states[q]["state"] = "on"
+    g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "53.0"
+    g.calls.clear()
+    g._publish_thermal_forecast(now + timedelta(hours=3))  # run over
+    assert ("switch/turn_off", {"target": {"entity_id": q}}) in g.calls

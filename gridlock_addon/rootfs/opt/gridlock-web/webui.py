@@ -1308,6 +1308,7 @@ function renderHotWaterSettings(hw) {
           <option value="house" ${hw.tank_ambient === 'house' ? 'selected' : ''}>the house (indoors, airing cupboard)</option>
           <option value="outdoor" ${hw.tank_ambient === 'outdoor' ? 'selected' : ''}>the outdoors (loft, garage, outhouse)</option></select>
           <div style="color:var(--dim);font-size:10px;margin-top:2px">Sets how much hotter the nightly run goes in winter so the tank lasts the day.</div></div>
+        <div><div class="lbl">Low and slow</div><label style="font-size:12px;color:var(--ink)"><input type="checkbox" ${hw.quiet_runs ? 'checked' : ''} onchange="hwSet('quiet_runs', this)"> silent mode during each run — slower compressor, better COP, quieter at night</label></div>
         ${num('max_daily_setpoint', 'Nightly run: never above °C', 1, '55 keeps it on the heat pump alone — above that the unit uses the immersion.')}
         ${num('top_up_below', 'Otherwise only top up below °C', 1, 'The tank stratifies — a cool sensor still leaves hot water at the top. Outside the ready-by run, heat only if the sensor drops below this.')}
         ${num('run_minutes', 'Window length, minutes', 5, 'How long the circuit is powered for per run.')}

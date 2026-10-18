@@ -207,6 +207,13 @@ HOT_WATER_DEFAULTS = {
     # isn't pulled in for it). The setpoint is raised for the run and put
     # back after.
     "max_daily_setpoint": 55.0,
+    # Low and slow for hot water: switch the unit's silent mode on for each
+    # run (it caps compressor speed, so the coil runs a few degrees cooler
+    # for the same tank -- better COP, quieter at night) and off after.
+    # Runs are sized at quiet_output_factor of full DHW output to suit.
+    "quiet_runs": True,
+    "quiet_entity": "switch.loft_heatpump_controller_function_setting_silent_mode",
+    "quiet_output_factor": 0.7,
     # What the tank loses heat to: "house" (indoors -- the house zone's
     # room temperature) or "outdoor" (loft, garage, outhouse).
     "tank_ambient": "house",
@@ -256,6 +263,7 @@ HOT_WATER_NUMERIC_BOUNDS = {
     "run_minutes": (15.0, 240.0),
     "top_up_below": (15.0, 55.0),
     "max_daily_setpoint": (40.0, 65.0),
+    "quiet_output_factor": (0.3, 1.0),
     "legionella_temp": (55.0, 70.0),
     "hp_max_tank_temp": (40.0, 65.0),
     "immersion_power_w": (500.0, 6000.0),
@@ -276,6 +284,7 @@ HOT_WATER_NUMERIC_BOUNDS = {
 }
 
 HOT_WATER_ENTITY_FIELDS = ("tank_temp_entity", "target_temp_entity", "start_hysteresis_entity", "immersion_entity",
+                           "quiet_entity",
                            "control_entity", "heating_entity", "cop_entity",
                            "external_temp_entity", "weather_entity")
 
@@ -283,7 +292,7 @@ HOT_WATER_ENTITY_FIELDS = ("tank_temp_entity", "target_temp_entity", "start_hyst
 def merge_hot_water(saved):
     out = copy.deepcopy(HOT_WATER_DEFAULTS)
     saved = saved if isinstance(saved, dict) else {}
-    for key in ("configured", "legionella_enabled"):
+    for key in ("configured", "legionella_enabled", "quiet_runs"):
         if key in saved:
             out[key] = bool(saved[key])
     name = saved.get("name")
@@ -361,6 +370,8 @@ def to_hot_water_zone_cfg(hw):
                 "ready_by_times": hw.get("ready_by_times", []),
                 "top_up_below": hw.get("top_up_below", 25.0),
                 "max_daily_setpoint": hw.get("max_daily_setpoint", 55.0),
+                "quiet_entity": hw.get("quiet_entity") if hw.get("quiet_runs", True) else None,
+                "quiet_output_factor": hw.get("quiet_output_factor", 0.7) if hw.get("quiet_runs", True) else 1.0,
                 "tank_ambient": hw.get("tank_ambient", "house"),
                 "immersion_entity": hw.get("immersion_entity"),
                 "hp_max_tank_temp": hw.get("hp_max_tank_temp", 55.0),

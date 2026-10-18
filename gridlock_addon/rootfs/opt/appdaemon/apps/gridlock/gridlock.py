@@ -3247,7 +3247,7 @@ class GridLock(hass.Hass):
                 hp_wh = max(0.0, min(lg_cfg["temp"], hp_lim) - t0) * mass
                 imm_wh = max(0.0, lg_cfg["temp"] - max(t0, hp_lim)) * mass
                 imm_w = d.get("immersion_power_w", 2000.0)
-                heat_min = (hp_wh / max(zone["params"].heat_max_power or 3500.0, 500.0)
+                heat_min = (hp_wh / max((zone["params"].heat_max_power or 3500.0) * d.get("quiet_output_factor", 1.0), 500.0)
                             + imm_wh / max(imm_w, 500.0)) * 60.0
                 cycle_min = min(lg_cfg["window_minutes"], heat_min + lg_cfg["hold_minutes"] + 10.0)
                 run_slots = max(run_slots, core_dhw.run_slots_needed(cycle_min, SLOT_MIN))
@@ -3313,7 +3313,7 @@ class GridLock(hass.Hass):
             hp_lim_n = d.get("hp_max_tank_temp", 55.0)
             mass_n = max(zone["params"].thermal_mass_wh_per_c, 1.0)
             need_min = ((max(0.0, min(daily_target, hp_lim_n) - t0n) * mass_n)
-                        / max(zone["params"].heat_max_power or 3500.0, 500.0)
+                        / max((zone["params"].heat_max_power or 3500.0) * d.get("quiet_output_factor", 1.0), 500.0)
                         + (max(0.0, daily_target - max(t0n, hp_lim_n)) * mass_n)
                         / max(d.get("immersion_power_w", 2000.0), 500.0)) * 60.0 + 10.0
             run_slots = max(run_slots, core_dhw.run_slots_needed(min(need_min, 240.0), SLOT_MIN))
@@ -4268,6 +4268,19 @@ class GridLock(hass.Hass):
                 self.call_service("number/set_value", target={"entity_id": tgt_ent}, value=float(sw))
                 self._log_decision(f"GridWarm: {name} setpoint {sw:.0f}°C",
                                    "Legionella cycle" if raising else "Legionella cycle over — setpoint restored")
+        # Low and slow hot water: the unit's silent mode for the duration of
+        # a run GridWarm started, and off again after -- only ever undoing
+        # what it switched on itself.
+        quiet = (zone.get("dhw") or {}).get("quiet_entity")
+        if quiet:
+            want_quiet = (not paused) and bool((result.get("dhw") or {}).get("committed"))
+            live_q = self.get_state(quiet)
+            if want_quiet and live_q == "off":
+                self.call_service("switch/turn_on", target={"entity_id": quiet})
+                state["quiet_on_by_us"] = True
+            elif not want_quiet and state.get("quiet_on_by_us") and live_q == "on":
+                self.call_service("switch/turn_off", target={"entity_id": quiet})
+                state["quiet_on_by_us"] = False
         if paused:
             state["blocked_key"] = None
             return
