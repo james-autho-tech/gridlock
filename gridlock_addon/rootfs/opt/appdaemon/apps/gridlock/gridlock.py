@@ -3526,8 +3526,9 @@ class GridLock(hass.Hass):
             internal_temp, ext, rates, tgt, params,
             comfort_below=zone["comfort_below"], comfort_above=zone["comfort_above"],
             slot_hours=slot_hours, low_flow_power_w=low_w, cop_low_curve=cop_low,
-            cop_high_curve=cop_high, max_power_w=max_w, solver=core_optimizer._solver(),
+            cop_high_curve=cop_high, max_power_w=max_w, solver=core_flow.heating_solver(),
             heat_kwh_prev=delivering_kwh, gain_curve_w=gain_curve, segment_curve=segment_curve,
+            min_power_w=params.heat_min_power or None,
             comfort_cost_per_degree_slot=core_flow.COMFORT_COST_BY_PRIORITY.get(
                 zone.get("comfort_priority", "cop"), core_flow.COMFORT_COST_PER_DEGREE_SLOT))
         if plan:

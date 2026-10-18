@@ -197,3 +197,34 @@ def test_staircase_plan_runs_flat_instead_of_bursting():
     # 0.0125 * 8000 * 5 K = 500 W loss -> 0.25 kWh per slot, delivered evenly
     assert max(heats) - min(heats) < 0.1, heats
     assert all(14.5 <= x["temp"] <= 15.5 for x in plan)
+
+
+def test_minimum_output_means_no_trickle_slots():
+    p = _params(heat_loss_degrees=0.003, thermal_mass_wh_per_c=8000, heat_gain_static=0.0, heat_loss_watts=0.0)
+    n = 24
+    segs = [heat_segments(15.0, 10.0, 10000, 0.45, 25.0, 50.0)] * n
+    plan, status = plan_heating(15.0, [10.0] * n, [10.0] * n, [15.0] * n, p, segment_curve=segs,
+                                min_power_w=1500.0)
+    if status != "optimal":
+        return
+    for x in plan:
+        # 120 W loss: never a trickle -- off, or at least the radiators' full
+        # output at 25 C flow (below the 1.5 kW minimum, so that's the floor).
+        assert x["heat_kwh"] < 1e-6 or x["heat_kwh"] >= 0.35, x["heat_kwh"]
+
+
+def test_integer_plan_falls_back_to_the_continuous_one_if_the_solver_gives_up():
+    import pulp
+    p = _params()
+    n = 24
+    segs = [heat_segments(15.0, 5.0, 10000, 0.45, 25.0, 50.0)] * n
+    class GivesUp(pulp.PULP_CBC_CMD):
+        def actualSolve(self, lp, **kw):
+            if any(v.cat == pulp.LpInteger for v in lp.variables()):
+                lp.status = pulp.LpStatusNotSolved
+                return lp.status
+            return super().actualSolve(lp, **kw)
+    plan, status = plan_heating(15.0, [5.0] * n, [10.0] * n, [15.0] * n, p, segment_curve=segs,
+                                min_power_w=2000.0, solver=GivesUp(msg=False))
+    assert status == "optimal"
+    assert sum(x["heat_kwh"] for x in plan) > 5.0     # still heats the house

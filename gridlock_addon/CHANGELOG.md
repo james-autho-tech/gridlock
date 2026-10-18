@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.58.0 - 2026-10-18
+
+### New
+- The heating plan knows the compressor's minimum output: each half-hour is either off or a real run (at least the minimum output, or all the radiators can take), so it no longer plans trickles of a few tens of watts the heat pump can't deliver — and the Plan tile's "heats from" time is one it will actually act on. Solved with an 8 s cap and a 2 % optimality tolerance; if the integer solve doesn't finish, it falls back to the continuous plan rather than to no heating
+
 ## 3.57.0 - 2026-10-18
 
 ### New

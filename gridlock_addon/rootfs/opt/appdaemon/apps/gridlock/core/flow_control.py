@@ -182,6 +182,19 @@ def steady_state_loss_w(internal_temp, external_temp, params):
     return loss_c_per_hr * params.thermal_mass_wh_per_c - params.heat_gain_static
 
 
+def heating_solver(time_limit=8, gap=0.02):
+    """Solver for the heating plan: the system GLPK where installed (the
+    add-on image), else PuLP's bundled CBC -- with a time cap and a small
+    optimality gap, because the minimum-output binaries make it an integer
+    problem and a plan 2% from perfect now beats a perfect one late."""
+    import shutil
+    import pulp  # noqa: PLC0415
+    path = shutil.which("glpsol")
+    if path:
+        return pulp.GLPK_CMD(path=path, msg=False, timeLimit=time_limit, options=["--mipgap", str(gap)])
+    return pulp.PULP_CBC_CMD(msg=False, timeLimit=time_limit, gapRel=gap)
+
+
 def heat_segments(room_temp, outdoor_temp, rated_w_at_dt50, eta, flow_min, flow_max,
                   water_dt=5.0, step=5.0, max_power_w=None):
     """The heat pump's cost of heat as a staircase, one step per flow
@@ -219,7 +232,7 @@ def plan_heating(temp0, external_curve, rate_curve, target_curve, params, *,
                  max_power_w=None, solver=None,
                  comfort_cost_per_degree_slot=COMFORT_COST_PER_DEGREE_SLOT,
                  smoothing_cost_per_kwh_change=SMOOTHING_COST_PER_KWH_CHANGE,
-                 heat_kwh_prev=None, gain_curve_w=None, segment_curve=None):
+                 heat_kwh_prev=None, gain_curve_w=None, segment_curve=None, min_power_w=None):
     """The heating plan: heat to deliver per slot (kWh) over the horizon
     at least cost, keeping the room inside [target - comfort_below,
     target + comfort_above]. Linear programme (PuLP) -- see the module
@@ -286,6 +299,17 @@ def plan_heating(temp0, external_curve, rate_curve, target_curve, params, *,
              for i in range(n)]
         q_lo = [pulp.lpSum(q[i]) for i in range(n)]
         q_hi = [0 for _ in range(n)]
+        # The compressor can't deliver a trickle: each slot is either off
+        # or at least its minimum output (or everything the radiators can
+        # take, if that's less). A binary per slot -- 48 of them, well
+        # within the solver's time cap.
+        if min_power_w:
+            for i in range(n):
+                cap_kwh = sum(w for w, _ in segs[i]) * slot_hours / 1000.0
+                floor_kwh = min(min_power_w * slot_hours / 1000.0, cap_kwh)
+                on = pulp.LpVariable(f"on_{i}", cat="Binary")
+                prob += q_lo[i] <= cap_kwh * on
+                prob += q_lo[i] >= floor_kwh * on
         temp = [pulp.LpVariable(f"temp_{i}") for i in range(n)]
         under = [pulp.LpVariable(f"under_{i}", 0) for i in range(n)]
         over = [pulp.LpVariable(f"over_{i}", 0) for i in range(n)]
@@ -326,7 +350,22 @@ def plan_heating(temp0, external_curve, rate_curve, target_curve, params, *,
         prob += temp[n - 1] >= target_curve[n - 1] - under[n - 1]
         prob += pulp.lpSum(cost_terms)
         prob.solve(solver or pulp.PULP_CBC_CMD(msg=False, timeLimit=10))
-        if pulp.LpStatus[prob.status] not in ("Optimal", "Not Solved"):
+        solved = pulp.LpStatus[prob.status] == "Optimal" and all(
+            pulp.value(v) is not None for row in q for v in row)
+        if not solved:
+            if min_power_w:
+                # The integer version didn't finish cleanly (timed out on a
+                # slow box, say) -- never let that become "no heating":
+                # re-plan without the minimum-output constraint.
+                return plan_heating(temp0, external_curve, rate_curve, target_curve, params,
+                                    comfort_below=comfort_below, comfort_above=comfort_above,
+                                    slot_hours=slot_hours, low_flow_power_w=low_flow_power_w,
+                                    cop_low_curve=cop_low_curve, cop_high_curve=cop_high_curve,
+                                    max_power_w=max_power_w, solver=solver,
+                                    comfort_cost_per_degree_slot=comfort_cost_per_degree_slot,
+                                    smoothing_cost_per_kwh_change=smoothing_cost_per_kwh_change,
+                                    heat_kwh_prev=heat_kwh_prev, gain_curve_w=gain_curve_w,
+                                    segment_curve=segment_curve, min_power_w=None)
             return fallback()
         out = []
         for i in range(n):
