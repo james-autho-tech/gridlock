@@ -280,7 +280,7 @@ def test_hot_water_window_completes_and_is_not_rerun_until_the_interval(engine):
     _seed_tank(g)
     # Ordinary windows only -- the legionella cycle has its own tests.
     with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
-        json.dump({"hot_water": {"legionella_enabled": False}}, f)
+        json.dump({"hot_water": {"legionella_enabled": False, "max_interval_hours": 24}}, f)
     from datetime import timedelta
     now = g.get_now()
     g._publish_thermal_forecast(now)
@@ -515,3 +515,21 @@ def test_legionella_window_is_sized_from_the_tank_not_a_fixed_three_hours(engine
     start, end = (g._iso(hw["dhw"]["window_start"]), g._iso(hw["dhw"]["window_end"]))
     # 3 C on the immersion (~16 min) + 60 min hold + 10 min margin -> 1.5 h
     assert (end - start) <= timedelta(hours=1, minutes=30)
+
+
+def test_warm_tank_is_not_forced_into_a_peak_slot_by_a_timer(engine):
+    g, _ = engine
+    _seed_house(g)
+    _seed_tank(g)
+    with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
+        json.dump({"hot_water": {"legionella_enabled": False}}, f)
+    from datetime import timedelta
+    tank = "sensor.loft_heatpump_controller_water_tank_temperature_t5"
+    g.states[tank]["state"] = "57.0"
+    now = g.get_now()
+    for h in range(0, 30, 2):   # a day and more of a warm tank: never a run
+        g.calls.clear()
+        g._publish_thermal_forecast(now + timedelta(hours=h))
+        hw = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]
+        assert hw["dhw"]["status"] == "not_needed", (h, hw["dhw"]["status"])
+        assert ("switch/turn_on", {"target": {"entity_id": "switch.loft_heatpump_controller_power_dhw_t5s"}}) not in g.calls

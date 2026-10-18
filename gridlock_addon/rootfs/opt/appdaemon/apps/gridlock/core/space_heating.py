@@ -203,7 +203,10 @@ HOT_WATER_DEFAULTS = {
     "immersion_power_w": 2000.0,       # the unit's TBH rating
     # The immersion heater's output, to report whether a cycle needed it.
     "immersion_entity": "binary_sensor.loft_heatpump_controller_load_output_electric_heater_tbh",
-    "max_interval_hours": 24.0,        # never longer than this between windows
+    # A forced run every N hours regardless of the tank. Off: the ready-by
+    # times plus the unit's small top-up margin already guarantee hot water,
+    # and a timer forcing a run made peak-rate hours look like the only option.
+    "max_interval_hours": 0.0,
     "flow_margin": 5.0,                # DHW flow runs about this far above the tank setpoint (for the COP estimate)
     "cop_eta": 0.45,
     "control_requires": [

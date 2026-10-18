@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.55.5 - 2026-10-18
+
+### Fix
+- Hot water's "run at least every 24 h" guarantee is off by default: with ready-by times and a small unit top-up margin it added nothing, and as the 24 h ran out it hid the cheap overnight slots and pointed at peak-rate hours instead. The panel only mentions a forced run when one is configured
+
 ## 3.55.4 - 2026-10-18
 
 ### Fix
