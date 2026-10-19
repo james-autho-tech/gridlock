@@ -589,9 +589,10 @@ gets power*:
   setpoint to 60°C, keeps the circuit powered until the tank has held
   60°C for 60 minutes, then restores the setpoint (even if paused
   mid-cycle). It notes whether the immersion helped. A cycle that can't
-  finish in 5 hours is abandoned and retried next window. The unit's own
-  disinfection function is left off — it runs on a panel schedule
-  GridWarm can't see.
+  finish in 5 hours is abandoned and retried next window. The unit's own scheduled disinfection (set on its wired controller; it
+  runs the immersion for hours) is cancelled by GridWarm whenever it
+  starts on its own. Turn its schedule off too, on the wired controller:
+  Domestic hot water → Disinfect → Off.
 - **Keep the unit's top-up margin small.** The unit only heats once the
   tank is dT5_ON below its setpoint (10°C out of the box). Set it to
   about 2°C on the unit; GridWarm decides when.
