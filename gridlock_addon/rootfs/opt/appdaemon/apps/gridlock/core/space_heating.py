@@ -223,6 +223,13 @@ HOT_WATER_DEFAULTS = {
     "quiet_runs": True,
     "quiet_entity": "switch.loft_heatpump_controller_function_setting_silent_mode",
     "quiet_output_factor": 0.7,
+    # The unit's own scheduled disinfection (set on its wired controller,
+    # invisible until it runs) leans on the immersion for hours. GridWarm's
+    # legionella cycle replaces it, so when the unit starts its own,
+    # GridWarm switches it straight back off. Disable the schedule on the
+    # wired controller too (DHW menu -> Disinfect -> Off).
+    "cancel_unit_disinfect": True,
+    "unit_disinfect_entity": "switch.loft_heatpump_controller_function_setting_disinfect",
     # What the tank loses heat to: "house" (indoors -- the house zone's
     # room temperature) or "outdoor" (loft, garage, outhouse).
     "tank_ambient": "house",
@@ -293,7 +300,7 @@ HOT_WATER_NUMERIC_BOUNDS = {
 }
 
 HOT_WATER_ENTITY_FIELDS = ("tank_temp_entity", "target_temp_entity", "start_hysteresis_entity", "immersion_entity",
-                           "quiet_entity",
+                           "quiet_entity", "unit_disinfect_entity",
                            "control_entity", "heating_entity", "cop_entity",
                            "external_temp_entity", "weather_entity")
 
@@ -301,7 +308,7 @@ HOT_WATER_ENTITY_FIELDS = ("tank_temp_entity", "target_temp_entity", "start_hyst
 def merge_hot_water(saved):
     out = copy.deepcopy(HOT_WATER_DEFAULTS)
     saved = saved if isinstance(saved, dict) else {}
-    for key in ("configured", "legionella_enabled", "quiet_runs"):
+    for key in ("configured", "legionella_enabled", "quiet_runs", "cancel_unit_disinfect"):
         if key in saved:
             out[key] = bool(saved[key])
     name = saved.get("name")
@@ -381,6 +388,8 @@ def to_hot_water_zone_cfg(hw):
                 "max_daily_setpoint": hw.get("max_daily_setpoint", 55.0),
                 "quiet_entity": hw.get("quiet_entity") if hw.get("quiet_runs", True) else None,
                 "quiet_output_factor": hw.get("quiet_output_factor", 0.7) if hw.get("quiet_runs", True) else 1.0,
+                "unit_disinfect_entity": (hw.get("unit_disinfect_entity")
+                                          if hw.get("cancel_unit_disinfect", True) else None),
                 "tank_ambient": hw.get("tank_ambient", "house"),
                 "immersion_entity": hw.get("immersion_entity"),
                 "hp_max_tank_temp": hw.get("hp_max_tank_temp", 55.0),

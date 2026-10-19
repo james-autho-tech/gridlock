@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.63.0 - 2026-10-19
+
+### New
+- Guard against the heat pump's own scheduled disinfection: when the unit switches its disinfect on by itself (a weekly schedule on its wired controller, which runs the immersion for hours), GridWarm switches it back off, logs it and notifies — unless GridWarm's own legionella cycle is the one running. On by default; the schedule itself should also be turned off on the wired controller
+
 ## 3.62.0 - 2026-10-18
 
 ### New

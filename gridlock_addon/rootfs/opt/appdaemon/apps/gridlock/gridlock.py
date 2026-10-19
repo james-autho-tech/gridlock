@@ -4197,6 +4197,10 @@ class GridLock(hass.Hass):
             # startup -- a settings edit (or restart) mustn't reset what
             # the model has learned about the house back to the defaults.
             self._apply_learned_thermal(zone)
+            dis = (zone.get("dhw") or {}).get("unit_disinfect_entity")
+            if dis and dis not in self._control_listeners:
+                self._control_listeners[dis] = zone["name"]
+                self.listen_state(self._on_unit_disinfect, dis)
             if zone["control_entity"]:
                 pause_helper = self._thermal_pause_helper(zone["name"])
                 if not self.entity_exists(pause_helper):
@@ -4224,6 +4228,29 @@ class GridLock(hass.Hass):
             return
         self._control_listeners[entity] = zone["name"]
         self.listen_state(self._on_control_entity_changed, entity)
+
+    def _on_unit_disinfect(self, entity, attribute, old, new, kwargs):
+        """The unit started its own scheduled disinfection. GridWarm's
+        legionella cycle replaces it (on the heat pump, in a cheap window,
+        an hour at 60 °C -- not hours of immersion), so switch it off,
+        unless GridWarm's own cycle is the thing running."""
+        if new != "on" or self.get_state(self.ent_gridwarm_mode) != "active":
+            return
+        name = self._control_listeners.get(entity)
+        if name and self.get_state(self._thermal_pause_helper(name)) == "off":
+            return
+        lg = self.thermal_learning_state.get(name or "", {}).get("legionella", {})
+        if lg.get("phase"):
+            return
+        self.call_service("switch/turn_off", target={"entity_id": entity})
+        self._log_decision(f"GridWarm: {name or 'Hot water'} — unit disinfection cancelled",
+                           "The heat pump started its own scheduled disinfection (immersion for hours); "
+                           "GridWarm's weekly cycle covers legionella. Turn the schedule off on the wired "
+                           "controller: DHW menu → Disinfect → Off.")
+        self._notify("GridLock: heat pump's own disinfection cancelled",
+                     "The unit started its scheduled disinfection, which runs the immersion for hours. "
+                     "GridWarm's weekly legionella cycle already covers it, so it was switched off. "
+                     "To stop it trying: wired controller → Domestic hot water → Disinfect → Off.")
 
     def _on_control_entity_changed(self, entity, attribute, old, new, kwargs):
         name = self._control_listeners.get(entity)

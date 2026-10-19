@@ -254,6 +254,7 @@ def _seed_tank(g):
     s["switch.loft_heatpump_controller_power_dhw_t5s"] = {"state": "off", "attributes": {}}
     s["switch.loft_heatpump_controller_parameter_setting_1_enable_water_heating"] = {"state": "on", "attributes": {}}
     s["switch.loft_heatpump_controller_function_setting_silent_mode"] = {"state": "off", "attributes": {}}
+    s["switch.loft_heatpump_controller_function_setting_disinfect"] = {"state": "off", "attributes": {}}
 
 
 def test_hot_water_zone_plans_a_window_and_powers_the_circuit_when_it_starts(engine):
@@ -690,3 +691,22 @@ def test_a_measured_heating_run_calibrates_the_cop_factor(engine):
     house = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]
     assert house["learned_cop_eta"] != 0.45      # calibrated away from the default
     assert any("measured heating run" in e["state"] for e in g.decision_log)
+
+
+def test_the_units_own_disinfection_is_cancelled_but_gridwarms_cycle_is_not(engine):
+    g, _ = engine
+    _seed_house(g)
+    _seed_tank(g)
+    dis = "switch.loft_heatpump_controller_function_setting_disinfect"
+    g._publish_thermal_forecast(g.get_now())          # loads zones, registers the listener
+    cb = g.listeners[dis]
+    # GridWarm's own cycle running (first tick starts it): leave the unit alone.
+    g.calls.clear()
+    cb(dis, None, "off", "on", {})
+    assert ("switch/turn_off", {"target": {"entity_id": dis}}) not in g.calls
+    # No cycle of ours: the unit's scheduled disinfection is switched off.
+    g.thermal_learning_state["Hot water"]["legionella"]["phase"] = None
+    g.calls.clear()
+    cb(dis, None, "off", "on", {})
+    assert ("switch/turn_off", {"target": {"entity_id": dis}}) in g.calls
+    assert any("disinfection cancelled" in e["state"] for e in g.decision_log)
