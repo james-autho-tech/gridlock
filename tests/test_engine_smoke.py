@@ -126,7 +126,6 @@ def _seed_house(g, room_temp="13.4", mode="active"):
     s["sensor.loft_heatpump_controller_room_temperature_ta"] = {"state": room_temp, "attributes": {}}
     for e in TADO:
         s[e] = {"state": "heat", "attributes": {"current_temperature": room_temp}}
-    s["climate.bedroom_4_qing_thermo"] = {"state": "unavailable", "attributes": {}}
     # The heat pump's own outdoor sensor is the default outdoor reading;
     # the weather entity only supplies the forecast (not available in the fake).
     s["sensor.loft_heatpump_controller_outdoor_ambient_temperature"] = {"state": "4.0", "attributes": {}}
