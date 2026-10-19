@@ -2956,6 +2956,7 @@ class GridLock(hass.Hass):
                 # unavailable -- the heat pump's own controller sensor,
                 # typically. Read the same way (climate.* auto-detected).
                 "internal_temp_fallback_entity": z.get("internal_temp_fallback_entity"),
+                "internal_temp_entities": list(z.get("internal_temp_entities") or []),
                 "target_temp_entity": z.get("target_temp_entity"),
                 "target_temp_attribute": z.get("target_temp_attribute"),
                 "external_temp_entity": z.get("external_temp_entity"),
@@ -3691,7 +3692,25 @@ class GridLock(hass.Hass):
         pointed at a climate entity (the common case) works with no
         extra config; internal_temp_attribute can still override it for
         anything that doesn't follow that convention."""
-        for ent, is_fallback in ((zone["internal_temp_entity"], False),
+        # Several rooms: the average of every one that's reporting.
+        many = zone.get("internal_temp_entities") or []
+        if many:
+            vals = []
+            for ent in many:
+                if ent.startswith("climate."):
+                    v = self.get_state(ent, attribute="current_temperature")
+                else:
+                    v = self.get_state(ent)
+                try:
+                    if v not in (None, "unknown", "unavailable"):
+                        vals.append(float(v))
+                except (ValueError, TypeError):
+                    continue
+            if vals:
+                zone["_reading_source"] = None
+                zone["_rooms_used"] = len(vals)
+                return sum(vals) / len(vals)
+        for ent, is_fallback in ((zone["internal_temp_entity"], bool(many)),
                                  (zone.get("internal_temp_fallback_entity"), True)):
             if not ent:
                 continue
@@ -4110,6 +4129,7 @@ class GridLock(hass.Hass):
                 # fallback (the heat pump's own controller sensor, say) is
                 # being used instead -- the dashboard says so.
                 "reading_from_fallback": zone.get("_reading_source"),
+                "rooms_averaged": zone.get("_rooms_used") if zone.get("internal_temp_entities") else None,
                 "is_tank": zone["is_tank"],
                 # Only the dashboard zone's target is GridLock's own to
                 # change; a yaml zone's comes from its target entity.

@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.64.0 - 2026-10-19
+
+### New
+- The house temperature can be the average of several rooms: every selected sensor that's reporting is averaged, so the house is heated to how it is as a whole rather than its warmest spot; a single sensor remains as the fallback. Defaults to the reference install's three Tado rooms, with the heat pump's own sensor as fallback
+- Room picker (multi-select) in the space heating settings; the room tile shows how many rooms are averaged
+
+### Fix
+- Default heat-loss starting figure 0.010 °C/h per °C (measured on the reference house from three days of the heating off) instead of 0.035, which had the plan expecting the house to cool several times faster than it does
+
 ## 3.63.0 - 2026-10-19
 
 ### New

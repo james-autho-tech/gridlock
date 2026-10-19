@@ -31,8 +31,15 @@ DEFAULTS = {
     # which a battery/Thread thermostat is not. A climate.* entity's
     # current_temperature is read automatically if one is chosen instead.
     "internal_temp_entity": "sensor.loft_heatpump_controller_room_temperature_ta",
+    # Rooms averaged into "the house" temperature -- every one that's
+    # reporting counts, so the house is heated to how it is as a whole
+    # rather than to its warmest spot. When this list is set, the single
+    # entity above is only a fallback (all of these unavailable).
+    "internal_temp_entities": ["climate.smart_thermostat_x",
+                               "climate.master_bedroom_master_bedroom_thermo",
+                               "climate.bedroom_4_qing_thermo"],
     # Used whenever the room sensor above is unavailable.
-    "internal_temp_fallback_entity": "climate.bedroom_4_qing_thermo",
+    "internal_temp_fallback_entity": None,
     # GridLock owns the target itself — there's deliberately no
     # thermostat in the loop. Set from the GridWarm tab's ✏️ or −/+.
     "target_temp": 15.0,
@@ -76,7 +83,10 @@ DEFAULTS = {
     ],
     # Thermal model — same meanings as the apps.yaml zone keys (see
     # core/thermal.py). Starting points; heat_loss_* then self-refine.
-    "heat_loss_degrees": 0.035,
+    # Measured on the reference house (three Tado rooms, heating off, 18-19
+    # Oct 2026): net cooling 0.006 °C/h per °C above outdoors, ~0.008-0.010
+    # once indoor gains are allowed for; the cautious end. Self-refines.
+    "heat_loss_degrees": 0.010,
     "heat_loss_watts": 170.0,
     "heat_gain_static": 300.0,
     "heat_max_power": 7000.0,
@@ -499,6 +509,10 @@ def merge_settings(saved):
                 pass
     if "control_requires" in saved:
         out["control_requires"] = clean_requirements(saved["control_requires"])
+    if "internal_temp_entities" in saved:
+        raw = saved["internal_temp_entities"]
+        raw = raw.split(",") if isinstance(raw, str) else (raw or [])
+        out["internal_temp_entities"] = [e for e in (_clean_entity(x) for x in raw) if e]
     if str(saved.get("heat_pricing", "")).lower() in ("battery", "cop", "tariff"):
         out["heat_pricing"] = str(saved["heat_pricing"]).lower()
     if str(saved.get("comfort_priority", "")).lower() in ("cop", "balanced", "comfort"):
@@ -517,6 +531,7 @@ def to_zone_cfg(settings):
     return {
         "name": settings["name"],
         "internal_temp_entity": settings["internal_temp_entity"],
+        "internal_temp_entities": settings["internal_temp_entities"],
         "internal_temp_fallback_entity": settings["internal_temp_fallback_entity"],
         "target_temp_constant": settings["target_temp"],
         "external_temp_entity": settings["external_temp_entity"],

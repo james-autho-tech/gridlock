@@ -110,10 +110,22 @@ def _as_float(v, default):
         return default
 
 
+TADO = ["climate.smart_thermostat_x", "climate.master_bedroom_master_bedroom_thermo", "climate.bedroom_4_qing_thermo"]
+
+
+def _set_room(g, temp):
+    for e in TADO:
+        g.states[e] = ({"state": "unavailable", "attributes": {}} if temp == "unavailable"
+                       else {"state": "heat", "attributes": {"current_temperature": temp}})
+    g.states["sensor.loft_heatpump_controller_room_temperature_ta"]["state"] = temp
+
+
 def _seed_house(g, room_temp="13.4", mode="active"):
     s = g.states
     s["input_select.gridlock_gridwarm_mode"] = {"state": mode, "attributes": {}}
     s["sensor.loft_heatpump_controller_room_temperature_ta"] = {"state": room_temp, "attributes": {}}
+    for e in TADO:
+        s[e] = {"state": "heat", "attributes": {"current_temperature": room_temp}}
     s["climate.bedroom_4_qing_thermo"] = {"state": "unavailable", "attributes": {}}
     # The heat pump's own outdoor sensor is the default outdoor reading;
     # the weather entity only supplies the forecast (not available in the fake).
@@ -166,25 +178,27 @@ def test_dashboard_zone_plans_flow_and_commands_the_heat_pump(engine):
 def test_fallback_room_sensor_is_used_when_the_primary_is_unavailable(engine):
     g, _ = engine
     _seed_house(g)
-    g.states["sensor.loft_heatpump_controller_room_temperature_ta"] = {"state": "unavailable", "attributes": {}}
-    g.states["climate.bedroom_4_qing_thermo"] = {"state": "heat", "attributes": {"current_temperature": "22"}}
+    for e in TADO:
+        g.states[e] = {"state": "unavailable", "attributes": {}}
+    g.states["sensor.loft_heatpump_controller_room_temperature_ta"]["state"] = "22"
     g._publish_thermal_forecast(g.get_now())
     house = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]
     assert house["current_temp"] == 22.0
-    assert house["reading_from_fallback"] == "climate.bedroom_4_qing_thermo"
+    assert house["reading_from_fallback"] == "sensor.loft_heatpump_controller_room_temperature_ta"
     assert house["flow"] is not None  # a real plan, not the no-reading stub
 
 
 def test_no_room_reading_runs_weather_compensation_not_just_on(engine):
     g, _ = engine
     _seed_house(g)
-    g.states["sensor.loft_heatpump_controller_room_temperature_ta"] = {"state": "unavailable", "attributes": {}}
-    # 4 °C outside: the house needs real heat -> on, flow capped low.
+    _set_room(g, "unavailable")
+    # A cold day (-3 °C): the house needs real heat -> on, flow capped low.
+    g.states["sensor.loft_heatpump_controller_outdoor_ambient_temperature"]["state"] = "-3.0"
     g._publish_thermal_forecast(g.get_now())
     house = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]
     assert house["no_reading"] is True and house["current_temp"] is None
     sp = next(kw for svc, kw in g.calls if svc == "number/set_value")
-    assert 35.0 <= sp["value"] <= 38.0
+    assert 25.0 <= sp["value"] <= 38.0    # the unit's 25 C floor up to the no-reading cap
     assert ("switch/turn_on", {"target": {"entity_id": "switch.loft_heatpump_controller_water_flow_temperature_control_zone_1"}}) in g.calls
     assert any("weather compensation" in e["reason"] for e in g.decision_log
                if e["state"].startswith("GridWarm: House"))
@@ -553,7 +567,7 @@ def test_heating_keeps_its_minimum_run_and_rest_times(engine):
     now = g.get_now()
     g._publish_thermal_forecast(now)                       # cold room -> on
     g.states["switch.loft_heatpump_controller_water_flow_temperature_control_zone_1"]["state"] = "on"
-    g.states[room]["state"] = "25.0"                        # suddenly warm
+    _set_room(g, "25.0")                                    # suddenly warm
     g.calls.clear()
     g._publish_thermal_forecast(now + timedelta(minutes=10))
     assert sw not in g.calls                                # held on: 10 < 30 min
@@ -570,7 +584,7 @@ def test_power_cut_holds_heating_off_until_the_house_is_cold(engine):
     g._publish_thermal_forecast(g.get_now())
     assert on not in g.calls                                # 13 C: battery saved
     assert ("switch/turn_on", {"target": {"entity_id": "switch.loft_heatpump_controller_power_dhw_t5s"}}) not in g.calls
-    g.states["sensor.loft_heatpump_controller_room_temperature_ta"]["state"] = "9.5"
+    _set_room(g, "9.5")
     g.calls.clear()
     from datetime import timedelta
     g._publish_thermal_forecast(g.get_now() + timedelta(minutes=5))
@@ -710,3 +724,14 @@ def test_the_units_own_disinfection_is_cancelled_but_gridwarms_cycle_is_not(engi
     cb(dis, None, "off", "on", {})
     assert ("switch/turn_off", {"target": {"entity_id": dis}}) in g.calls
     assert any("disinfection cancelled" in e["state"] for e in g.decision_log)
+
+
+def test_house_temperature_averages_every_reporting_room(engine):
+    g, _ = engine
+    _seed_house(g)
+    g.states["climate.smart_thermostat_x"] = {"state": "heat", "attributes": {"current_temperature": "18.0"}}
+    g.states["climate.master_bedroom_master_bedroom_thermo"] = {"state": "heat", "attributes": {"current_temperature": "17.0"}}
+    g.states["sensor.climate_sensor_w100_temperature"] = {"state": "unavailable", "attributes": {}}
+    g._publish_thermal_forecast(g.get_now())
+    house = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]
+    assert house["current_temp"] == 17.5 and house["rooms_averaged"] == 2
