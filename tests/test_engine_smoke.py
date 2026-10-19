@@ -729,6 +729,10 @@ def test_the_units_own_disinfection_is_cancelled_but_gridwarms_cycle_is_not(engi
 def test_house_temperature_averages_every_reporting_room(engine):
     g, _ = engine
     _seed_house(g)
+    with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
+        json.dump({"internal_temp_entities": ["climate.smart_thermostat_x",
+                                              "climate.master_bedroom_master_bedroom_thermo",
+                                              "sensor.climate_sensor_w100_temperature"]}, f)
     g.states["climate.smart_thermostat_x"] = {"state": "heat", "attributes": {"current_temperature": "18.0"}}
     g.states["climate.master_bedroom_master_bedroom_thermo"] = {"state": "heat", "attributes": {"current_temperature": "17.0"}}
     g.states["sensor.climate_sensor_w100_temperature"] = {"state": "unavailable", "attributes": {}}

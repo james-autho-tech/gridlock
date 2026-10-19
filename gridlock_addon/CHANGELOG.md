@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.64.1 - 2026-10-19
+
+### Fix
+- Reference install's house temperature is the one Tado in the room it's heated for (Bedroom 4), not an average of three; averaging stays available in the settings
+
 ## 3.64.0 - 2026-10-19
 
 ### New

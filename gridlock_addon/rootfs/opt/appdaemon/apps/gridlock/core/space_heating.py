@@ -35,9 +35,7 @@ DEFAULTS = {
     # reporting counts, so the house is heated to how it is as a whole
     # rather than to its warmest spot. When this list is set, the single
     # entity above is only a fallback (all of these unavailable).
-    "internal_temp_entities": ["climate.smart_thermostat_x",
-                               "climate.master_bedroom_master_bedroom_thermo",
-                               "climate.bedroom_4_qing_thermo"],
+    "internal_temp_entities": ["climate.bedroom_4_qing_thermo"],
     # Used whenever the room sensor above is unavailable.
     "internal_temp_fallback_entity": None,
     # GridLock owns the target itself — there's deliberately no

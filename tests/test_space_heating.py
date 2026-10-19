@@ -80,6 +80,6 @@ def test_hot_water_ready_by_times_are_cleaned_and_default_to_the_morning():
 
 def test_room_list_merges_and_defaults():
     m = merge_settings({})
-    assert len(m["internal_temp_entities"]) == 3
+    assert m["internal_temp_entities"] == ["climate.bedroom_4_qing_thermo"]
     assert merge_settings({"internal_temp_entities": "climate.a, ,climate.b"})["internal_temp_entities"] == ["climate.a", "climate.b"]
     assert merge_settings({"internal_temp_entities": []})["internal_temp_entities"] == []
