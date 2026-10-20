@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.65.3 - 2026-10-20
+
+### Fix
+- Load management reported itself active ("charge rate reduced to 10 kW", the maximum) whenever site load passed the warning line, even when there was still headroom under the ceiling for full-rate charging; it's now only active, and only notifies, when the charge rate genuinely comes down, and the banner shows the limit against the maximum
+
 ## 3.65.2 - 2026-10-20
 
 ### Fix

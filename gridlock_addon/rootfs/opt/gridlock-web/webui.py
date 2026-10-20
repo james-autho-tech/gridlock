@@ -385,6 +385,7 @@ def build_status():
             "warn_amps": load_mgmt_raw.get("attributes", {}).get("warn_amps"),
             "critical_amps": load_mgmt_raw.get("attributes", {}).get("critical_amps"),
             "safe_charge_kw": load_mgmt_raw.get("attributes", {}).get("safe_charge_kw"),
+            "max_charge_kw": load_mgmt_raw.get("attributes", {}).get("max_charge_kw"),
             "state": load_mgmt_raw.get("attributes", {}).get("load_state", "normal"),
         } if load_mgmt_raw else None),
         "storm_state": storm.get("state", "Clear"),
@@ -1872,7 +1873,7 @@ function renderLoadManagement(lm) {
   const throttled = lm.state === 'throttle';
   const color = throttled ? 'var(--amber)' : 'var(--green)';
   const banner = throttled
-    ? `<div class="gl-bypass-banner">⚡ LOAD MANAGEMENT ACTIVE — battery charge rate reduced to ${safeChargeKw.toFixed(1)}kW to stay clear of your ${fuse.toFixed(0)}A main fuse (never discharges to help, just charges slower)</div>`
+    ? `<div class="gl-bypass-banner">⚡ LOAD MANAGEMENT ACTIVE — battery charging limited to ${safeChargeKw.toFixed(1)}kW (from ${Number(lm.max_charge_kw || 0).toFixed(1)}kW) to stay clear of your ${fuse.toFixed(0)}A main fuse (never discharges to help, just charges slower)</div>`
     : '';
   return `${banner}<div class="gl-wrap">
     <div class="gl-h">Main fuse load management</div>

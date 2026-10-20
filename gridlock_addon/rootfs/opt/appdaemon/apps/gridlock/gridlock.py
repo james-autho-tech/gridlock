@@ -4972,6 +4972,7 @@ class GridLock(hass.Hass):
                                    "warn_amps": round(self.load_mgmt_warn_kw * 1000.0 / self.mains_voltage, 1),
                                    "critical_amps": round(self.load_mgmt_critical_kw * 1000.0 / self.mains_voltage, 1),
                                    "safe_charge_kw": round(safe_charge_kw, 2),
+                                   "max_charge_kw": self.charge_kw,
                                    "load_state": load_mgmt_state or "normal"})
 
     def publish_grid_connection_status(self):
@@ -5151,6 +5152,11 @@ class GridLock(hass.Hass):
             # than cutting off early.
             safe_charge_kw = max(0.0, min(self.charge_kw, self.load_mgmt_critical_kw - other_loads_kw)) \
                 if throttling else self.charge_kw
+            # Only "active" when the charge rate genuinely comes down. Past
+            # the warn line there's often still headroom under the ceiling
+            # for the full rate -- flagging that as a throttle announced
+            # "reduced to 10 kW" with 10 kW being the maximum.
+            throttling = throttling and safe_charge_kw < self.charge_kw - 0.05
             load_mgmt_state = "throttle" if throttling else None
 
             self._publish_load_management(site_import_kw, load_mgmt_state, safe_charge_kw)
