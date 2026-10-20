@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.67.2 - 2026-10-20
+
+### Fix
+- Energy flow diagram laid out as sources on the left (solar, grid, battery) and loads on the right (car, home, heat pump)
+
 ## 3.67.1 - 2026-10-20
 
 ### Fix
