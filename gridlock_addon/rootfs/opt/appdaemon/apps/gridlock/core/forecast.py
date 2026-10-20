@@ -32,6 +32,27 @@ def _iso(dt_str):
     return datetime.fromisoformat(str(dt_str).replace("Z", "+00:00"))
 
 
+def _get_kw(app, entity_id, default=None):
+    """A power reading in kW whatever unit the sensor reports. Most
+    inverters report kW, but Shelly relays, the Hypervolt charger and
+    GridLock's own heat pump sensor report W -- read as kW, a 3 W light
+    idling became 3 kW of "load", and a house that uses ~30 kWh a day was
+    forecast at ~100."""
+    v = _get_float(app, entity_id, default)
+    if v is None or v == default:
+        return v
+    try:
+        unit = (app.get_state(entity_id, attribute="unit_of_measurement") or "kW")
+    except Exception:  # noqa: BLE001 — assume kW if the attribute can't be read
+        unit = "kW"
+    unit = str(unit).strip().lower()
+    if unit == "w":
+        return v / 1000.0
+    if unit == "mw":
+        return v * 1000.0
+    return v
+
+
 def _get_float(app, entity_id, default=None):
     if not entity_id:
         return default
@@ -166,7 +187,7 @@ class LearnedLoadForecastProvider(LoadForecastProvider):
         actually completes, not on every tick within it."""
         if not self.load_power_entity:
             return
-        kw = _get_float(self.app, self.load_power_entity, None)
+        kw = _get_kw(self.app, self.load_power_entity, None)
         if kw is None:
             return
         # Gating this on self.ev_entity's state used to require it to
@@ -185,7 +206,7 @@ class LearnedLoadForecastProvider(LoadForecastProvider):
         # (50W) just filters out standby/phantom draw a charger reports
         # even when idle, not genuine charging at any real rate.
         if self.ev_power_entity:
-            ev_kw = _get_float(self.app, self.ev_power_entity, 0.0) or 0.0
+            ev_kw = _get_kw(self.app, self.ev_power_entity, 0.0) or 0.0
             if ev_kw > 0.05:
                 kw = max(0.0, kw - ev_kw)
         slot_idx = str(now.hour * 2 + (1 if now.minute >= 30 else 0))
@@ -200,7 +221,7 @@ class LearnedLoadForecastProvider(LoadForecastProvider):
         self._accum_slot_idx = slot_idx
 
         for eid in self.circuit_power_entities:
-            circuit_kw = _get_float(self.app, eid, 0.0) or 0.0
+            circuit_kw = _get_kw(self.app, eid, 0.0) or 0.0
             kw = max(0.0, kw - circuit_kw)
             self._accum_circuit_kwh[eid] = self._accum_circuit_kwh.get(eid, 0.0) + circuit_kw * (5 / 60)
         self._accum_house_kwh += kw * (5 / 60)

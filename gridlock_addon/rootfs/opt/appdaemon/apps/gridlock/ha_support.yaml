@@ -65,6 +65,21 @@ template:
         attributes:
           entity_ids: "{{ label_entities(label_id('GridLock Power') or 'gridlock_power') }}"
           resolved_label_id: "{{ label_id('GridLock Power') }}"
+  # The Shelly integration's own power sensors -- AppDaemon can't see
+  # which integration an entity belongs to, and a relay also added through
+  # Matter matched GridLock's Shelly naming convention twice over.
+  - trigger:
+      - trigger: time_pattern
+        minutes: "/5"
+      - trigger: homeassistant
+        event: start
+    sensor:
+      - name: "GridLock Shelly Power"
+        unique_id: gridlock_shelly_power
+        icon: mdi:flash
+        state: "{{ integration_entities('shelly') | select('match', 'sensor\\..*_power$') | list | length }}"
+        attributes:
+          entity_ids: "{{ integration_entities('shelly') | select('match', 'sensor\\..*_power$') | list }}"
 
 input_select:
   # GridWarm's master control switch (READ-ONLY / ACTIVE on the GridWarm

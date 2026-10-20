@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.66.1 - 2026-10-20
+
+### Fix
+- The battery plan's house-load forecast was several times too high (around 100 kWh/day for a house using about 30): power sensors reporting in watts — Shelly relays, the Hypervolt EV charger, GridLock's own heat pump sensor — were read as kilowatts, so a light circuit idling at 3 W was learned as 3 kW. All load readings are now unit-aware, in both the load learner and the engine's live readings
+- A Shelly relay also added to Home Assistant through Matter was counted as a second circuit; Shelly circuits now come from the Shelly integration's own entity list (a new template sensor in the HA package), with the naming convention only as a fallback
+
 ## 3.66.0 - 2026-10-20
 
 ### New

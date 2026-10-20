@@ -235,3 +235,26 @@ def test_planned_circuit_kwh_overrides_the_learned_profile_per_slot(tmp_path):
     from datetime import timedelta
     t0_bst = t0.astimezone(timezone(timedelta(hours=1)))
     assert prov.load_kwh(t0_bst) == 1.7
+
+
+
+def test_load_learning_reads_watt_sensors_as_watts(tmp_path):
+    from datetime import datetime, timezone
+    from core.forecast import LearnedLoadForecastProvider
+
+    class App:
+        def __init__(self):
+            self.s = {"sensor.load": ("2.0", "kW"), "sensor.shelly_power": ("3", "W"),
+                      "sensor.ev": ("1500", "W")}
+        def get_state(self, eid, attribute=None, **kw):
+            v, unit = self.s.get(eid, (None, None))
+            return unit if attribute == "unit_of_measurement" else v
+
+    app = App()
+    prov = LearnedLoadForecastProvider(app, str(tmp_path / "lp.json"), load_power_entity="sensor.load",
+                                       ev_power_entity="sensor.ev", circuit_power_entities=["sensor.shelly_power"])
+    t = datetime(2026, 10, 20, 19, 0, tzinfo=timezone.utc)
+    prov.sample(t)
+    # 2.0 kW total - 1.5 kW car - 0.003 kW light = 0.497 kW house, 5 minutes of it
+    assert abs(prov._accum_house_kwh - 0.497 * 5 / 60) < 1e-9
+    assert abs(prov._accum_circuit_kwh["sensor.shelly_power"] - 0.003 * 5 / 60) < 1e-9

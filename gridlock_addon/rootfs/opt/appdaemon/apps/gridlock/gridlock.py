@@ -1102,6 +1102,8 @@ class GridLock(hass.Hass):
         for e in (entities or []):
             v = self.get_float_state(e, None)
             if v is not None:
+                unit = str(self.get_state(e, attribute="unit_of_measurement") or "kW").strip().lower()
+                v = v / 1000.0 if unit == "w" else v
                 total += abs(v)
                 got_any = True
         return total if got_any else None
@@ -5220,8 +5222,14 @@ class GridLock(hass.Hass):
         # Shelly naming convention) — kept in step so a Shelly picked up
         # by naming alone gets subtracted from the whole-house learning
         # and forecast in its own right too, not just shown live.
-        all_circuits = list(dict.fromkeys(
-            self.registry.find_shelly_power_entities() + labeled_circuits))
+        # Shelly relays: from the Shelly integration's own entity list (via
+        # the HA-side template, which can see integrations) when it's there
+        # -- the same relay exposed again through Matter matched the naming
+        # convention too and was counted twice.
+        shelly = self._attr_list("sensor.gridlock_shelly_power", "entity_ids")
+        if not shelly:
+            shelly = self.registry.find_shelly_power_entities()
+        all_circuits = list(dict.fromkeys(shelly + labeled_circuits))
         # Confirmed live: the EV power entity can end up carrying the
         # gridlock_power label too (easy mistake — it's a completely
         # ordinary-looking power sensor from the label picker's point of
