@@ -756,3 +756,21 @@ def test_house_is_planned_around_the_hot_water_run(engine):
     busy = [p for p in plan if p["hot_water"] == "yes"]
     assert busy and all(p["heat_kwh"] < 1e-6 for p in busy)
     assert any(p["heat_kwh"] > 0.1 for p in plan if p["hot_water"] == "no")
+
+
+def test_heat_loss_learning_is_not_fooled_by_sensor_steps(engine):
+    g, gridlock = engine
+    from datetime import timedelta
+    zone = g._build_thermal_zone({"name": "Room", "internal_temp_entity": "x", "heat_loss_degrees": 0.010,
+                                  "heat_loss_watts": 170.0, "heat_gain_static": 300.0, "thermal_mass_wh_per_c": 8000})
+    now = g.get_now()
+    # A house cooling a true 0.06 C/h at 9 C above outdoors, read by a
+    # sensor with 0.1 C steps, sampled every 5 minutes for two days.
+    true_k = 0.010
+    for i in range(0, 48 * 12):
+        t = now + timedelta(minutes=5 * i)
+        truth = 19.5 - (true_k * 9.0 + (170 - 300) / 8000.0) * (i * 5 / 60.0)
+        reading = round(truth, 1)
+        g._update_thermal_learning(zone, t, reading, reading - 9.0, False)
+    learned = zone["params"].heat_loss_degrees
+    assert 0.006 < learned < 0.016, learned      # stays near the truth, no ratchet

@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.65.1 - 2026-10-20
+
+### Fix
+- Heat-loss learning ratcheted upwards: it compared readings five minutes apart (a 0.1 °C sensor step looked like 1.2 °C/h of cooling) and blended the fit in on every tick, so a house that barely cools was learned as cooling six times faster within a day and the plan scheduled heavy heating. It now learns from whole 3-hour stretches with the heat off, counts rises as well as falls, allows for indoor gains, and blends once per new observation within physical bounds
+
 ## 3.65.0 - 2026-10-20
 
 ### New
