@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.66.0 - 2026-10-20
+
+### New
+- Heat pump gets its own node in the energy flow diagram, taken out of Home like the car; `sensor.gridlock_heatpump_power` now carries the measured draw (outdoor unit V × A plus the indoor pump) for space heating, hot water and defrost alike, falling back to the estimate only without those sensors
+
 ## 3.65.4 - 2026-10-20
 
 ### Fix

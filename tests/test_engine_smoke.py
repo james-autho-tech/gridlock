@@ -367,6 +367,8 @@ def test_heat_pump_plan_is_handed_to_the_battery_load_forecast(engine):
     g.states["sensor.loft_heatpump_controller_active_state"]["state"] = "Heating"
     g.states["sensor.loft_heatpump_controller_ability_of_hydraulic_module"]["state"] = "5.0"
     g.states["sensor.loft_heatpump_controller_total_water_outlet_temperature_t1"]["state"] = "40.0"
+    g.states["sensor.loft_heatpump_controller_outdoor_unit_current"]["state"] = "6"
+    g.states["sensor.loft_heatpump_controller_compressor_operating_frequency"]["state"] = "35"
     now = g.get_now()
     g._publish_thermal_forecast(now)
     planned = g.load_provider.planned_circuit_kwh[gridlock.HEATPUMP_POWER_ENTITY]
@@ -379,8 +381,8 @@ def test_heat_pump_plan_is_handed_to_the_battery_load_forecast(engine):
     assert sum(planned.values()) > planned[first]   # the house's heat follows later
     pub = g.published[gridlock.HEATPUMP_POWER_ENTITY]
     assert pub["attributes"]["device_class"] == "power"
-    # 5 kW thermal at 40 °C flow, 4 °C outside -> roughly 1.5-2 kW electrical
-    assert 1000 < float(pub["state"]) < 2500
+    # measured: 240 V x 6 A + 70 W pump
+    assert float(pub["state"]) == 1510.0
 
 
 def test_forecast_points_are_found_under_the_websocket_response_shape(engine):
@@ -774,3 +776,16 @@ def test_heat_loss_learning_is_not_fooled_by_sensor_steps(engine):
         g._update_thermal_learning(zone, t, reading, reading - 9.0, False)
     learned = zone["params"].heat_loss_degrees
     assert 0.006 < learned < 0.016, learned      # stays near the truth, no ratchet
+
+
+def test_heat_pump_power_is_the_measured_draw_when_available(engine):
+    g, gridlock = engine
+    _seed_house(g)
+    g.states["sensor.loft_heatpump_controller_outdoor_unit_current"]["state"] = "5"
+    g.states["sensor.loft_heatpump_controller_compressor_operating_frequency"]["state"] = "40"
+    g._publish_thermal_forecast(g.get_now())
+    assert float(g.published[gridlock.HEATPUMP_POWER_ENTITY]["state"]) == 240 * 5 + 70
+    g.states["sensor.loft_heatpump_controller_outdoor_unit_current"]["state"] = "0"
+    g.states["sensor.loft_heatpump_controller_compressor_operating_frequency"]["state"] = "0"
+    g._publish_thermal_forecast(g.get_now())
+    assert float(g.published[gridlock.HEATPUMP_POWER_ENTITY]["state"]) == 0.0

@@ -280,11 +280,14 @@ def build_status():
     grid_kw = as_kw(get(status_attrs.get("grid_power_entity")))
     home_kw = as_kw(get(status_attrs.get("load_power_entity")))
     ev_kw = as_kw(get(status_attrs.get("ev_power_entity")))
-    # The inverter's "total load" includes the car charger -- the car has
-    # its own node, so Home is everything else (the same subtraction the
-    # engine's load learning already makes).
+    # The inverter's "total load" includes the car charger and the heat
+    # pump -- each has its own node, so Home is everything else (the same
+    # subtractions the engine's load learning makes).
+    hp_kw = as_kw(get("sensor.gridlock_heatpump_power"))
     if ev_kw > 0.05:
         home_kw = max(0.0, home_kw - ev_kw)
+    if hp_kw > 0.05:
+        home_kw = max(0.0, home_kw - hp_kw)
     flow = {
         "pv_kw": round(pv_kw, 2),
         "soc_pct": round(as_float(soc), 1),
@@ -292,6 +295,8 @@ def build_status():
         "grid_kw": round(grid_kw, 2),
         "home_kw": round(home_kw, 2),
         "ev_kw": round(ev_kw, 2),
+        "heatpump_kw": round(hp_kw, 2),
+        "has_heatpump": get("sensor.gridlock_heatpump_power") is not None,
         "pv_generating": is_on(get(status_attrs.get("pv_generating_entity"))),
         "importing": is_on(get(status_attrs.get("importing_entity"))),
         "exporting": is_on(get(status_attrs.get("exporting_entity"))),
@@ -1780,6 +1785,8 @@ function renderFlow(f, bypassActive) {
     home:    { x: 365, y: 275, icon: '🏠', label: 'Home',    val: `${f.home_kw.toFixed(2)} kW`,
                color: bypassActive ? '#fb923c' : 'var(--violet)',
                active: f.home_kw > 0.05 || bypassActive },
+    ...(f.has_heatpump ? { heatpump: { x: 55, y: 335, icon: '♨️', label: 'Heat pump', val: `${Number(f.heatpump_kw || 0).toFixed(2)} kW`,
+               color: 'var(--red)', active: Number(f.heatpump_kw) > 0.05 } } : {}),
     battery: { x: 210, y: 335, icon: '🔋', label: 'Battery',
                val: socPct === null ? `${f.battery_kw.toFixed(2)} kW` : `${socPct}% · ${f.battery_kw.toFixed(2)}kW`,
                color: f.battery_charging ? 'var(--green)' : 'var(--cyan)',
@@ -1792,13 +1799,14 @@ function renderFlow(f, bypassActive) {
     grid: [f.importing || bypassActive, bypassActive ? '#fb923c' : (f.exporting ? 'var(--cyan)' : 'var(--amber)')],
     ev: [false, f.ev_protected ? 'var(--violet)' : 'var(--green)'],
     home: [bypassActive ? true : false, bypassActive ? '#fb923c' : 'var(--violet)'],
+    heatpump: [false, 'var(--red)'],
     battery: [f.battery_discharging, f.battery_charging ? 'var(--green)' : 'var(--cyan)'],
   };
   // Sankey-style: line thickness scales with that flow's actual kW,
   // relative to whichever flow is biggest right now — thin lines mean
   // "barely anything moving here", thick means "this is where most of
   // the power's going", at a glance rather than reading five numbers.
-  const mags = { solar: f.pv_kw, grid: f.grid_kw, ev: f.ev_kw, home: f.home_kw, battery: f.battery_kw };
+  const mags = { solar: f.pv_kw, grid: f.grid_kw, ev: f.ev_kw, home: f.home_kw, battery: f.battery_kw, heatpump: Number(f.heatpump_kw) || 0 };
   const maxMag = Math.max(...Object.values(mags), 0.3);
   const widthFor = v => Math.max(2, Math.min(16, 2 + (v / maxMag) * 14));
   const lines = Object.entries(nodes).map(([key, n]) => {

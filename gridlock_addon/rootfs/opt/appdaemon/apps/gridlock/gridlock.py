@@ -4726,6 +4726,19 @@ class GridLock(hass.Hass):
                 ext = r.get("external_temp") if r.get("external_temp") is not None else 10.0
                 cop = core_flow.cop_estimate(flow_t, ext, zone.get("cop_eta", 0.45))
                 live_w += hp["thermal_kw"] * 1000.0 / max(cop, 0.5)
+        # Measured beats estimated: the outdoor unit's V x A plus the indoor
+        # pump, whenever the unit is actually drawing -- covers space heating,
+        # hot water and defrost alike. The estimate above stands in only if
+        # those sensors aren't configured.
+        for zone in zones:
+            if zone.get("outdoor_voltage_entity") and zone.get("outdoor_current_entity"):
+                v = self.get_float_state(zone["outdoor_voltage_entity"], None)
+                a = self.get_float_state(zone["outdoor_current_entity"], None)
+                hz = (self.get_float_state(zone["compressor_entity"], 0.0) or 0.0) if zone.get("compressor_entity") else 0.0
+                if v is not None and a is not None:
+                    live_w = core_flow.measured_electric_w(v, a, zone.get("pump_power_w", 70.0)) \
+                        if (a > 0 or hz > 5) else 0.0
+                break
         self.load_provider.planned_circuit_kwh[HEATPUMP_POWER_ENTITY] = planned
         self.set_state(HEATPUMP_POWER_ENTITY, state=f"{live_w:.0f}",
                        attributes={"friendly_name": "GridLock heat pump power (estimated)",
