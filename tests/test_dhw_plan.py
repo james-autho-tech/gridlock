@@ -99,3 +99,16 @@ def test_daily_target_rises_when_the_tank_loses_more():
     cold, loss = daily_target_temp(25.0, 53.0, 55.0, mass, 60.0, 0.02, 2.0, 700.0)
     assert cold == 55.0 and loss > 20                     # cold surroundings: goes up, capped at 55
     assert daily_target_temp(25.0, 53.0, 60.0, mass, 60.0, 0.02, 2.0, 700.0)[0] > 55.0
+
+
+
+def test_ready_by_entries_and_tank_drop():
+    from datetime import datetime
+    from core.dhw_plan import upcoming_ready_bys, tank_drop_c, parse_ready_by
+    assert parse_ready_by("19:30@45") == (19, 30, 45.0)
+    assert parse_ready_by("06:30") == (6, 30, None)
+    now = datetime(2026, 10, 20, 21, 0)
+    assert upcoming_ready_bys(now, ["19:30@45", "06:30"], 30) == [(19, None), (45, 45.0)]
+    # 290 Wh/C tank, 50 W fixed, 0.002/h per C over 27 C, 0.7 kWh draw, 10 h
+    d = tank_drop_c(45.0, 10.0, 290.0, 50.0, 0.002, 18.0, 700.0)
+    assert 4.5 < d < 4.8

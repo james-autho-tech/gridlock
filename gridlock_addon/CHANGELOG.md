@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.67.0 - 2026-10-20
+
+### New
+- Hot water ready-by temperatures: entries like `19:30@45` (at least 45 °C by 19:30). GridWarm predicts the tank at that time from its learned standing loss and usage; if it would fall short, it books the cheapest window before then and heats just hot enough to still be there (the setpoint raised for the run, restored after). Default `19:30@45`; the panel shows the target and why a run is booked
+
 ## 3.66.1 - 2026-10-20
 
 ### Fix

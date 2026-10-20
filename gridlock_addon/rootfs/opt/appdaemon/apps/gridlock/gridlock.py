@@ -3385,7 +3385,7 @@ class GridLock(hass.Hass):
         # The configured ready-by times (hot tank for the morning, showers
         # by the evening) bound the deadline whenever a run is actually
         # needed -- the tank is below the point the unit starts at.
-        by = core_dhw.slots_until_ready_by(now.astimezone(), d.get("ready_by_times") or [], SLOT_MIN)
+        by = None   # set below from the ready-by temperatures
         # Winter: tonight's target, from the tank's learned losses against
         # its surroundings and the learned usage, so it lasts the day.
         base_sp = state.get("dhw_base_sp") or setpoint
@@ -3397,6 +3397,26 @@ class GridLock(hass.Hass):
             d.get("top_up_below", 25.0), base_sp, max(base_sp, d.get("max_daily_setpoint", 55.0)),
             zone["params"].thermal_mass_wh_per_c, zone["params"].heat_loss_watts,
             zone["params"].heat_loss_degrees, ambient, sum(expected[:48]))
+        # Ready-by temperatures: predict the tank at each upcoming ready-by
+        # with no heating (learned standing loss against its surroundings,
+        # learned draws); the first one it would miss sets the deadline and
+        # how hot tonight's run goes -- just enough to still be there then.
+        mass_r = max(zone["params"].thermal_mass_wh_per_c, 1.0)
+        ready_target = None
+        t_now = tank_temp if tank_temp is not None else setpoint - hyst
+        for k, want in core_dhw.upcoming_ready_bys(now.astimezone(), d.get("ready_by_times") or [], SLOT_MIN):
+            want = want if want is not None else base_sp
+            drop_k = core_dhw.tank_drop_c(t_now, k * slot_hours, mass_r, zone["params"].heat_loss_watts,
+                                          zone["params"].heat_loss_degrees, ambient, sum(expected[:k]))
+            if t_now - drop_k < want - 0.5:
+                # Upper bound for sizing: as if heated now and cooling till then.
+                heat_to = want + core_dhw.tank_drop_c(want, k * slot_hours, mass_r, zone["params"].heat_loss_watts,
+                                                      zone["params"].heat_loss_degrees, ambient, sum(expected[:k]))
+                ready_target = {"slots": k, "temp": want, "predicted": round(t_now - drop_k, 1)}
+                by = k
+                daily_target = min(max(base_sp, d.get("max_daily_setpoint", 55.0)),
+                                   max(daily_target, round(heat_to)))
+                break
         # A normal run long enough to actually get there: the heat pump's
         # share from the tank's temperature up to tonight's target (to the
         # unit's own limit), the immersion's share above it, plus a margin.
@@ -3410,7 +3430,7 @@ class GridLock(hass.Hass):
                         + (max(0.0, daily_target - max(t0n, hp_lim_n)) * mass_n)
                         / max(d.get("immersion_power_w", 2000.0), 500.0)) * 60.0 + 10.0
             run_slots = max(run_slots, core_dhw.run_slots_needed(min(need_min, 240.0), SLOT_MIN))
-        if by is not None and core_dhw.unit_will_heat(tank_temp, daily_target, hyst):
+        if by is not None:
             deadline = min(deadline, max(run_slots, by))
         # Genuinely low tank: top it up in the cheapest slot of the next
         # couple of hours rather than waiting for the night.
@@ -3418,6 +3438,12 @@ class GridLock(hass.Hass):
         if low:
             deadline = min(deadline, run_slots + 4)
         window = core_dhw.cheapest_window(scores, run_slots, deadline)
+        if ready_target and window:
+            hrs_after = max(0, ready_target["slots"] - window[1]) * slot_hours
+            exact = ready_target["temp"] + core_dhw.tank_drop_c(
+                ready_target["temp"], hrs_after, mass_r, zone["params"].heat_loss_watts,
+                zone["params"].heat_loss_degrees, ambient, sum(expected[window[1]:ready_target["slots"]]))
+            daily_target = min(max(base_sp, d.get("max_daily_setpoint", 55.0)), max(base_sp, round(exact)))
         # A window only starts when there's something to heat: the tank
         # is below the point the unit would start a run at, or the daily
         # guarantee is up. Otherwise "cheapest window is now" on a flat
@@ -3426,8 +3452,7 @@ class GridLock(hass.Hass):
         # the next ready-by is what the window is racing (the cheapest slot
         # before it gets chosen), when it's below the low threshold, on a
         # legionella night, or when a configured forced-run timer is up.
-        needed = (low or lg_due or deadline <= run_slots
-                  or (by is not None and core_dhw.unit_will_heat(tank_temp, daily_target, hyst)))
+        needed = low or lg_due or deadline <= run_slots or by is not None
         skipped = False
         # A running legionella cycle never gets a fresh window booked under
         # it -- when its window ends the cycle stops (below), full stop.
@@ -3578,13 +3603,18 @@ class GridLock(hass.Hass):
         # Why a run is booked, for the panel: the tank needs it, the weekly
         # legionella cycle is due, or only the daily guarantee is.
         reason = ("legionella" if (lg_due or lg_active) else
-                  "top_up" if core_dhw.unit_will_heat(tank_temp, setpoint, hyst) else
+                  "ready_by" if ready_target else
+                  "low" if low else
                   "guarantee" if needed else "none")
         return {"heat_now": committed is not None,
                 "committed": committed is not None,
                 "reason": reason,
                 "setpoint_wanted": setpoint_wanted,
                 "daily_target": daily_target, "daily_loss_c": daily_loss_c,
+                "ready_target": ({"by": (self._slot_floor(now) + timedelta(minutes=SLOT_MIN * ready_target["slots"])).isoformat(),
+                                  "temp": ready_target["temp"], "predicted": ready_target["predicted"]}
+                                 if ready_target else None),
+                "ready_by_times": list(d.get("ready_by_times") or []),
                 "tank_ambient_temp": round(ambient, 1),
                 "legionella": {"enabled": bool(lg_cfg.get("enabled")), "due": lg_due,
                                "phase": lg.get("phase") or ("due" if lg_due else "idle"),

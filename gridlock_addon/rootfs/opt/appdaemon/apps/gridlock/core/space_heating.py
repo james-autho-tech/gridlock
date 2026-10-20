@@ -212,7 +212,11 @@ HOT_WATER_DEFAULTS = {
     # A needed run (tank below the unit's start point) must have finished
     # before the next of these local times: hot tank for the morning,
     # enough for showers by the evening. Blank list = daily guarantee only.
-    "ready_by_times": ["06:30"],
+    # When the tank must be at least a temperature: "HH:MM@T" (or "HH:MM"
+    # for the unit's setpoint). GridWarm predicts the tank at that time and,
+    # if it would fall short, heats in the cheapest window before it -- just
+    # hot enough to still be there by then.
+    "ready_by_times": ["19:30@45"],
     # Outside the ready-by run, only top the tank up if its sensor falls
     # below this. The tank stratifies: with the sensor at 25 °C there's
     # still hot water at the top for showers, so the day doesn't need a run.
@@ -344,22 +348,24 @@ def merge_hot_water(saved):
 
 
 def clean_times(raw):
-    """A list of HH:MM strings (or one comma-separated string from the
-    form) -> sorted, validated ["HH:MM", ...]."""
+    """Ready-by entries -- "HH:MM" or "HH:MM@temperature", a list or one
+    comma-separated string from the form -> sorted, validated strings."""
     if isinstance(raw, str):
         raw = raw.split(",")
     out = []
     for item in raw or []:
-        t = str(item).strip()
+        t, _, temp = str(item).strip().partition("@")
         if not t:
             continue
         parts = t.split(":")
         try:
             h, m = int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
+            tv = float(temp) if temp.strip() else None
         except (ValueError, IndexError):
             continue
-        if 0 <= h < 24 and 0 <= m < 60:
-            out.append(f"{h:02d}:{m:02d}")
+        if not (0 <= h < 24 and 0 <= m < 60) or (tv is not None and not 25.0 <= tv <= 65.0):
+            continue
+        out.append(f"{h:02d}:{m:02d}" + (f"@{tv:g}" if tv is not None else ""))
     return sorted(set(out))
 
 

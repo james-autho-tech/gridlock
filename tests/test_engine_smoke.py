@@ -610,7 +610,7 @@ def test_cool_tank_waits_for_the_night_and_only_a_cold_one_tops_up_by_day(engine
     _seed_tank(g)
     from datetime import timedelta
     with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
-        json.dump({"hot_water": {"legionella_enabled": False}}, f)
+        json.dump({"hot_water": {"legionella_enabled": False, "ready_by_times": ["06:30"]}}, f)
     now = g.get_now()   # 07:00 UTC
     start = now.replace(minute=0, second=0, microsecond=0)
     # Daytime peak, cheap 23:00-05:30 local: a 35 C tank waits for the night.
@@ -789,3 +789,26 @@ def test_heat_pump_power_is_the_measured_draw_when_available(engine):
     g.states["sensor.loft_heatpump_controller_compressor_operating_frequency"]["state"] = "0"
     g._publish_thermal_forecast(g.get_now())
     assert float(g.published[gridlock.HEATPUMP_POWER_ENTITY]["state"]) == 0.0
+
+
+def test_hot_water_heats_just_enough_to_be_45_by_1930(engine):
+    g, _ = engine
+    _seed_house(g)
+    _seed_tank(g)
+    with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
+        json.dump({"hot_water": {"legionella_enabled": False, "ready_by_times": ["19:30@45"]}}, f)
+    g.states["number.loft_heatpump_controller_set_dhw_tank_temperature_t5s"]["state"] = "45.0"
+    g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "44.0"
+    g._publish_thermal_forecast(g.get_now())     # 07:00 UTC, 19:30 local is hours away
+    hw = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]
+    d = hw["dhw"]
+    assert d["reason"] == "ready_by" and d["ready_target"]["temp"] == 45.0
+    assert d["ready_target"]["predicted"] < 44.5          # would miss it without heating
+    assert 45 < d["daily_target"] <= 55                   # heats a little above 45 to still be there
+    # A tank that will still be at 45 by then needs nothing (fresh state,
+    # not the run the first check just committed).
+    g._thermal_control_state.pop("Hot water", None)
+    g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "55.0"
+    g._publish_thermal_forecast(g.get_now())
+    hw = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]
+    assert hw["dhw"]["status"] == "not_needed"

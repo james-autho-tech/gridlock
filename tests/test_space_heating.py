@@ -72,8 +72,8 @@ def test_hot_water_settings_merge_and_zone_cfg():
 
 def test_hot_water_ready_by_times_are_cleaned_and_default_to_the_morning():
     from core.space_heating import merge_settings, clean_times
-    assert merge_settings({})["hot_water"]["ready_by_times"] == ["06:30"]
-    assert clean_times("7:00, 19:15, nonsense, 25:00") == ["07:00", "19:15"]
+    assert merge_settings({})["hot_water"]["ready_by_times"] == ["19:30@45"]
+    assert clean_times("7:00, 19:15@45, nonsense, 25:00, 08:00@99") == ["07:00", "19:15@45"]
     assert merge_settings({"hot_water": {"ready_by_times": ""}})["hot_water"]["ready_by_times"] == []
 
 

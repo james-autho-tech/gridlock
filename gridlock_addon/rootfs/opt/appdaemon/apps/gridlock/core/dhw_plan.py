@@ -190,3 +190,36 @@ def daily_target_temp(keep_above, base_setpoint, max_setpoint, mass_wh_per_c,
         loss_c = (loss_watts * hours) / mass + loss_degrees_per_hour_per_c * max(0.0, avg - ambient_temp) * hours
         target = keep_above + loss_c + draw_wh_next_day / mass
     return round(min(max_setpoint, max(base_setpoint, target)), 0), round(loss_c, 1)
+
+
+
+def parse_ready_by(entry):
+    """"HH:MM" or "HH:MM@T" -> (hour, minute, temp or None)."""
+    t, _, temp = str(entry).partition("@")
+    h, m = (int(x) for x in t.strip().split(":")[:2])
+    tv = float(temp) if temp.strip() else None
+    return h, m, tv
+
+
+def upcoming_ready_bys(local_now, entries, slot_minutes):
+    """[(slots_until, temp or None)] for each configured ready-by within the
+    next 24 h, soonest first."""
+    out = []
+    for e in entries or []:
+        try:
+            h, m, tv = parse_ready_by(e)
+        except (ValueError, TypeError):
+            continue
+        target = local_now.replace(hour=h, minute=m, second=0, microsecond=0)
+        if target <= local_now:
+            target += timedelta(days=1)
+        out.append((max(1, int((target - local_now).total_seconds() // (slot_minutes * 60))), tv))
+    return sorted(out)
+
+
+def tank_drop_c(tank_temp, hours, mass_wh_per_c, loss_watts, loss_degrees, ambient, draw_wh):
+    """How much the tank cools over `hours` with no heating: the fixed
+    loss, the loss against its surroundings, and the expected draw."""
+    mass = max(mass_wh_per_c, 1.0)
+    return ((loss_watts * hours + draw_wh) / mass
+            + loss_degrees * max(0.0, tank_temp - ambient) * hours)
