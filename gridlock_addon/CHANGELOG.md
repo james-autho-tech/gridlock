@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.65.4 - 2026-10-20
+
+### Fix
+- Energy flow diagram counted the car twice: Home showed the inverter's total load, which includes the EV charger; Home is now everything except the car, which keeps its own node
+
 ## 3.65.3 - 2026-10-20
 
 ### Fix

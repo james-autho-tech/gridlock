@@ -280,6 +280,11 @@ def build_status():
     grid_kw = as_kw(get(status_attrs.get("grid_power_entity")))
     home_kw = as_kw(get(status_attrs.get("load_power_entity")))
     ev_kw = as_kw(get(status_attrs.get("ev_power_entity")))
+    # The inverter's "total load" includes the car charger -- the car has
+    # its own node, so Home is everything else (the same subtraction the
+    # engine's load learning already makes).
+    if ev_kw > 0.05:
+        home_kw = max(0.0, home_kw - ev_kw)
     flow = {
         "pv_kw": round(pv_kw, 2),
         "soc_pct": round(as_float(soc), 1),
