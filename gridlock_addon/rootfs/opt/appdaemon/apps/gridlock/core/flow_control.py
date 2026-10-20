@@ -232,7 +232,8 @@ def plan_heating(temp0, external_curve, rate_curve, target_curve, params, *,
                  max_power_w=None, solver=None,
                  comfort_cost_per_degree_slot=COMFORT_COST_PER_DEGREE_SLOT,
                  smoothing_cost_per_kwh_change=SMOOTHING_COST_PER_KWH_CHANGE,
-                 heat_kwh_prev=None, gain_curve_w=None, segment_curve=None, min_power_w=None):
+                 heat_kwh_prev=None, gain_curve_w=None, segment_curve=None, min_power_w=None,
+                 blocked_slots=None):
     """The heating plan: heat to deliver per slot (kWh) over the horizon
     at least cost, keeping the room inside [target - comfort_below,
     target + comfort_above]. Linear programme (PuLP) -- see the module
@@ -265,6 +266,10 @@ def plan_heating(temp0, external_curve, rate_curve, target_curve, params, *,
     cop_low_curve = cop_low_curve or [params.heating_cop] * n
     cop_high_curve = cop_high_curve or [params.heating_cop * 0.8] * n
 
+    # Slots the heat pump is busy elsewhere (the hot water run -- the unit
+    # does one or the other, tank first): no space heat can be planned there.
+    blocked = set(i for i in (blocked_slots or []) if 0 <= i < n)
+
     def fallback():
         out = []
         temp = temp0
@@ -272,7 +277,7 @@ def plan_heating(temp0, external_curve, rate_curve, target_curve, params, *,
             loss_w = steady_state_loss_w(temp, external_curve[i], params) - (gains[i] - params.heat_gain_static)
             # Hold the target: loss plus a gentle correction toward it.
             need_w = loss_w + (target_curve[i] - temp) * mass / max(slot_hours, 1e-6) * 0.5
-            need_w = min(max_power_w, max(0.0, need_w))
+            need_w = 0.0 if i in blocked else min(max_power_w, max(0.0, need_w))
             temp = temp + ((need_w - loss_w) * slot_hours) / mass
             kwh = need_w * slot_hours / 1000.0
             cop = cop_low_curve[i] if need_w <= low_w else cop_high_curve[i]
@@ -299,6 +304,8 @@ def plan_heating(temp0, external_curve, rate_curve, target_curve, params, *,
              for i in range(n)]
         q_lo = [pulp.lpSum(q[i]) for i in range(n)]
         q_hi = [0 for _ in range(n)]
+        for i in blocked:
+            prob += q_lo[i] == 0
         # The compressor can't deliver a trickle: each slot is either off
         # or at least its minimum output (or everything the radiators can
         # take, if that's less). A binary per slot -- 48 of them, well
@@ -365,7 +372,8 @@ def plan_heating(temp0, external_curve, rate_curve, target_curve, params, *,
                                     comfort_cost_per_degree_slot=comfort_cost_per_degree_slot,
                                     smoothing_cost_per_kwh_change=smoothing_cost_per_kwh_change,
                                     heat_kwh_prev=heat_kwh_prev, gain_curve_w=gain_curve_w,
-                                    segment_curve=segment_curve, min_power_w=None)
+                                    segment_curve=segment_curve, min_power_w=None,
+                                    blocked_slots=blocked_slots)
             return fallback()
         out = []
         for i in range(n):

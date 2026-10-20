@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.65.0 - 2026-10-20
+
+### New
+- Hot water and space heating are planned together: the unit heats the tank or the house, never both, and does the tank first — so hot water is planned first each tick and the house plan works around its booked run (no space heat planned in those half-hours, catching up either side). The battery forecast sees the true sequence; the house chart shades the hot water half-hours
+
 ## 3.64.1 - 2026-10-19
 
 ### Fix

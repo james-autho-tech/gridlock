@@ -373,8 +373,10 @@ def test_heat_pump_plan_is_handed_to_the_battery_load_forecast(engine):
     assert planned, "space heating + hot water electricity should be planned per slot"
     first = min(planned)
     assert first == g.load_provider.slot_key(now)
-    # Cold room, cold tank: the first slot carries both the heating and the DHW run.
-    assert planned[first] > 0.5
+    # Cold room, cold tank: the first slot carries the tank's run -- the unit
+    # does one or the other, so the house waits until the tank is done.
+    assert planned[first] > 0.2
+    assert sum(planned.values()) > planned[first]   # the house's heat follows later
     pub = g.published[gridlock.HEATPUMP_POWER_ENTITY]
     assert pub["attributes"]["device_class"] == "power"
     # 5 kW thermal at 40 °C flow, 4 °C outside -> roughly 1.5-2 kW electrical
@@ -738,3 +740,19 @@ def test_house_temperature_averages_every_reporting_room(engine):
     g._publish_thermal_forecast(g.get_now())
     house = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]
     assert house["current_temp"] == 17.5 and house["rooms_averaged"] == 2
+
+
+def test_house_is_planned_around_the_hot_water_run(engine):
+    g, _ = engine
+    _seed_house(g, room_temp="15.0")
+    _seed_tank(g)
+    with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
+        json.dump({"target_temp": 19, "hot_water": {"legionella_enabled": False}}, f)
+    g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "30.0"
+    g._publish_thermal_forecast(g.get_now())     # flat prices: tank run starts now
+    zones = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}
+    assert zones["Hot water"]["dhw"]["status"] == "running"
+    plan = zones["House"]["flow"]["plan"]
+    busy = [p for p in plan if p["hot_water"] == "yes"]
+    assert busy and all(p["heat_kwh"] < 1e-6 for p in busy)
+    assert any(p["heat_kwh"] > 0.1 for p in plan if p["hot_water"] == "no")

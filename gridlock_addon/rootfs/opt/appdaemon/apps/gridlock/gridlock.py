@@ -3634,6 +3634,14 @@ class GridLock(hass.Hass):
             zone["flow_min"] - zone["water_dt"] / 2.0, tgt[0] if tgt else internal_temp, emitter))
         cop_low = [core_flow.cop_estimate(zone["flow_min"], e, eta) for e in ext]
         cop_high = [core_flow.cop_estimate(zone["flow_max"], e, eta) for e in ext]
+        # Slots where the tank's run is booked: the unit can't heat the house.
+        t0 = self._slot_floor(now)
+        blocked = []
+        for i in range(len(ext)):
+            s0 = t0 + timedelta(minutes=SLOT_MIN * i)
+            s1 = s0 + timedelta(minutes=SLOT_MIN)
+            if any(ws < s1 and we > s0 for ws, we in getattr(self, "_dhw_busy", []) or []):
+                blocked.append(i)
         segment_curve = [core_flow.heat_segments(tgt[i], ext[i], emitter, eta, zone["flow_min"],
                                                  zone["flow_max"], zone["water_dt"], 5.0, max_w)
                          for i in range(len(ext))]
@@ -3649,7 +3657,7 @@ class GridLock(hass.Hass):
             slot_hours=slot_hours, low_flow_power_w=low_w, cop_low_curve=cop_low,
             cop_high_curve=cop_high, max_power_w=max_w, solver=core_flow.heating_solver(),
             heat_kwh_prev=delivering_kwh, gain_curve_w=gain_curve, segment_curve=segment_curve,
-            min_power_w=params.heat_min_power or None,
+            min_power_w=params.heat_min_power or None, blocked_slots=blocked,
             comfort_cost_per_degree_slot=core_flow.COMFORT_COST_BY_PRIORITY.get(
                 zone.get("comfort_priority", "cop"), core_flow.COMFORT_COST_PER_DEGREE_SLOT))
         if plan:
@@ -3679,6 +3687,7 @@ class GridLock(hass.Hass):
                           "price": round(p["price"], 2), "grid_price": round(grid_rates[i], 2),
                           "cop": round(p["cop"], 2),
                           "solar_gain_w": round(gain_curve[i], 0) if i < len(gain_curve) else 0.0,
+                          "hot_water": "yes" if i in blocked else "no",
                           "flow": core_flow.flow_setpoint_for_power(
                               p["heat_kwh"] * 1000.0 / slot_hours, p["temp"], emitter,
                               zone["water_dt"], zone["flow_min"], zone["flow_max"], 1.0)
@@ -4605,6 +4614,10 @@ class GridLock(hass.Hass):
                                        "space_heating_settings": ui_settings,
                                        "hot_water_settings": ui_settings["hot_water"]})
             return
+        # Hot water first: the unit heats the tank OR the house, tank first,
+        # so the house is planned around whatever run the tank has booked.
+        zones = sorted(zones, key=lambda z: 0 if z.get("dhw") else 1)
+        self._dhw_busy = []
         slots = self.build_slots(now)
         rate_curve = self._thermal_rate_curve(slots)
         self._thermal_pv_kw = self._thermal_pv_curve(slots)
@@ -4624,6 +4637,12 @@ class GridLock(hass.Hass):
                 # last left; see _thermal_stub_result.
                 result = self._thermal_stub_result(zone)
             if result:
+                d = result.get("dhw") or {}
+                if d.get("status") in ("running", "waiting") and d.get("window_start") and d.get("window_end"):
+                    try:
+                        self._dhw_busy.append((self._iso(d["window_start"]), self._iso(d["window_end"])))
+                    except (ValueError, TypeError):
+                        pass
                 zones_out.append(result)
                 try:
                     self._control_thermal_zone(zone, now, result)

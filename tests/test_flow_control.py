@@ -238,3 +238,13 @@ def test_measured_thermal_and_electric_power_and_run_cop():
     assert abs(run_cop(4000.0, 1000.0) - 4.0) < 1e-9
     assert run_cop(4000.0, 100.0) is None      # too small to trust
     assert run_cop(10000.0, 1000.0) is None    # implausible
+
+
+def test_blocked_slots_get_no_space_heat_and_the_plan_works_around_them():
+    p = _params()
+    n = 12
+    segs = [heat_segments(18.0, 5.0, 10000, 0.45, 25.0, 50.0)] * n
+    plan, status = plan_heating(18.0, [5.0] * n, [10.0] * n, [18.0] * n, p, segment_curve=segs,
+                                blocked_slots=[0, 1, 2, 3])
+    assert all(plan[i]["heat_kwh"] < 1e-6 for i in range(4))
+    assert sum(x["heat_kwh"] for x in plan[4:]) > 1.0   # catches up once the tank's done

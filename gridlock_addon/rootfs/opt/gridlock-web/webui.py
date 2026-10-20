@@ -1562,13 +1562,15 @@ function renderHeatPlanChart(z, d) {
     const top = yk(p.heat_kwh), base = yk(0);
     return `<rect x="${(i * colW + 1).toFixed(1)}" y="${top.toFixed(1)}" width="${Math.max(1, colW - 2).toFixed(1)}" height="${(base - top).toFixed(1)}" fill="${priceColor(p.price)}" opacity="0.35"><title>${esc(hhmm(p.x))}: ${p.heat_kwh.toFixed(2)} kWh heat @ ${p.price.toFixed(1)}p${p.grid_price !== undefined && Math.abs(p.grid_price - p.price) > 0.05 ? ` (tariff ${p.grid_price.toFixed(1)}p)` : ''}, COP ${p.cop.toFixed(2)}${p.flow ? `, flow ${p.flow}°C` : ''}${p.solar_gain_w ? `, sun ${(p.solar_gain_w / 1000).toFixed(1)} kW` : ''}</title></rect>`;
   }).join('');
+  const dhwBlocks = plan.map((p, i) => p.hot_water === 'yes'
+    ? `<rect x="${(i * colW).toFixed(1)}" y="0" width="${colW.toFixed(1)}" height="${H}" fill="var(--amber)" opacity="0.10"><title>${esc(hhmm(p.x))}: heat pump busy with the hot water</title></rect>` : '').join('');
   const band = plan.map((p, i) => `<rect x="${(i * colW).toFixed(1)}" y="${y(p.target + above).toFixed(1)}" width="${colW.toFixed(1)}" height="${Math.max(0, y(p.target - below) - y(p.target + above)).toFixed(1)}" fill="var(--cyan)" opacity="0.07" />`).join('');
   const tempLine = plan.map((p, i) => `${((i + 0.5) * colW).toFixed(1)},${y(p.temp).toFixed(1)}`).join(' ');
   const targetLine = plan.map((p, i) => `${((i + 0.5) * colW).toFixed(1)},${y(p.target).toFixed(1)}`).join(' ');
   const extLine = plan.map((p, i) => `${((i + 0.5) * colW).toFixed(1)},${y(p.external).toFixed(1)}`).join(' ');
   const nowDot = (z.current_temp !== null && z.current_temp !== undefined)
     ? `<circle cx="${(0.5 * colW).toFixed(1)}" cy="${y(Number(z.current_temp)).toFixed(1)}" r="3.5" fill="var(--ink)"><title>now: ${Number(z.current_temp).toFixed(1)}°C</title></circle>` : '';
-  const inner = `${band}${bars}
+  const inner = `${dhwBlocks}${band}${bars}
       <polyline points="${targetLine}" fill="none" stroke="var(--dim)" stroke-width="1" stroke-dasharray="4,3" />
       <polyline points="${extLine}" fill="none" stroke="var(--violet)" stroke-width="1.5" stroke-dasharray="2,3" />
       <polyline points="${tempLine}" fill="none" stroke="var(--cyan)" stroke-width="2" />${nowDot}`;
@@ -1581,6 +1583,7 @@ function renderHeatPlanChart(z, d) {
       <span><span class="gl-legend-dot" style="background:var(--cyan)"></span>Room (planned)</span>
       <span><span class="gl-legend-dot" style="background:var(--dim)"></span>Target &amp; comfort band</span>
       <span><span class="gl-legend-dot" style="background:var(--violet)"></span>Outside (forecast)</span>
+      ${plan.some(p => p.hot_water === 'yes') ? '<span><span class="gl-legend-dot" style="background:var(--amber);opacity:.4"></span>Busy with hot water</span>' : ''}
       <span><span class="gl-legend-dot" style="background:var(--green);opacity:.5"></span>Heat in cheap slots</span>
       <span><span class="gl-legend-dot" style="background:var(--amber);opacity:.5"></span>mid</span>
       <span><span class="gl-legend-dot" style="background:var(--crimson);opacity:.5"></span>expensive</span>
