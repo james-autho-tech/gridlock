@@ -173,9 +173,11 @@ class HASensorRegistry:
         naming shortcut alongside a generic mechanism" shape as
         find_hypervolt_ev_power() next to the generic find_power()."""
         flat = self._flat()
+        # Never GridLock's own sensors (sensor.gridlock_shelly_power is a
+        # count of Shelly entities, not a power reading).
         return [eid for eid in flat
                 if eid.startswith("sensor.") and "shelly" in eid.lower()
-                and eid.endswith("_power")]
+                and eid.endswith("_power") and not eid.startswith("sensor.gridlock_")]
 
     # -- house load -------------------------------------------------------
     def find_load_entity(self):

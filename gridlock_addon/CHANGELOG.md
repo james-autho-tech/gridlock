@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.67.3 - 2026-10-20
+
+### Fix
+- Circuits tab used its own Shelly list: it still showed the Matter duplicate, and picked up GridLock's own Shelly-count helper as if it were a power circuit; it now uses the same Shelly-integration list as the load learning, and GridLock's own sensors are never treated as circuits
+
 ## 3.67.2 - 2026-10-20
 
 ### Fix

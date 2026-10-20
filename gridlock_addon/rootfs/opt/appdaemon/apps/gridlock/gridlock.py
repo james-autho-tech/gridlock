@@ -4947,7 +4947,8 @@ class GridLock(hass.Hass):
         services > Entities."""
         ids = list(dict.fromkeys(
             ([self.ent_ev_power] if self.ent_ev_power else [])
-            + self.registry.find_shelly_power_entities()
+            + (self._attr_list("sensor.gridlock_shelly_power", "entity_ids")
+               or self.registry.find_shelly_power_entities())
             + labeled_entities))
 
         today_iso = now.date().isoformat()
