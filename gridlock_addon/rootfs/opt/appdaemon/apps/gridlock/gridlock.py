@@ -5025,6 +5025,7 @@ class GridLock(hass.Hass):
                                    "critical_amps": round(self.load_mgmt_critical_kw * 1000.0 / self.mains_voltage, 1),
                                    "safe_charge_kw": round(safe_charge_kw, 2),
                                    "max_charge_kw": self.charge_kw,
+                                   "mains_voltage": self.mains_voltage,
                                    "load_state": load_mgmt_state or "normal"})
 
     def publish_grid_connection_status(self):

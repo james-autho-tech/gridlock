@@ -390,7 +390,11 @@ def build_status():
         "bill_breakdown": savings.get("attributes", {}).get("bill_breakdown"),
         "bill_month_to_date": savings.get("attributes", {}).get("bill_month_to_date"),
         "load_mgmt": ({
-            "site_import_a": as_float(load_mgmt_raw, 0),
+            # Live, from the grid sensor right now -- the engine's own
+            # figure only updates every 5-minute tick, so the fuse bar and
+            # the live power flow could disagree by a whole battery charge.
+            "site_import_a": ((grid_kw if is_on(get(status_attrs.get("importing_entity"))) else 0.0) * 1000.0
+                              / float(load_mgmt_raw.get("attributes", {}).get("mains_voltage") or 240.0)),
             "fuse_amps": load_mgmt_raw.get("attributes", {}).get("main_fuse_amps"),
             "warn_amps": load_mgmt_raw.get("attributes", {}).get("warn_amps"),
             "critical_amps": load_mgmt_raw.get("attributes", {}).get("critical_amps"),

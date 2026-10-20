@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.67.4 - 2026-10-20
+
+### Fix
+- The main fuse bar now reads the grid live like the power flow does; it used the engine's 5-minute figure, so straight after a battery charge stopped it could show twice the current the flow diagram did
+
 ## 3.67.3 - 2026-10-20
 
 ### Fix
