@@ -1925,13 +1925,23 @@ class GridLock(hass.Hass):
                                    "planned": self.ssen_state["planned"],
                                    "network_severe_weather": self.ssen_state["severe"],
                                    "faults": self.ssen_state["faults"]})
-        if self.ssen_state["planned"] and not prev["planned"]:
-            self._notify("GridLock: SSEN planned power cut",
-                        f"SSEN lists a planned interruption for "
-                        f"{self.ssen_postcode}. Storm Watch will hold "
-                        "the battery at 100%.")
         if bool(self.ssen_state["local"]) != bool(prev["local"]):
             self.tick({})
+        if self.ssen_state["planned"] and not prev["planned"]:
+            # Say what Storm Watch actually decided (the tick above has just
+            # weighed it), not a fixed "will hold at 100%" sent before any
+            # decision -- it usually finds enough already banked.
+            if self._prev_storm_reserve_sufficient:
+                outcome = ("You already have enough charge banked to cover the estimated outage, "
+                           "so the battery carries on as normal.")
+            else:
+                outcome = ("Storm Watch is keeping charge in the battery to cover the estimated "
+                           "outage, and will release it once the cut has passed.")
+            restore = next((f.get("restore") for f in self.ssen_state["faults"]
+                            if f.get("type") == "PSI" and f.get("restore")), None)
+            self._notify("GridLock: SSEN planned power cut",
+                         f"SSEN lists a planned interruption for {self.ssen_postcode}"
+                         + (f" (power back by {restore})" if restore else "") + ". " + outcome)
 
     def _agile_slot_key(self, dt):
         dt = dt.astimezone(timezone.utc)

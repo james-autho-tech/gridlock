@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.65.2 - 2026-10-20
+
+### Fix
+- The SSEN planned power cut notification said "Storm Watch will hold the battery at 100%" before Storm Watch had decided anything; it's now sent after the decision and says what actually happens — usually that enough charge is already banked and the battery carries on as normal
+
 ## 3.65.1 - 2026-10-20
 
 ### Fix
