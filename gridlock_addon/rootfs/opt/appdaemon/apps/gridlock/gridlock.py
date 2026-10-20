@@ -3403,6 +3403,7 @@ class GridLock(hass.Hass):
         # how hot tonight's run goes -- just enough to still be there then.
         mass_r = max(zone["params"].thermal_mass_wh_per_c, 1.0)
         ready_target = None
+        local_now = now.astimezone()
         t_now = tank_temp if tank_temp is not None else setpoint - hyst
         for k, want in core_dhw.upcoming_ready_bys(now.astimezone(), d.get("ready_by_times") or [], SLOT_MIN):
             want = want if want is not None else base_sp
@@ -3412,7 +3413,11 @@ class GridLock(hass.Hass):
                 # Upper bound for sizing: as if heated now and cooling till then.
                 heat_to = want + core_dhw.tank_drop_c(want, k * slot_hours, mass_r, zone["params"].heat_loss_watts,
                                                       zone["params"].heat_loss_degrees, ambient, sum(expected[:k]))
-                ready_target = {"slots": k, "temp": want, "predicted": round(t_now - drop_k, 1)}
+                # The configured clock time itself, for the panel (slots round down).
+                label = next((str(e).split("@")[0] for e in (d.get("ready_by_times") or [])
+                              if core_dhw.upcoming_ready_bys(local_now, [e], SLOT_MIN) == [(k, core_dhw.parse_ready_by(e)[2])]),
+                             None)
+                ready_target = {"slots": k, "temp": want, "predicted": round(t_now - drop_k, 1), "label": label}
                 by = k
                 daily_target = min(max(base_sp, d.get("max_daily_setpoint", 55.0)),
                                    max(daily_target, round(heat_to)))
@@ -3585,7 +3590,7 @@ class GridLock(hass.Hass):
             w_lo, w_hi = window[0], window[1]
         else:
             w_lo = w_hi = -1
-        heat_to = (lg_cfg.get("temp", setpoint) if (lg_due or lg_active) else setpoint)
+        heat_to = (lg_cfg.get("temp", setpoint) if (lg_due or lg_active) else max(setpoint, daily_target))
         mass = max(zone["params"].thermal_mass_wh_per_c, 1.0)
         tank_curve = []
         tk = tank_temp if tank_temp is not None else setpoint - hyst
@@ -3612,6 +3617,7 @@ class GridLock(hass.Hass):
                 "setpoint_wanted": setpoint_wanted,
                 "daily_target": daily_target, "daily_loss_c": daily_loss_c,
                 "ready_target": ({"by": (self._slot_floor(now) + timedelta(minutes=SLOT_MIN * ready_target["slots"])).isoformat(),
+                                  "label": ready_target.get("label"),
                                   "temp": ready_target["temp"], "predicted": ready_target["predicted"]}
                                  if ready_target else None),
                 "ready_by_times": list(d.get("ready_by_times") or []),

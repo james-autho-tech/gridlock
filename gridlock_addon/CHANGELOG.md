@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.67.1 - 2026-10-20
+
+### Fix
+- Hot water chart's predicted tank line now heats to the ready-by target rather than the plain setpoint, and the panel names the configured ready-by time (19:30) rather than its half-hour slot (19:00)
+
 ## 3.67.0 - 2026-10-20
 
 ### New

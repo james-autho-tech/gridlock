@@ -805,6 +805,8 @@ def test_hot_water_heats_just_enough_to_be_45_by_1930(engine):
     assert d["reason"] == "ready_by" and d["ready_target"]["temp"] == 45.0
     assert d["ready_target"]["predicted"] < 44.5          # would miss it without heating
     assert 45 < d["daily_target"] <= 55                   # heats a little above 45 to still be there
+    assert d["ready_target"]["label"] == "19:30"
+    assert max(s["tank"] for s in d["slots"]) >= d["daily_target"] - 0.5   # the chart heats to it too
     # A tank that will still be at 45 by then needs nothing (fresh state,
     # not the run the first check just committed).
     g._thermal_control_state.pop("Hot water", None)
