@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.67.9 - 2026-10-21
+
+### Fix
+- The tank setpoint found before a run raised it is now persisted; a restart mid-run left the unit at the run's 53 °C instead of putting it back
+
 ## 3.67.8 - 2026-10-21
 
 ### Hot water

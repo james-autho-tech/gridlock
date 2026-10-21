@@ -3401,7 +3401,10 @@ class GridLock(hass.Hass):
         by = None   # set below from the ready-by temperatures
         # Winter: tonight's target, from the tank's learned losses against
         # its surroundings and the learned usage, so it lasts the day.
-        base_sp = state.get("dhw_base_sp") or setpoint
+        # The setpoint found before a run raised it, persisted: a restart
+        # mid-run must still put it back.
+        keep = self.thermal_learning_state.setdefault(zone["name"], {})
+        base_sp = keep.get("dhw_base_sp") or setpoint
         if d.get("tank_ambient") == "outdoor":
             ambient = sum(ext[:48]) / max(len(ext[:48]), 1) if ext else 10.0
         else:
@@ -3609,12 +3612,12 @@ class GridLock(hass.Hass):
         lg_active = bool(lg.get("phase"))
         if not lg_active and setpoint_wanted is None:
             if committed is not None and daily_target > base_sp + 0.5:
-                state["dhw_base_sp"] = base_sp
+                keep["dhw_base_sp"] = base_sp
                 setpoint_wanted = daily_target
-            elif committed is None and state.get("dhw_base_sp"):
-                setpoint_wanted = state["dhw_base_sp"]
-                if abs(setpoint - state["dhw_base_sp"]) < 0.5:
-                    state["dhw_base_sp"] = None
+            elif committed is None and keep.get("dhw_base_sp"):
+                setpoint_wanted = keep["dhw_base_sp"]
+                if abs(setpoint - keep["dhw_base_sp"]) < 0.5:
+                    keep["dhw_base_sp"] = None
         if lg_due and lg.get("last_done") == now.isoformat():
             lg_due = False   # finished this tick
         if lg_changed:

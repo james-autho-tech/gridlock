@@ -906,3 +906,26 @@ def test_a_hard_run_is_never_learned_as_the_minimum_output(engine):
         g._publish_thermal_forecast(now + timedelta(minutes=m))
     house = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]
     assert house["learned_min_output_w"] == 2000.0      # untouched by a 60 Hz run
+
+
+def test_a_restart_mid_run_still_puts_the_tank_setpoint_back(engine):
+    g, _ = engine
+    _seed_house(g)
+    _seed_tank(g)
+    with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
+        json.dump({"hot_water": {"legionella_enabled": False}}, f)
+    g.states["number.loft_heatpump_controller_set_dhw_tank_temperature_t5s"]["state"] = "45.0"
+    g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "23.0"
+    now = g.get_now()
+    g._publish_thermal_forecast(now)               # daytime top-up commits and runs
+    assert g.thermal_learning_state["Hot water"].get("dhw_base_sp") in (None, 45.0)
+    # Simulate a run that had raised it to 53, then a restart (in-memory state lost).
+    g.thermal_learning_state["Hot water"]["dhw_base_sp"] = 45.0
+    g.states["number.loft_heatpump_controller_set_dhw_tank_temperature_t5s"]["state"] = "53.0"
+    g._thermal_control_state.clear()
+    g.calls.clear()
+    from datetime import timedelta
+    g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "53.0"
+    g._publish_thermal_forecast(now + timedelta(minutes=5))
+    sets = [c for c in g.calls if c[0] == "number/set_value"]
+    assert any(c[1].get("value") in (45, 45.0) for c in sets), sets
