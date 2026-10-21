@@ -1357,8 +1357,9 @@ function renderHotWaterSettings(hw) {
           <div style="color:var(--dim);font-size:10px;margin-top:2px">Sets how much hotter the nightly run goes in winter so the tank lasts the day.</div></div>
         <div><div class="lbl">Low and slow</div><label style="font-size:12px;color:var(--ink)"><input type="checkbox" ${hw.quiet_runs ? 'checked' : ''} onchange="hwSet('quiet_runs', this)"> silent mode during each run — slower compressor, better COP, quieter at night</label></div>
         ${num('max_daily_setpoint', 'Nightly run: never above °C', 1, '55 keeps it on the heat pump alone — above that the unit uses the immersion.')}
-        <div><div class="lbl">Once a night</div><label style="font-size:12px;color:var(--ink)"><input type="checkbox" ${hw.night_only ? 'checked' : ''} onchange="hwSet('night_only', this)"> one run a night, hot enough to last the day — never at peak unless the tank drops below the figure below</label></div>
+        <div><div class="lbl">Once a night</div><label style="font-size:12px;color:var(--ink)"><input type="checkbox" ${hw.night_only ? 'checked' : ''} onchange="hwSet('night_only', this)"> one run a night to the temperature below — never at peak unless the tank drops below the top-up figure. Ready-by times become a prediction only.</label></div>
         ${txt('night_window', 'Night window (HH:MM-HH:MM)', 'The cheap overnight hours the nightly run must fall in.')}
+        ${num('night_target', 'Nightly run heats to °C', 1, 'One fill a day — enough to last until the next night.')}
         ${num('top_up_below', 'Otherwise only top up below °C', 1, 'Outside the nightly run, heat only if the tank drops below this — to the normal setpoint, and a low tank in the evening waits for the night.')}
         ${num('run_minutes', 'Window length, minutes', 5, 'How long the circuit is powered for per run.')}
         ${num('max_interval_hours', 'Run at least every … hours', 1, '0 = no guarantee, only the floor and learned usage.')}

@@ -217,17 +217,20 @@ HOT_WATER_DEFAULTS = {
     # if it would fall short, heats in the cheapest window before it -- just
     # hot enough to still be there by then.
     "ready_by_times": ["19:30@45"],
-    # One run a night, hot enough to last the day: runs only start inside
-    # night_window (the cheap overnight hours), and the ready-by times
-    # only size that run -- they never start one at peak. Outside the
-    # window the tank is left alone unless its sensor falls below
-    # top_up_below, and even then a low tank in the evening waits for the
-    # night when it's close.
+    # One run a night to night_target, which lasts the day: runs only
+    # start inside night_window (the cheap overnight hours); the ready-by
+    # times are then just a prediction on the panel. Outside the window
+    # the tank is left alone unless its sensor falls below top_up_below,
+    # and even then a low tank in the evening waits for the night when
+    # it's close.
     "night_only": True,
     "night_window": "23:00-05:30",
+    # What the nightly run heats to -- one fill that lasts the house a day.
+    "night_target": 53.0,
     # Outside the nightly run, only top the tank up if its sensor falls
-    # below this.
-    "top_up_below": 40.0,
+    # below this. The tank stratifies: with the sensor at 25 °C there's
+    # still hot water at the top, and the night run is never far off.
+    "top_up_below": 25.0,
     # Winter: the nightly run heats hot enough that, after a day of
     # standing loss plus learned usage, the tank is still above
     # top_up_below by the next night -- never below the unit's setpoint,
@@ -297,6 +300,7 @@ HOT_WATER_NUMERIC_BOUNDS = {
     "control_safety_min_temp": (20.0, 55.0),
     "run_minutes": (15.0, 240.0),
     "top_up_below": (15.0, 55.0),
+    "night_target": (40.0, 65.0),
     "max_daily_setpoint": (40.0, 65.0),
     "quiet_output_factor": (0.3, 1.0),
     "legionella_temp": (55.0, 70.0),
@@ -423,9 +427,10 @@ def to_hot_water_zone_cfg(hw):
         "active": False,   # no anticipation curve for a tank
         "dhw": {"start_hysteresis_entity": hw["start_hysteresis_entity"],
                 "ready_by_times": hw.get("ready_by_times", []),
-                "top_up_below": hw.get("top_up_below", 40.0),
+                "top_up_below": hw.get("top_up_below", 25.0),
                 "night_only": hw.get("night_only", True),
                 "night_window": hw.get("night_window", "23:00-05:30"),
+                "night_target": hw.get("night_target", 53.0),
                 "max_daily_setpoint": hw.get("max_daily_setpoint", 55.0),
                 "quiet_entity": hw.get("quiet_entity") if hw.get("quiet_runs", True) else None,
                 "quiet_output_factor": hw.get("quiet_output_factor", 0.7) if hw.get("quiet_runs", True) else 1.0,

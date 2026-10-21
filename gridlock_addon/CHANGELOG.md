@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.67.8 - 2026-10-21
+
+### Hot water
+- The nightly run always heats to a fixed 53 °C (new "Nightly run heats to" setting) instead of a target worked out from the ready-by; ready-by times are a prediction only in once-a-night mode
+- Daytime top-up threshold back to 25 °C (3.67.7 raised it to 40): a tank that's cool after the evening showers is fine until the night run
+
 ## 3.67.7 - 2026-10-21
 
 ### Hot water

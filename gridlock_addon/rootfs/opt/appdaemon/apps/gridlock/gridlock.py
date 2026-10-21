@@ -3442,12 +3442,14 @@ class GridLock(hass.Hass):
         # unit's own limit), the immersion's share above it, plus a margin.
         # A fixed hour cut a cool tank off short of its setpoint.
         if not lg.get("phase") and not lg_due:
-            t0n = tank_temp if tank_temp is not None else daily_target - hyst
+            # Once a night, the run is sized for the nightly fill.
+            fill_to = max(daily_target, d.get("night_target", 0.0)) if d.get("night_only") else daily_target
+            t0n = tank_temp if tank_temp is not None else fill_to - hyst
             hp_lim_n = d.get("hp_max_tank_temp", 55.0)
             mass_n = max(zone["params"].thermal_mass_wh_per_c, 1.0)
-            need_min = ((max(0.0, min(daily_target, hp_lim_n) - t0n) * mass_n)
+            need_min = ((max(0.0, min(fill_to, hp_lim_n) - t0n) * mass_n)
                         / max((zone["params"].heat_max_power or 3500.0) * d.get("quiet_output_factor", 1.0), 500.0)
-                        + (max(0.0, daily_target - max(t0n, hp_lim_n)) * mass_n)
+                        + (max(0.0, fill_to - max(t0n, hp_lim_n)) * mass_n)
                         / max(d.get("immersion_power_w", 2000.0), 500.0)) * 60.0 + 10.0
             run_slots = max(run_slots, core_dhw.run_slots_needed(min(need_min, 240.0), SLOT_MIN))
         low = tank_temp is not None and tank_temp < d.get("top_up_below", 25.0)
@@ -3496,11 +3498,14 @@ class GridLock(hass.Hass):
         # before it gets chosen), when it's below the low threshold, on a
         # legionella night, or when a configured forced-run timer is up.
         if night_only:
+            # The night's one fill: always to night_target, whenever the
+            # tank is below the point the unit would start at for it.
+            if not top_up:
+                daily_target = d.get("night_target", 53.0)
             night_done = bool(window) and not top_up and learn.get("dhw_night_done") == core_dhw.night_key(
                 (self._slot_floor(now) + timedelta(minutes=SLOT_MIN * window[0])).astimezone())
             needed = top_up or lg_due or (not night_done and (
-                low or by is not None
-                or (not d.get("ready_by_times") and tank_temp is not None and tank_temp < daily_target - hyst)))
+                low or tank_temp is None or tank_temp < daily_target - hyst))
         else:
             needed = low or lg_due or deadline <= run_slots or by is not None
         skipped = False

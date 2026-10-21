@@ -627,9 +627,9 @@ def test_cool_tank_waits_for_the_night_and_only_a_cold_one_tops_up_by_day(engine
     hw = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]
     assert hw["dhw"]["status"] == "waiting"
     assert g._iso(hw["dhw"]["window_start"]).hour in (22, 23, 0, 1, 2, 3)
-    # Below 40 C with the night far off: topped up within a couple of
+    # Below 25 C with the night far off: topped up within a couple of
     # hours, to the normal setpoint only.
-    g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "35.0"
+    g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "23.0"
     g._publish_thermal_forecast(now + timedelta(minutes=5))
     hw = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]
     assert g._iso(hw["dhw"]["window_start"]) <= now + timedelta(hours=3)
@@ -667,7 +667,7 @@ def test_a_warm_tank_is_never_heated_at_peak_for_the_evening_showers(engine):
     assert ("switch/turn_on", {"target": {"entity_id": "switch.loft_heatpump_controller_power_dhw_t5s"}}) not in g.calls
 
 
-def test_the_tank_is_heated_once_at_night_to_last_until_the_ready_by(engine):
+def test_the_tank_is_heated_once_a_night_to_53(engine):
     g, _ = engine
     _seed_house(g)
     _seed_tank(g)
@@ -675,11 +675,11 @@ def test_the_tank_is_heated_once_at_night_to_last_until_the_ready_by(engine):
     with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
         json.dump({"hot_water": {"legionella_enabled": False, "ready_by_times": ["19:30@45"]}}, f)
     g.states["number.loft_heatpump_controller_set_dhw_tank_temperature_t5s"]["state"] = "45.0"
-    g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "38.0"
+    g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "23.0"
     now = g.get_now()
     t20 = now.astimezone().replace(hour=20, minute=0, second=0, microsecond=0).astimezone(now.tzinfo)
     g.build_slots = lambda now_: _peak_and_night_slots(g, now_.replace(minute=0, second=0, microsecond=0))
-    # 20:00, below 40 after the showers -- but the night is close, so it waits.
+    # 20:00, below 25 after the showers -- but the night is close, so it waits.
     g._publish_thermal_forecast(t20)
     d = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]["dhw"]
     assert d["committed"] is False
@@ -697,7 +697,7 @@ def test_the_tank_is_heated_once_at_night_to_last_until_the_ready_by(engine):
             if d["committed"]:
                 break
     assert d["committed"] is True
-    assert 45 < d["daily_target"] <= 55
+    assert d["daily_target"] == 53.0
     run_end = g._iso(d["window_end"])
     # After that run ends, the same night never starts another, even with a cool tank.
     g._publish_thermal_forecast(run_end + timedelta(minutes=5))
@@ -746,7 +746,7 @@ def test_hot_water_runs_switch_silent_mode_on_and_back_off(engine):
     _seed_tank(g)
     from datetime import timedelta
     with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
-        json.dump({"hot_water": {"legionella_enabled": False}}, f)
+        json.dump({"hot_water": {"legionella_enabled": False, "night_only": False}}, f)
     q = "switch.loft_heatpump_controller_function_setting_silent_mode"
     g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "30.0"
     now = g.get_now()
@@ -824,7 +824,7 @@ def test_house_is_planned_around_the_hot_water_run(engine):
     _seed_house(g, room_temp="15.0")
     _seed_tank(g)
     with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
-        json.dump({"target_temp": 19, "hot_water": {"legionella_enabled": False}}, f)
+        json.dump({"target_temp": 19, "hot_water": {"legionella_enabled": False, "night_only": False}}, f)
     g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "30.0"
     g._publish_thermal_forecast(g.get_now())     # flat prices: tank run starts now
     zones = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}
