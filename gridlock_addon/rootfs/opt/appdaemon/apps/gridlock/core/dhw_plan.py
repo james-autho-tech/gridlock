@@ -223,3 +223,47 @@ def tank_drop_c(tank_temp, hours, mass_wh_per_c, loss_watts, loss_degrees, ambie
     mass = max(mass_wh_per_c, 1.0)
     return ((loss_watts * hours + draw_wh) / mass
             + loss_degrees * max(0.0, tank_temp - ambient) * hours)
+
+
+# Learned draws in this many slots just before a ready-by are the use the
+# ready-by is for (the evening showers), not something to heat ahead of:
+# "45 °C by 19:30" means 45 °C when the showers start.
+READY_BY_OWN_DRAW_SLOTS = 2
+
+# A tank below top_up_below this close to the night waits for it.
+NIGHT_WAIT_SLOTS = 12
+
+
+def night_mask(slot0_local, n, window, slot_minutes):
+    """[bool] per slot from slot0_local: does the slot start inside the
+    "HH:MM-HH:MM" window (wrapping midnight)?"""
+    try:
+        a, b = str(window).split("-")
+        start = int(a.split(":")[0]) * 60 + int(a.split(":")[1])
+        end = int(b.split(":")[0]) * 60 + int(b.split(":")[1])
+    except (ValueError, IndexError, AttributeError):
+        return [True] * n
+    out = []
+    for i in range(n):
+        t = slot0_local + timedelta(minutes=slot_minutes * i)
+        m = t.hour * 60 + t.minute
+        out.append(start <= m < end if start < end else (m >= start or m < end))
+    return out
+
+
+def next_night(mask):
+    """(first slot, end slot exclusive) of the next night block, or None."""
+    try:
+        s = mask.index(True)
+    except ValueError:
+        return None
+    e = s
+    while e < len(mask) and mask[e]:
+        e += 1
+    return s, e
+
+
+def night_key(local_dt):
+    """Which night a time belongs to -- the date it started on, for any
+    window that doesn't span midday."""
+    return (local_dt - timedelta(hours=12)).date().isoformat()

@@ -217,10 +217,17 @@ HOT_WATER_DEFAULTS = {
     # if it would fall short, heats in the cheapest window before it -- just
     # hot enough to still be there by then.
     "ready_by_times": ["19:30@45"],
-    # Outside the ready-by run, only top the tank up if its sensor falls
-    # below this. The tank stratifies: with the sensor at 25 °C there's
-    # still hot water at the top for showers, so the day doesn't need a run.
-    "top_up_below": 25.0,
+    # One run a night, hot enough to last the day: runs only start inside
+    # night_window (the cheap overnight hours), and the ready-by times
+    # only size that run -- they never start one at peak. Outside the
+    # window the tank is left alone unless its sensor falls below
+    # top_up_below, and even then a low tank in the evening waits for the
+    # night when it's close.
+    "night_only": True,
+    "night_window": "23:00-05:30",
+    # Outside the nightly run, only top the tank up if its sensor falls
+    # below this.
+    "top_up_below": 40.0,
     # Winter: the nightly run heats hot enough that, after a day of
     # standing loss plus learned usage, the tank is still above
     # top_up_below by the next night -- never below the unit's setpoint,
@@ -320,7 +327,7 @@ HOT_WATER_ENTITY_FIELDS = ("tank_temp_entity", "target_temp_entity", "start_hyst
 def merge_hot_water(saved):
     out = copy.deepcopy(HOT_WATER_DEFAULTS)
     saved = saved if isinstance(saved, dict) else {}
-    for key in ("configured", "legionella_enabled", "quiet_runs", "cancel_unit_disinfect"):
+    for key in ("configured", "legionella_enabled", "quiet_runs", "cancel_unit_disinfect", "night_only"):
         if key in saved:
             out[key] = bool(saved[key])
     name = saved.get("name")
@@ -342,9 +349,27 @@ def merge_hot_water(saved):
         out["control_requires"] = clean_requirements(saved["control_requires"])
     if "ready_by_times" in saved:
         out["ready_by_times"] = clean_times(saved["ready_by_times"])
+    if "night_window" in saved:
+        out["night_window"] = clean_window(saved["night_window"]) or out["night_window"]
     if str(saved.get("tank_ambient", "")).lower() in ("house", "outdoor"):
         out["tank_ambient"] = str(saved["tank_ambient"]).lower()
     return out
+
+
+def clean_window(raw):
+    """"HH:MM-HH:MM" -> normalised string, or None if it doesn't parse."""
+    try:
+        a, b = str(raw).replace(" ", "").split("-")
+        parts = []
+        for t in (a, b):
+            h, _, m = t.partition(":")
+            h, m = int(h), int(m or 0)
+            if not (0 <= h < 24 and 0 <= m < 60):
+                return None
+            parts.append(f"{h:02d}:{m:02d}")
+    except (ValueError, TypeError):
+        return None
+    return None if parts[0] == parts[1] else "-".join(parts)
 
 
 def clean_times(raw):
@@ -398,7 +423,9 @@ def to_hot_water_zone_cfg(hw):
         "active": False,   # no anticipation curve for a tank
         "dhw": {"start_hysteresis_entity": hw["start_hysteresis_entity"],
                 "ready_by_times": hw.get("ready_by_times", []),
-                "top_up_below": hw.get("top_up_below", 25.0),
+                "top_up_below": hw.get("top_up_below", 40.0),
+                "night_only": hw.get("night_only", True),
+                "night_window": hw.get("night_window", "23:00-05:30"),
                 "max_daily_setpoint": hw.get("max_daily_setpoint", 55.0),
                 "quiet_entity": hw.get("quiet_entity") if hw.get("quiet_runs", True) else None,
                 "quiet_output_factor": hw.get("quiet_output_factor", 0.7) if hw.get("quiet_runs", True) else 1.0,

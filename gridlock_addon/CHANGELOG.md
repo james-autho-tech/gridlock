@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.67.7 - 2026-10-21
+
+### Hot water
+- Once a night: the tank is heated in one run inside the night window (default 23:00-05:30), sized to still meet the ready-by. Ready-by times no longer start runs at peak
+- Outside the night, it only heats if the tank drops below 40 °C (was 25), and then only to the normal setpoint; a low tank within 6 h of the night waits for it
+- Draws learned in the hour before a ready-by are the use it's for; they no longer count against it (a 46 °C tank at 19:01 started a peak run for 19:30)
+- New settings: "Once a night" toggle and night window
+
 ## 3.67.6 - 2026-10-21
 
 ### Fix

@@ -3420,12 +3420,14 @@ class GridLock(hass.Hass):
         t_now = tank_temp if tank_temp is not None else setpoint - hyst
         for k, want in core_dhw.upcoming_ready_bys(now.astimezone(), d.get("ready_by_times") or [], SLOT_MIN):
             want = want if want is not None else base_sp
+            # Draws just before the ready-by are what it's for, not ahead of it.
+            draws_k = sum(expected[:max(0, k - core_dhw.READY_BY_OWN_DRAW_SLOTS)])
             drop_k = core_dhw.tank_drop_c(t_now, k * slot_hours, mass_r, zone["params"].heat_loss_watts,
-                                          zone["params"].heat_loss_degrees, ambient, sum(expected[:k]))
+                                          zone["params"].heat_loss_degrees, ambient, draws_k)
             if t_now - drop_k < want - 0.5:
                 # Upper bound for sizing: as if heated now and cooling till then.
                 heat_to = want + core_dhw.tank_drop_c(want, k * slot_hours, mass_r, zone["params"].heat_loss_watts,
-                                                      zone["params"].heat_loss_degrees, ambient, sum(expected[:k]))
+                                                      zone["params"].heat_loss_degrees, ambient, draws_k)
                 # The configured clock time itself, for the panel (slots round down).
                 label = next((str(e).split("@")[0] for e in (d.get("ready_by_times") or [])
                               if core_dhw.upcoming_ready_bys(local_now, [e], SLOT_MIN) == [(k, core_dhw.parse_ready_by(e)[2])]),
@@ -3448,19 +3450,42 @@ class GridLock(hass.Hass):
                         + (max(0.0, daily_target - max(t0n, hp_lim_n)) * mass_n)
                         / max(d.get("immersion_power_w", 2000.0), 500.0)) * 60.0 + 10.0
             run_slots = max(run_slots, core_dhw.run_slots_needed(min(need_min, 240.0), SLOT_MIN))
-        if by is not None:
-            deadline = min(deadline, max(run_slots, by))
-        # Genuinely low tank: top it up in the cheapest slot of the next
-        # couple of hours rather than waiting for the night.
         low = tank_temp is not None and tank_temp < d.get("top_up_below", 25.0)
-        if low:
-            deadline = min(deadline, run_slots + 4)
-        window = core_dhw.cheapest_window(scores, run_slots, deadline)
+        night_only = bool(d.get("night_only"))
+        top_up = False
+        if night_only:
+            # One run a night: only night (or free) slots are candidates, and
+            # the ready-by times only size that run. A tank that's genuinely
+            # low with the night still far off is the one exception -- topped
+            # up soon, to the normal setpoint only.
+            mask = core_dhw.night_mask(self._slot_floor(now).astimezone(), len(scores),
+                                       d.get("night_window"), SLOT_MIN)
+            nn = core_dhw.next_night(mask)
+            if low and (nn is None or nn[0] > core_dhw.NIGHT_WAIT_SLOTS):
+                top_up = True
+                deadline = run_slots + 4
+                window = core_dhw.cheapest_window(scores, run_slots, deadline)
+            else:
+                allowed = [mask[i] or grid_rates[i] <= 0 for i in range(len(scores))]
+                deadline = nn[1] if nn else len(scores)
+                window = core_dhw.cheapest_window(
+                    [sc if allowed[i] else sc + 1e4 for i, sc in enumerate(scores)], run_slots, deadline)
+                if window and not allowed[window[0]]:
+                    window = None
+        else:
+            if by is not None:
+                deadline = min(deadline, max(run_slots, by))
+            # Genuinely low tank: top it up in the cheapest slot of the next
+            # couple of hours rather than waiting for the night.
+            if low:
+                deadline = min(deadline, run_slots + 4)
+            window = core_dhw.cheapest_window(scores, run_slots, deadline)
         if ready_target and window:
             hrs_after = max(0, ready_target["slots"] - window[1]) * slot_hours
             exact = ready_target["temp"] + core_dhw.tank_drop_c(
                 ready_target["temp"], hrs_after, mass_r, zone["params"].heat_loss_watts,
-                zone["params"].heat_loss_degrees, ambient, sum(expected[window[1]:ready_target["slots"]]))
+                zone["params"].heat_loss_degrees, ambient,
+                sum(expected[window[1]:max(window[1], ready_target["slots"] - core_dhw.READY_BY_OWN_DRAW_SLOTS)]))
             daily_target = min(max(base_sp, d.get("max_daily_setpoint", 55.0)), max(base_sp, round(exact)))
         # A window only starts when there's something to heat: the tank
         # is below the point the unit would start a run at, or the daily
@@ -3470,7 +3495,14 @@ class GridLock(hass.Hass):
         # the next ready-by is what the window is racing (the cheapest slot
         # before it gets chosen), when it's below the low threshold, on a
         # legionella night, or when a configured forced-run timer is up.
-        needed = low or lg_due or deadline <= run_slots or by is not None
+        if night_only:
+            night_done = bool(window) and not top_up and learn.get("dhw_night_done") == core_dhw.night_key(
+                (self._slot_floor(now) + timedelta(minutes=SLOT_MIN * window[0])).astimezone())
+            needed = top_up or lg_due or (not night_done and (
+                low or by is not None
+                or (not d.get("ready_by_times") and tank_temp is not None and tank_temp < daily_target - hyst)))
+        else:
+            needed = low or lg_due or deadline <= run_slots or by is not None
         skipped = False
         # A running legionella cycle never gets a fresh window booked under
         # it -- when its window ends the cycle stops (below), full stop.
@@ -3486,7 +3518,14 @@ class GridLock(hass.Hass):
             else:
                 committed = {"start": now.isoformat(),
                              "end": (now + timedelta(minutes=SLOT_MIN * run_slots)).isoformat()}
+                if top_up:
+                    committed["top_up"] = True
+                elif night_only:
+                    self.thermal_learning_state.setdefault(zone["name"], {})["dhw_night_done"] = \
+                        core_dhw.night_key(now.astimezone())
                 state["dhw_window"] = committed
+        if committed and committed.get("top_up"):
+            daily_target = base_sp   # a daytime top-up goes to the normal setpoint, no further
         if committed:
             start_iso, end_iso = committed["start"], committed["end"]
         elif window:

@@ -268,6 +268,9 @@ def _seed_tank(g):
     s["switch.loft_heatpump_controller_parameter_setting_1_enable_water_heating"] = {"state": "on", "attributes": {}}
     s["switch.loft_heatpump_controller_function_setting_silent_mode"] = {"state": "off", "attributes": {}}
     s["switch.loft_heatpump_controller_function_setting_disinfect"] = {"state": "off", "attributes": {}}
+    # The window mechanics are tested at any hour; once-a-night has its own tests.
+    with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
+        json.dump({"hot_water": {"night_only": False}}, f)
 
 
 def test_hot_water_zone_plans_a_window_and_powers_the_circuit_when_it_starts(engine):
@@ -300,7 +303,8 @@ def test_hot_water_window_completes_and_is_not_rerun_until_the_interval(engine):
     _seed_tank(g)
     # Ordinary windows only -- the legionella cycle has its own tests.
     with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
-        json.dump({"hot_water": {"legionella_enabled": False, "max_interval_hours": 24, "tank_litres": 150}}, f)
+        json.dump({"hot_water": {"legionella_enabled": False, "max_interval_hours": 24, "tank_litres": 150,
+                                 "night_only": False}}, f)
     from datetime import timedelta
     now = g.get_now()
     g._publish_thermal_forecast(now)
@@ -613,21 +617,92 @@ def test_cool_tank_waits_for_the_night_and_only_a_cold_one_tops_up_by_day(engine
         json.dump({"hot_water": {"legionella_enabled": False, "ready_by_times": ["06:30"]}}, f)
     now = g.get_now()   # 07:00 UTC
     start = now.replace(minute=0, second=0, microsecond=0)
-    # Daytime peak, cheap 23:00-05:30 local: a 35 C tank waits for the night.
+    # Daytime peak, cheap 23:00-05:30 local: a 42 C tank waits for the night.
     slots = [{"start": start + timedelta(minutes=30 * i),
               "imp": 0.0666 if 22 <= (start + timedelta(minutes=30 * i)).hour or (start + timedelta(minutes=30 * i)).hour < 4 else 0.34,
               "exp": 0.04, "export": 0.0, "pv": 0.0} for i in range(96)]
     g.build_slots = lambda now_: slots
-    g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "35.0"
+    g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "42.0"
     g._publish_thermal_forecast(now)
     hw = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]
     assert hw["dhw"]["status"] == "waiting"
     assert g._iso(hw["dhw"]["window_start"]).hour in (22, 23, 0, 1, 2, 3)
-    # Below 25 C by day: topped up within a couple of hours, not left for the night.
-    g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "23.0"
+    # Below 40 C with the night far off: topped up within a couple of
+    # hours, to the normal setpoint only.
+    g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "35.0"
     g._publish_thermal_forecast(now + timedelta(minutes=5))
     hw = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]
     assert g._iso(hw["dhw"]["window_start"]) <= now + timedelta(hours=3)
+    if hw["dhw"]["committed"]:
+        assert hw["dhw"]["daily_target"] == 53.0      # the unit's setpoint, not a day's worth
+
+
+def _peak_and_night_slots(g, start):
+    from datetime import timedelta
+    return [{"start": start + timedelta(minutes=30 * i),
+             "imp": 0.0666 if (start + timedelta(minutes=30 * i)).astimezone().hour >= 23
+             or (start + timedelta(minutes=30 * i)).astimezone().hour < 5 else 0.3447,
+             "exp": 0.04, "export": 0.0, "pv": 0.0} for i in range(96)]
+
+
+def test_a_warm_tank_is_never_heated_at_peak_for_the_evening_showers(engine):
+    g, _ = engine
+    _seed_house(g)
+    _seed_tank(g)
+    from datetime import timedelta
+    with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
+        json.dump({"hot_water": {"legionella_enabled": False, "ready_by_times": ["19:30@45"]}}, f)
+    g.states["number.loft_heatpump_controller_set_dhw_tank_temperature_t5s"]["state"] = "45.0"
+    g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "46.0"
+    # Learned: showers around 19:00 (the draw the ready-by is for).
+    learn = g.thermal_learning_state.setdefault("Hot water", {})
+    learn["dhw_profile"] = [0.0] * 38 + [1300.0, 800.0] + [0.0] * 8
+    now = g.get_now()
+    t1901 = now.astimezone().replace(hour=19, minute=1, second=0, microsecond=0).astimezone(now.tzinfo)
+    g.build_slots = lambda now_: _peak_and_night_slots(g, now_.replace(minute=0, second=0, microsecond=0))
+    g.calls.clear()
+    g._publish_thermal_forecast(t1901)
+    d = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]["dhw"]
+    assert d["committed"] is False and d["heat_now"] is False
+    assert ("switch/turn_on", {"target": {"entity_id": "switch.loft_heatpump_controller_power_dhw_t5s"}}) not in g.calls
+
+
+def test_the_tank_is_heated_once_at_night_to_last_until_the_ready_by(engine):
+    g, _ = engine
+    _seed_house(g)
+    _seed_tank(g)
+    from datetime import timedelta
+    with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
+        json.dump({"hot_water": {"legionella_enabled": False, "ready_by_times": ["19:30@45"]}}, f)
+    g.states["number.loft_heatpump_controller_set_dhw_tank_temperature_t5s"]["state"] = "45.0"
+    g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "38.0"
+    now = g.get_now()
+    t20 = now.astimezone().replace(hour=20, minute=0, second=0, microsecond=0).astimezone(now.tzinfo)
+    g.build_slots = lambda now_: _peak_and_night_slots(g, now_.replace(minute=0, second=0, microsecond=0))
+    # 20:00, below 40 after the showers -- but the night is close, so it waits.
+    g._publish_thermal_forecast(t20)
+    d = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]["dhw"]
+    assert d["committed"] is False
+    start = g._iso(d["window_start"]).astimezone()
+    assert start.hour >= 23 or start.hour < 5
+    # 23:00: the night's run starts, sized to still be 45 at 19:30.
+    t23 = t20 + timedelta(hours=3)
+    g._publish_thermal_forecast(t23)
+    d = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]["dhw"]
+    if not d["committed"]:
+        # The cheapest night slot may be later -- step through the night.
+        for m in range(30, 390, 30):
+            g._publish_thermal_forecast(t23 + timedelta(minutes=m))
+            d = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]["dhw"]
+            if d["committed"]:
+                break
+    assert d["committed"] is True
+    assert 45 < d["daily_target"] <= 55
+    run_end = g._iso(d["window_end"])
+    # After that run ends, the same night never starts another, even with a cool tank.
+    g._publish_thermal_forecast(run_end + timedelta(minutes=5))
+    d = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]["dhw"]
+    assert d["committed"] is False
 
 
 def test_compressor_minimum_output_is_learned_from_steady_low_speed_running(engine):
@@ -796,7 +871,7 @@ def test_hot_water_heats_just_enough_to_be_45_by_1930(engine):
     _seed_house(g)
     _seed_tank(g)
     with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
-        json.dump({"hot_water": {"legionella_enabled": False, "ready_by_times": ["19:30@45"]}}, f)
+        json.dump({"hot_water": {"legionella_enabled": False, "ready_by_times": ["19:30@45"], "night_only": False}}, f)
     g.states["number.loft_heatpump_controller_set_dhw_tank_temperature_t5s"]["state"] = "45.0"
     g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "44.0"
     g._publish_thermal_forecast(g.get_now())     # 07:00 UTC, 19:30 local is hours away
