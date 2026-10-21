@@ -814,3 +814,20 @@ def test_hot_water_heats_just_enough_to_be_45_by_1930(engine):
     g._publish_thermal_forecast(g.get_now())
     hw = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]
     assert hw["dhw"]["status"] == "not_needed"
+
+
+def test_a_hard_run_is_never_learned_as_the_minimum_output(engine):
+    g, _ = engine
+    _seed_house(g)
+    from datetime import timedelta
+    st = g.states
+    st["sensor.loft_heatpump_controller_active_state"]["state"] = "Heating"
+    st["sensor.loft_heatpump_controller_compressor_operating_frequency"]["state"] = "60"
+    st["sensor.loft_heatpump_controller_ability_of_hydraulic_module"]["state"] = "6.8"
+    st["sensor.loft_heatpump_controller_total_water_outlet_temperature_t1"]["state"] = "40.0"
+    st["sensor.loft_heatpump_controller_water_inlet_temperature"]["state"] = "35.0"
+    now = g.get_now()
+    for m in range(0, 90, 5):
+        g._publish_thermal_forecast(now + timedelta(minutes=m))
+    house = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]
+    assert house["learned_min_output_w"] == 2000.0      # untouched by a 60 Hz run

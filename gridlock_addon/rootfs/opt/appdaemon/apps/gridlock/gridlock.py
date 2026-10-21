@@ -92,6 +92,11 @@ THERMAL_HORIZON_STEPS = SLOT_MIN * HORIZON_SLOTS // THERMAL_STEP_MIN
 # so this is thermal output divided by the modelled COP.
 HEATPUMP_POWER_ENTITY = "sensor.gridlock_heatpump_power"
 
+# A compressor running at or below this speed is near the bottom of its
+# range; only there does its output say anything about the minimum it can
+# turn down to. Inverter heat pumps typically bottom out around 15-25 Hz.
+MIN_OUTPUT_LEARN_MAX_HZ = 30.0
+
 # Confirmed in production (2026-07-30): a value equal to exactly 0/0.0
 # nested inside a set_state() attributes payload — a dict key or a list
 # element — goes missing by the time it comes back out of Home
@@ -3226,7 +3231,11 @@ class GridLock(hass.Hass):
                         steady_min = (now - self._iso(on_since)).total_seconds() / 60.0
                     except (ValueError, TypeError):
                         steady_min = 0.0
-                    if steady_min >= 15:
+                    # Only genuinely slow running counts: "the slowest seen so
+                    # far" is no minimum at all if the only steady run so far
+                    # was a hard one (a full-power run was learned as a 6.8 kW
+                    # "minimum" and pushed the plan to 41 °C flow).
+                    if steady_min >= 15 and hz <= MIN_OUTPUT_LEARN_MAX_HZ:
                         state["min_hz"] = min(state.get("min_hz") or hz, hz)
                         if hz <= state["min_hz"] + 3 and 300 < thermal_w < 15000:
                             learned = core_flow.blend(params.heat_min_power or thermal_w, thermal_w, alpha=0.2)

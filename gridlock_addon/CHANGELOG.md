@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.67.6 - 2026-10-21
+
+### Fix
+- The compressor minimum-output learner took "the slowest speed seen so far" as the minimum, so a single hard run (60 Hz, 6.8 kW) was learned as the minimum and the plan, unable to run gentler than 6.8 kW, asked for ~41 °C flow. It now only learns at genuinely low compressor speeds (≤30 Hz)
+
 ## 3.67.5 - 2026-10-21
 
 ### Fix
