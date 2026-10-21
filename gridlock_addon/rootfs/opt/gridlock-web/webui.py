@@ -363,8 +363,10 @@ def build_status():
         # The engine publishes its merged view once it has ticked; before
         # that (or on an engine that hasn't got this far) fall back to
         # merging the file here so the form is never empty.
-        "space_heating_settings": (thermal.get("attributes", {}).get("space_heating_settings")
-                                   or merge_space_heating_settings(load_gridwarm_settings())),
+        # The saved file is the truth -- the engine's copy lags until its
+        # next run, which made a just-changed target look like it hadn't
+        # taken.
+        "space_heating_settings": merge_space_heating_settings(load_gridwarm_settings()),
         "engine_version": status_attrs.get("engine_version"),
         "hot_water_settings": (thermal.get("attributes", {}).get("hot_water_settings")
                                or merge_space_heating_settings(load_gridwarm_settings())["hot_water"]),
@@ -1082,16 +1084,28 @@ async function saveSpaceHeating(reset) {
   shSaveBusy = false;
   refresh();
 }
+let pendingTarget = null;
 async function setZoneTargetTo(value) {
+  value = Math.round(Number(value) * 2) / 2;
+  if (!Number.isFinite(value) || value < 5 || value > 30) return;
+  pendingTarget = value;
+  // Show it straight away; the save and refresh follow.
+  document.querySelectorAll('.gl-target-val').forEach(el => { el.textContent = `${value.toFixed(1)}°C`; });
   if (zoneTargetBusy) return;
   zoneTargetBusy = true;
   try {
-    const r = await fetch('api/gridwarm-target', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value }),
-    });
-    if (!r.ok) { const j = await r.json().catch(() => ({})); window.alert(j.error || 'Could not set target'); }
+    // Several quick presses: keep saving until the latest value is stored.
+    let sent = null;
+    while (sent !== pendingTarget) {
+      sent = pendingTarget;
+      const r = await fetch('api/gridwarm-target', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: sent }),
+      });
+      if (!r.ok) { const j = await r.json().catch(() => ({})); window.alert(j.error || 'Could not set target'); break; }
+    }
   } catch (e) { /* surfaced on next refresh() */ }
-  setTimeout(() => { zoneTargetBusy = false; refresh(); }, 1200);
+  zoneTargetBusy = false;
+  refresh();
 }
 async function loadGridwarmEntities() {
   if (gridwarmEntities) return;
@@ -1514,7 +1528,9 @@ function renderHouseHero(d) {
   const roomTile = z.current_temp === null || z.current_temp === undefined
     ? `<div class="gl-tile"><div class="lbl">Room</div><div class="val" style="color:var(--amber);font-size:16px">no reading</div><div class="sub">room sensor unavailable — heating held on at ${n1(c.flow_setpoint, 0, '°C')} flow until it returns</div></div>`
     : `<div class="gl-tile"><div class="lbl">${z.rooms_averaged ? `House (${Math.round(Number(z.rooms_averaged))} rooms)` : 'Room'}</div><div class="val num">${n1(z.current_temp, 1, '°C')}</div><div class="sub">outside ${n1(z.external_temp, 1, '°C')}${z.reading_from_fallback ? ` · <span style="color:var(--amber)">from fallback sensor (${esc(String(z.reading_from_fallback).split('.').pop())}) — primary unavailable</span>` : ''}</div></div>`;
-  const targetTile = `<div class="gl-tile"><div class="lbl">Target</div><div class="val num">${n1(z.target_temp, 1, '°C')}<span class="gl-stepper"><button title="−0.5 °C" onclick="setZoneTargetTo(${(Number(z.target_temp) - 0.5).toFixed(1)})">−</button><button title="+0.5 °C" onclick="setZoneTargetTo(${(Number(z.target_temp) + 0.5).toFixed(1)})">+</button></span></div><div class="sub">may drift ${n1(d.space_heating_settings && d.space_heating_settings.comfort_below, 1)}° below / ${n1(d.space_heating_settings && d.space_heating_settings.comfort_above, 1)}° above for cheaper slots</div></div>`;
+  const savedTarget = Number((d.space_heating_settings || {}).target_temp ?? z.target_temp);
+  const applying = Math.abs(savedTarget - Number(z.target_temp)) > 0.05;
+  const targetTile = `<div class="gl-tile"><div class="lbl">Target</div><div class="val num"><span class="gl-target-val">${n1(savedTarget, 1, '°C')}</span><span class="gl-stepper"><button title="−0.5 °C" onclick="setZoneTargetTo((pendingTarget ?? ${savedTarget}) - 0.5)">−</button><button title="+0.5 °C" onclick="setZoneTargetTo((pendingTarget ?? ${savedTarget}) + 0.5)">+</button></span></div>${applying ? '<div class="sub" style="color:var(--amber)">applying — GridWarm re-plans within 30 seconds</div>' : ''}<div class="sub">may drift ${n1(d.space_heating_settings && d.space_heating_settings.comfort_below, 1)}° below / ${n1(d.space_heating_settings && d.space_heating_settings.comfort_above, 1)}° above for cheaper slots</div></div>`;
   const flowTile = c.flow_entity
     ? `<div class="gl-tile"><div class="lbl">Flow setpoint</div><div class="val num">${c.commanded === false ? '<span style="font-size:16px;color:var(--dim)">off</span>' : n1(c.flow_setpoint, 0, '°C')}</div><div class="sub">unit set to ${n1(hp.flow_setpoint_live, 0, '°C')} · water out ${n1(hp.flow_temp, 0, '°C')} / back ${n1(hp.return_temp, 0, '°C')}${f && c.commanded !== false ? ` · plan wants ${n1(f.flow_setpoint_wanted, 0, '°C')}` : ''}</div></div>`
     : '';
@@ -2932,6 +2948,7 @@ async function refresh() {
     d = await resp.json();
     latestPlanTable = d.plan_table || { columns: [], rows: [] };
     latestStatus = d;
+    if (pendingTarget !== null && !zoneTargetBusy && Math.abs(Number((d.space_heating_settings || {}).target_temp) - pendingTarget) < 0.05) pendingTarget = null;
   } catch (e) {
     document.getElementById('app').innerHTML =
       `<div class="gl">Could not reach GridLock (${esc(e.message || e)}) — check the add-on log, or it may still be starting up.</div>`;

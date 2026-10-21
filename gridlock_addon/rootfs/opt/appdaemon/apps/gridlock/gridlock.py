@@ -930,6 +930,10 @@ class GridLock(hass.Hass):
 
         self.run_every(self.poll_carbon_intensity, "now", 1800)
         self.run_every(self.tick, "now", 300)
+        # A setting changed on the dashboard (target, hot water...) re-plans
+        # the heat pump within 30 s instead of waiting for the next tick.
+        self._dash_mtime_seen = None
+        self.run_every(self._watch_dashboard_settings, "now+30", 30)
 
     # ------------------------------------------------------------------
     # PERSISTENCE (namespaced per site — see initialize()'s docstring note)
@@ -4222,6 +4226,21 @@ class GridLock(hass.Hass):
         live = self.get_state(zone["heating_entity"])
         return (live is not None
                 and str(live).strip().lower() == str(zone["heating_entity_state"]).strip().lower())
+
+    def _watch_dashboard_settings(self, kwargs):
+        try:
+            mtime = os.path.getmtime(self._dashboard_path("gridwarm_settings.json"))
+        except OSError:
+            return
+        if self._dash_mtime_seen is None:
+            self._dash_mtime_seen = mtime
+            return
+        if mtime != self._dash_mtime_seen:
+            self._dash_mtime_seen = mtime
+            try:
+                self._publish_thermal_forecast(self.get_now())
+            except Exception as exc:  # noqa: BLE001 — the regular tick still runs
+                self.log(f"GridWarm: re-plan after a settings change failed: {exc!r}", level="WARNING")
 
     def _ui_space_heating_zone(self):
         """The dashboard-configured space heating zone, from

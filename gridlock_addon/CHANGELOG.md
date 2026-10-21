@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.67.5 - 2026-10-21
+
+### Fix
+- House target −/+ felt unresponsive: the tile showed GridWarm's last-run value, so it didn't change for up to 5 minutes and repeated presses all stepped from the old number. It now shows the saved target immediately (with "applying" until GridWarm catches up), presses accumulate, and GridWarm re-plans within 30 seconds of any dashboard setting change
+
 ## 3.67.4 - 2026-10-20
 
 ### Fix
