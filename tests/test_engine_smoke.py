@@ -929,3 +929,17 @@ def test_a_restart_mid_run_still_puts_the_tank_setpoint_back(engine):
     g._publish_thermal_forecast(now + timedelta(minutes=5))
     sets = [c for c in g.calls if c[0] == "number/set_value"]
     assert any(c[1].get("value") in (45, 45.0) for c in sets), sets
+
+
+def test_a_high_compressor_minimum_does_not_push_the_flow_up(engine):
+    g, _ = engine
+    _seed_house(g)
+    # Real numbers: the compressor bottoms out at ~5.6 kW, the house loses ~1 kW.
+    g.thermal_learning_state["House"] = {"min_output_w": 5605.0, "emitter_w_at_dt50": 27215.0}
+    g._publish_thermal_forecast(g.get_now())
+    house = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]
+    assert house["learned_min_output_w"] == 5605.0
+    flows = [p["flow"] for p in house["flow"]["plan"] if p.get("flow")]
+    # (The first slot or two may catch up a cold start.) Steady heating is low and slow.
+    steady = flows[2:]
+    assert steady and max(steady) <= 30.0, flows

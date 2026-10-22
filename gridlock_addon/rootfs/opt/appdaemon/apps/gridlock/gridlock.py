@@ -3765,7 +3765,12 @@ class GridLock(hass.Hass):
             slot_hours=slot_hours, low_flow_power_w=low_w, cop_low_curve=cop_low,
             cop_high_curve=cop_high, max_power_w=max_w, solver=core_flow.heating_solver(),
             heat_kwh_prev=delivering_kwh, gain_curve_w=gain_curve, segment_curve=segment_curve,
-            min_power_w=params.heat_min_power or None, blocked_slots=blocked,
+            # The floor per heating slot is what the radiators shed at the
+            # lowest flow, NOT the compressor's minimum output: a compressor
+            # that can't turn down below (say) 5.6 kW still delivers a low
+            # average at a low setpoint by running and resting -- forcing
+            # 5.6 kW into every slot made the plan chase 37 °C flow.
+            min_power_w=min(params.heat_min_power or low_w, low_w) or None, blocked_slots=blocked,
             comfort_cost_per_degree_slot=core_flow.COMFORT_COST_BY_PRIORITY.get(
                 zone.get("comfort_priority", "cop"), core_flow.COMFORT_COST_PER_DEGREE_SLOT))
         if plan:
@@ -4576,8 +4581,11 @@ class GridLock(hass.Hass):
             # on/off with demand hysteresis and a rate-limited setpoint.
             currently_on = (state["last_commanded"] if state["last_commanded"] is not None
                             else live_state == "on")
+            # Demand hysteresis against the same floor the plan uses.
+            floor_w = min(zone["params"].heat_min_power or 1500.0,
+                          (flow.get("low_flow_kw") or 1.5) * 1000.0)
             command, setpoint = core_flow.decide_flow_command(
-                flow["required_w"], currently_on, zone["params"].heat_min_power or 1500.0,
+                flow["required_w"], currently_on, floor_w,
                 state.get("flow_setpoint"), flow["flow_setpoint_wanted"], zone["flow_max_step"])
             # Same two safety overrides as on/off control, layered on top.
             forced = core_thermal.decide_heating_command(

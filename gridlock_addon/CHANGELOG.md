@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.67.10 - 2026-10-22
+
+### Fix
+- Space heating no longer forces the compressor's minimum output into every heating slot. The compressor bottoms out at ~5.6 kW (29 Hz), the radiators shed that only at ~37 °C, so the plan chased the overshoot from 27 °C to 37 °C overnight. The floor is now what the radiators take at the lowest flow; the unit reaches a low average by running and resting at a low setpoint
+
 ## 3.67.9 - 2026-10-21
 
 ### Fix
