@@ -998,9 +998,11 @@ def test_free_electricity_near_the_horizon_end_is_stored_in_full():
     for those last few slots. It should fill as fast as it can."""
     rows = [{"imp": 0.30, "exp": 0.05, "load": 0.5} for _ in range(2)] + \
         [{"imp": 1e-9, "exp": 0.05, "load": 0.5} for _ in range(2)] + \
-        [{"imp": 0.30, "exp": 0.05, "load": 0.5} for _ in range(2)]
+        [{"imp": 0.30, "exp": 0.05, "load": 0.5} for _ in range(4)]
     cfg = base_cfg(degradation=0.05, charge_kw=4.0)          # 2 kWh per slot
-    result = optimizer.solve(make_slots(rows, CHEAP), soc0_pct=50.0, cfg=cfg)
+    # Low going in, like the real case: the old plan stored 2.47 kWh, just
+    # what the last four slots needed.
+    result = optimizer.solve(make_slots(rows, CHEAP), soc0_pct=11.0, cfg=cfg)
     assert result.slots[2]["charge"] >= 2.0 - 1e-6 and result.slots[3]["charge"] >= 2.0 - 1e-6
 
 
