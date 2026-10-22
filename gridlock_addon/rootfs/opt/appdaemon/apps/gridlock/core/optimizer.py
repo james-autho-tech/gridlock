@@ -59,6 +59,14 @@ RESERVE_PENALTY = 1000.0
 # plan would never import at peak just to protect it.
 END_BUFFER_VALUE_SHARE = 0.7
 
+# Energy still in the battery when the horizon ends is worth what it would
+# cost to put back on the cheap rate, less round-trip losses -- without it
+# the plan saw no use for charge past its own end, and a free-electricity
+# hour four hours before the horizon stored just enough for those four
+# hours. Set below the cheap rate grossed up for losses, so charging at the
+# cheap rate merely to sit at the horizon's end still doesn't pay; free or
+# negative-priced energy, and PV that would export for less, does.
+
 
 # Deliberately negligible per-slot weight breaking ties toward using the
 # battery NOW rather than deferring to an equally-priced later slot.
@@ -560,6 +568,7 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
     prob += (pulp.lpSum(grid_cost_terms) + pulp.lpSum(degradation_terms)
              + RESERVE_PENALTY * pulp.lpSum(reserve_penalty_terms)
              + pulp.lpSum(buffer_terms)
+             - soc[n - 1] * cfg.cheap_rate * eff
              - pulp.lpSum(session_reward_terms)
              + TIEBREAK_EPSILON * pulp.lpSum(tiebreak_terms))
     try:

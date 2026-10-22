@@ -990,3 +990,25 @@ def test_end_buffer_is_spent_rather_than_importing_at_peak():
                              cfg=base_cfg(degradation=0.05, end_buffer_pct=10.0))
     for i in range(4):
         assert result.cost_trace[i]["grid_in"] < 1e-6, f"slot {i} imported at peak to protect the margin"
+
+
+def test_free_electricity_near_the_horizon_end_is_stored_in_full():
+    """A free hour a few slots before the plan ends: without a value on
+    what's left in the battery at the end, the plan stored only enough
+    for those last few slots. It should fill as fast as it can."""
+    rows = [{"imp": 0.30, "exp": 0.05, "load": 0.5} for _ in range(2)] + \
+        [{"imp": 1e-9, "exp": 0.05, "load": 0.5} for _ in range(2)] + \
+        [{"imp": 0.30, "exp": 0.05, "load": 0.5} for _ in range(2)]
+    cfg = base_cfg(degradation=0.05, charge_kw=4.0)          # 2 kWh per slot
+    result = optimizer.solve(make_slots(rows, CHEAP), soc0_pct=50.0, cfg=cfg)
+    assert result.slots[2]["charge"] >= 2.0 - 1e-6 and result.slots[3]["charge"] >= 2.0 - 1e-6
+
+
+def test_cheap_rate_at_the_horizon_end_is_not_charged_just_to_hold():
+    """The end-of-plan value is set below what cheap-rate charging costs
+    after losses, so a cheap night at the very end isn't filled for its own
+    sake."""
+    rows = [{"imp": 0.30, "exp": 0.05, "load": 0.5} for _ in range(2)] + \
+        [{"imp": CHEAP, "exp": 0.05, "load": 0.5} for _ in range(4)]
+    result = optimizer.solve(make_slots(rows, CHEAP), soc0_pct=50.0, cfg=base_cfg(degradation=0.05))
+    assert sum(s["charge"] for s in result.slots) < 1e-6

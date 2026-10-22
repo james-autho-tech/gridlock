@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.67.13 - 2026-10-22
+
+### Battery
+- Energy left in the battery at the end of the 48 h plan is now valued (cheap rate, less losses). Before, a free-electricity hour near the plan's end stored only enough for the last few hours (0.4 kWh); now free energy is stored at the full charge rate
+
+### Hot water
+- Free-electricity slots qualify for a run in once-a-night mode (they carry a token 1e-9 rate, which the `<= 0` check missed); a free top-up by day doesn't cancel the night's run
+
 ## 3.67.12 - 2026-10-22
 
 ### Battery

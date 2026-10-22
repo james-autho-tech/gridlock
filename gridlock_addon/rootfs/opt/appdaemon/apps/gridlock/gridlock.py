@@ -3480,7 +3480,8 @@ class GridLock(hass.Hass):
                 deadline = run_slots + 4
                 window = core_dhw.cheapest_window(scores, run_slots, deadline)
             else:
-                allowed = [mask[i] or grid_rates[i] <= 0 for i in range(len(scores))]
+                # Free-electricity slots carry a token 1e-9 rate, not 0.
+                allowed = [mask[i] or grid_rates[i] <= 0.01 for i in range(len(scores))]
                 deadline = nn[1] if nn else len(scores)
                 window = core_dhw.cheapest_window(
                     [sc if allowed[i] else sc + 1e4 for i, sc in enumerate(scores)], run_slots, deadline)
@@ -3537,7 +3538,10 @@ class GridLock(hass.Hass):
                              "end": (now + timedelta(minutes=SLOT_MIN * run_slots)).isoformat()}
                 if top_up:
                     committed["top_up"] = True
-                elif night_only:
+                elif night_only and mask[0]:
+                    # Only the night's own run counts as the night's run; a
+                    # free-electricity top-up by day doesn't cancel it (the
+                    # night run then just finds the tank warm, or not).
                     self.thermal_learning_state.setdefault(zone["name"], {})["dhw_night_done"] = \
                         core_dhw.night_key(now.astimezone())
                 state["dhw_window"] = committed
