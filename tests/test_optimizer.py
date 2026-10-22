@@ -1014,3 +1014,20 @@ def test_cheap_rate_at_the_horizon_end_is_not_charged_just_to_hold():
         [{"imp": CHEAP, "exp": 0.05, "load": 0.5} for _ in range(4)]
     result = optimizer.solve(make_slots(rows, CHEAP), soc0_pct=50.0, cfg=base_cfg(degradation=0.05))
     assert sum(s["charge"] for s in result.slots) < 1e-6
+
+
+def test_a_cheap_night_isnt_used_to_fill_up_ahead_of_a_free_hour():
+    """The real overnight rate sits below the 'cheap' threshold (6.66p vs
+    10p): valuing end-of-plan energy at the threshold made overnight
+    charging look profitable, so the battery arrived at the free hour
+    nearly full and the free hour was wasted."""
+    rows = [{"imp": 0.0666, "exp": 0.04, "load": 0.5} for _ in range(4)] + \
+        [{"imp": 0.34, "exp": 0.04, "load": 0.5} for _ in range(2)] + \
+        [{"imp": 1e-9, "exp": 0.04, "load": 0.5} for _ in range(2)] + \
+        [{"imp": 0.34, "exp": 0.04, "load": 0.5} for _ in range(2)]
+    cfg = base_cfg(degradation=0.05, charge_kw=4.0)
+    result = optimizer.solve(make_slots(rows, CHEAP), soc0_pct=10.0, cfg=cfg)
+    night = sum(result.slots[i]["charge"] for i in range(4))
+    free = sum(result.slots[i]["charge"] for i in (6, 7))
+    assert free >= 4.0 - 1e-6
+    assert night <= 1.2, night        # only what the peak slots before the free hour need

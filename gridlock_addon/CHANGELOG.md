@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.67.14 - 2026-10-22
+
+### Fix
+- End-of-plan battery energy is valued at the horizon's real cheapest rate (capped at the cheap threshold), not the 10p "cheap" threshold itself: at 10p, buying at 6.66p overnight just to hold looked profitable, so 3.67.13 filled the battery the night before a free hour and wasted most of it
+
 ## 3.67.13 - 2026-10-22
 
 ### Battery

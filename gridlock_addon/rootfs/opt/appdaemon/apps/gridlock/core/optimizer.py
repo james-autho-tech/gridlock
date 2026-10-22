@@ -60,7 +60,7 @@ RESERVE_PENALTY = 1000.0
 END_BUFFER_VALUE_SHARE = 0.7
 
 # Energy still in the battery when the horizon ends is worth what it would
-# cost to put back on the cheap rate, less round-trip losses -- without it
+# cost to put back at the horizon's cheapest real rate, less losses -- without it
 # the plan saw no use for charge past its own end, and a free-electricity
 # hour four hours before the horizon stored just enough for those four
 # hours. Set below the cheap rate grossed up for losses, so charging at the
@@ -556,6 +556,15 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
     # now and deferring any unavoidable grid import, not the reverse.
     tiebreak_terms = [grid_to_load[i] * (n - i) for i in range(n)]
 
+    # The real cheapest rate in the horizon (free slots aside) -- NOT
+    # cfg.cheap_rate, which is a "counts as cheap" threshold (10p by
+    # default): valued at that, buying at 6.66p just to sit in the battery
+    # looked like a profit and the plan filled it overnight.
+    paid = [sl["imp"] for sl in slots if sl["imp"] > 0.005]
+    # Capped at the threshold, so a horizon with no cheap slot in it (a
+    # short test plan, say) can't value leftover charge at a peak price.
+    end_value_gbp = min(min(paid) if paid else cfg.cheap_rate, cfg.cheap_rate) * eff
+
     buffer_kwh = max(0.0, cfg.end_buffer_pct or 0.0) / 100.0 * cap
     buffer_terms = []
     if buffer_kwh > EPS:
@@ -568,7 +577,7 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
     prob += (pulp.lpSum(grid_cost_terms) + pulp.lpSum(degradation_terms)
              + RESERVE_PENALTY * pulp.lpSum(reserve_penalty_terms)
              + pulp.lpSum(buffer_terms)
-             - soc[n - 1] * cfg.cheap_rate * eff
+             - soc[n - 1] * end_value_gbp
              - pulp.lpSum(session_reward_terms)
              + TIEBREAK_EPSILON * pulp.lpSum(tiebreak_terms))
     try:
