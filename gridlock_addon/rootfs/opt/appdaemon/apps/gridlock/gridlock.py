@@ -2454,6 +2454,10 @@ class GridLock(hass.Hass):
             horizon_slots=self.cfg.horizon_slots, slot_min=self.cfg.slot_min)
 
     def _solve_plan(self, slots, soc0, now):
+        settings = self._ui_zone_cache[2] if self._ui_zone_cache else None
+        buffer_pct = float((settings or {}).get("end_buffer_pct", 10.0))
+        if self.cfg.end_buffer_pct != buffer_pct:
+            self.cfg = replace(self.cfg, end_buffer_pct=buffer_pct)
         return core_optimizer.solve(slots, soc0, self.cfg, today_date=now.date())
 
     # ------------------------------------------------------------------

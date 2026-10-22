@@ -1224,7 +1224,8 @@ function renderSpaceHeatingSettings(s) {
           </select><div style="color:var(--dim);font-size:10px;margin-top:2px">Applies to hot water too. With the battery plan, a slot only costs the peak rate where GridLock expects the battery to be empty or exporting.</div></div>`
         + num('comfort_below', 'May drift below target by °C', 0.1)
         + num('comfort_above', 'May pre-heat above target by °C', 0.1)
-        + num('battery_wear_p_per_kwh', 'Battery wear, p per kWh through it', 0.5, 'A real cost for the battery-plan pricing — a £6k 36 kWh pack good for 6000 cycles is under 3p.'))}
+        + num('battery_wear_p_per_kwh', 'Battery wear, p per kWh through it', 0.5, 'A real cost for the battery-plan pricing — a £6k 36 kWh pack good for 6000 cycles is under 3p.')
+        + num('end_buffer_pct', 'Battery: keep in hand at the end of each day, %', 1, 'The plan aims to reach each cheap window with this much left. A margin, not a floor — on a heavier evening the battery still spends it rather than importing at peak.'))}
       ${section('Heat pump readings', 'What the unit reports about itself — used to learn the radiator curve, COP factor and thermal mass, and shown on the panel above.',
         entitySelect(s, 'heating_entity', '"Heating now" sensor', ['sensor', 'switch'])
         + inp('heating_entity_state', '…and the value that means heating', '', 'e.g. on, or Heating for a text sensor.')

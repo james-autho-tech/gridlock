@@ -144,6 +144,14 @@ class SiteConfig:
     # real house load isn't that predictable slot to slot.
     reserve_margin_pct: float = 0.15
 
+    # A margin the plan aims to still have in the battery when each cheap
+    # window starts (% of capacity, on top of floor_soc). Soft and priced
+    # below the peak rate (END_BUFFER_VALUE_SHARE in optimizer.py): worth
+    # charging overnight to keep, never worth importing at peak to
+    # protect -- so on a heavier evening than forecast the battery spends
+    # it, unlike floor_soc, which the inverter is held to.
+    end_buffer_pct: float = 0.0
+
     horizon_slots: int = HORIZON_SLOTS
     slot_min: int = SLOT_MIN
 

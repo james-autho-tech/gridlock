@@ -158,6 +158,10 @@ DEFAULTS = {
     # cycles is under 3p; this is a real cost, unlike the battery LP's
     # own "degradation" weighting (which is a preference about cycling).
     "battery_wear_p_per_kwh": 3.0,
+    # Battery plan: aim to still have this % in hand when each cheap window
+    # starts -- a margin for a heavier evening than forecast, spent if
+    # needed rather than defended (see SiteConfig.end_buffer_pct).
+    "end_buffer_pct": 10.0,
     # COP over comfort: inside the comfort band the plan drifts freely to
     # catch the warmest hours and the lowest flow; the band edges are
     # what make sure the house is actually heated.
@@ -483,6 +487,7 @@ NUMERIC_BOUNDS = {
     "comfort_above": (0.0, 5.0),
     "pump_power_w": (0.0, 500.0),
     "battery_wear_p_per_kwh": (0.0, 30.0),
+    "end_buffer_pct": (0.0, 50.0),
     "min_on_minutes": (0.0, 180.0),
     "min_off_minutes": (0.0, 180.0),
     "emergency_temp": (3.0, 18.0),

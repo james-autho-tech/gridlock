@@ -52,6 +52,13 @@ def _val(var, default=0.0):
 # than planned would be strictly worse for a live battery controller.
 RESERVE_PENALTY = 1000.0
 
+# The end-of-day margin (SiteConfig.end_buffer_pct) is valued at this share
+# of the import rate of the slot it's checked in -- the last peak slot
+# before a cheap window. Above what overnight charging costs, so the plan
+# charges a little more to keep it; below the peak rate itself, so the
+# plan would never import at peak just to protect it.
+END_BUFFER_VALUE_SHARE = 0.7
+
 
 # Deliberately negligible per-slot weight breaking ties toward using the
 # battery NOW rather than deferring to an equally-priced later slot.
@@ -541,8 +548,18 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
     # now and deferring any unavoidable grid import, not the reverse.
     tiebreak_terms = [grid_to_load[i] * (n - i) for i in range(n)]
 
+    buffer_kwh = max(0.0, cfg.end_buffer_pct or 0.0) / 100.0 * cap
+    buffer_terms = []
+    if buffer_kwh > EPS:
+        for i in range(n - 1):
+            if slots[i]["imp"] > cfg.cheap_rate and slots[i + 1]["imp"] <= cfg.cheap_rate:
+                short = pulp.LpVariable(f"end_buffer_short_{i}", 0, buffer_kwh)
+                prob += soc[i] + short >= floor_kwh + buffer_kwh
+                buffer_terms.append(short * END_BUFFER_VALUE_SHARE * slots[i]["imp"])
+
     prob += (pulp.lpSum(grid_cost_terms) + pulp.lpSum(degradation_terms)
              + RESERVE_PENALTY * pulp.lpSum(reserve_penalty_terms)
+             + pulp.lpSum(buffer_terms)
              - pulp.lpSum(session_reward_terms)
              + TIEBREAK_EPSILON * pulp.lpSum(tiebreak_terms))
     try:

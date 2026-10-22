@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.67.12 - 2026-10-22
+
+### Battery
+- End-of-day margin (default 10%, dashboard setting): the plan aims to reach each cheap window with this much left instead of landing on the floor. A margin, not a floor: valued below the peak rate, so the plan charges a little more overnight to keep it but never imports at peak to protect it, and the inverter's discharge cutoff stays at floor_soc
+
 ## 3.67.11 - 2026-10-22
 
 ### Fix

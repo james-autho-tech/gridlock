@@ -964,3 +964,29 @@ def test_session_export_not_worth_it_with_no_points_field():
     # nothing, not "unknown, assume it's fine".
     assert optimizer.session_export_worth_it(
         octopoints_per_kwh="?", octopoint_value_gbp=1 / 800, export_degradation_gbp_per_kwh=0.03) is False
+
+
+def test_end_buffer_is_kept_when_cheap_charging_can_cover_it():
+    """Cheap night, peak evening, cheap again: with a 10% end-of-day margin
+    the plan charges a little more so the evening ends with 1 kWh (10% of
+    10 kWh) still in hand, instead of landing exactly on the floor."""
+    rows = [{"imp": CHEAP, "exp": 0.05, "load": 0.0} for _ in range(2)] + \
+        [{"imp": 0.34, "exp": 0.05, "load": 1.0} for _ in range(4)] + \
+        [{"imp": CHEAP, "exp": 0.05, "load": 0.0}]
+    without = optimizer.solve(make_slots(rows, CHEAP), soc0_pct=0.0, cfg=base_cfg(degradation=0.05))
+    with_buf = optimizer.solve(make_slots(rows, CHEAP), soc0_pct=0.0,
+                               cfg=base_cfg(degradation=0.05, end_buffer_pct=10.0))
+    assert without.trace[5] < 1.0                      # lands on the floor
+    assert with_buf.trace[5] >= 10.0 - 0.1             # keeps the 10%
+
+
+def test_end_buffer_is_spent_rather_than_importing_at_peak():
+    """Already in the evening with less than the margin's worth to spare:
+    the plan spends the battery to cover load rather than importing at the
+    peak rate to protect the margin -- a margin, not a floor."""
+    rows = [{"imp": 0.34, "exp": 0.05, "load": 1.0} for _ in range(4)] + \
+        [{"imp": CHEAP, "exp": 0.05, "load": 0.0}]
+    result = optimizer.solve(make_slots(rows, CHEAP), soc0_pct=45.0,
+                             cfg=base_cfg(degradation=0.05, end_buffer_pct=10.0))
+    for i in range(4):
+        assert result.cost_trace[i]["grid_in"] < 1e-6, f"slot {i} imported at peak to protect the margin"
