@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.67.11 - 2026-10-22
+
+### Fix
+- Flow-controlled zones heat to the set target: the old forecast "anticipation" nudge (up to +2 °C ahead of a cooler evening) is off for them, since the plan already looks ahead. It had the house heating at 18.9 °C on a 19 °C setting, aiming for 20.1 °C
+- When the unit keeps its compressor off for 20 min with the flow well below its start point (its own room sensor satisfied), GridWarm switches the zone off for an hour instead of running the pump for nothing
+
 ## 3.67.10 - 2026-10-22
 
 ### Fix

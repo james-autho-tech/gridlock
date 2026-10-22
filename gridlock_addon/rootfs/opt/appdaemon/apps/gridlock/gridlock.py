@@ -3006,10 +3006,14 @@ class GridLock(hass.Hass):
                 # room you specifically want to run as cool as you can
                 # get away with, rather than nudged up ahead of a cold
                 # snap like the others.
+                # A flow-controlled zone's plan already looks ahead at the
+                # weather and prices its heat; nudging its target up as well
+                # made it heat a house already at target (aiming for 20 °C
+                # on a 19 °C setting ahead of a cooler evening).
                 "anticipation_sensitivity": (float(z.get("anticipation_sensitivity", 0.3))
-                                             if z.get("active", True) else 0.0),
+                                             if z.get("active", True) and not z.get("flow_entity") else 0.0),
                 "anticipation_max_adjust": (float(z.get("anticipation_max_adjust", 2.0))
-                                            if z.get("active", True) else 0.0),
+                                            if z.get("active", True) and not z.get("flow_entity") else 0.0),
                 # Active control -- opt-in, off unless control_entity is
                 # explicitly set. Everything else about this zone (the
                 # prediction, the anticipation curve) stays advisory-only
@@ -3058,6 +3062,7 @@ class GridLock(hass.Hass):
                 "outdoor_current_entity": z.get("outdoor_current_entity"),
                 "defrost_entity": z.get("defrost_entity"),
                 "mode_entity": z.get("mode_entity"),
+                "start_delta_entity": z.get("start_delta_entity"),
                 "pump_power_w": float(z.get("pump_power_w", 70.0)),
                 # Hot water scheduling (core/dhw_plan.py) -- set by the
                 # dashboard hot water zone; None for everything else.
@@ -4627,9 +4632,47 @@ class GridLock(hass.Hass):
                 state["emergency"] = em
         else:
             state["emergency"] = False
+        # The unit holding its compressor off: zone on, flow well below
+        # the point the unit starts at, compressor idle for 20 minutes --
+        # its own room sensor says the room's warm, say. Only the pump is
+        # running then, for nothing: stand down for an hour.
+        held_off = False
+        if flow_entity and not zone.get("dhw") and not off_grid:
+            hp = self._hp_live(zone)
+            t1, t1s = hp.get("flow_temp"), hp.get("flow_setpoint_live")
+            delta = (self.get_float_state(zone["start_delta_entity"], 5.0)
+                     if zone.get("start_delta_entity") else 5.0)
+            mode = str(self.get_state(zone["mode_entity"]) or "").lower() if zone.get("mode_entity") else ""
+            refusing = (state["last_commanded"] and live_state == "on" and not (hp.get("compressor_hz") or 0) > 0
+                        and "dhw" not in mode and t1 is not None and t1s is not None and t1 <= t1s - delta)
+            if refusing:
+                state["unit_idle_since"] = state.get("unit_idle_since") or now.isoformat()
+            else:
+                state["unit_idle_since"] = None
+            try:
+                idle_min = ((now - self._iso(state["unit_idle_since"])).total_seconds() / 60.0
+                            if state.get("unit_idle_since") else 0.0)
+            except (ValueError, TypeError):
+                idle_min = 0.0
+            if idle_min >= 20.0:
+                state["held_off_until"] = (now + timedelta(hours=1)).isoformat()
+                state["unit_idle_since"] = None
+                self._log_decision(f"GridWarm: {name} stood down",
+                                   "The unit kept its compressor off for 20 min with the flow well below "
+                                   "its start point — it's holding off on its own (its room sensor Ta). "
+                                   "Pump off; retrying in an hour")
+            try:
+                held_off = bool(state.get("held_off_until")) and now < self._iso(state["held_off_until"])
+            except (ValueError, TypeError):
+                held_off = False
+            floor_hit = (result.get("current_temp") is not None
+                         and result["current_temp"] <= zone["control_safety_min_temp"])
+            if held_off and not floor_hit:
+                command = False
+                result["control"]["held_off"] = "unit"
         # Anti short-cycling: hold the last command for its minimum time,
         # unless the safety floor is hit or the grid is down.
-        if not off_grid and not no_reading and state["last_commanded"] is not None \
+        if not off_grid and not no_reading and not held_off and state["last_commanded"] is not None \
                 and command != state["last_commanded"]:
             try:
                 since_min = (now - self._iso(state["switched_at"])).total_seconds() / 60.0

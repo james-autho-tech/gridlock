@@ -180,6 +180,10 @@ DEFAULTS = {
     "outdoor_current_entity": "sensor.loft_heatpump_controller_outdoor_unit_current",
     "defrost_entity": "binary_sensor.loft_heatpump_controller_status_bit_1_defrosting",
     "mode_entity": "sensor.loft_heatpump_controller_active_state",
+    # The unit only starts its compressor once the flow is this far below
+    # the setpoint (Midea dT1SH) -- below that and still idle, the unit is
+    # holding off on its own (its room sensor, say), see the control step.
+    "start_delta_entity": "number.loft_heatpump_controller_dt1sh",
     "pump_power_w": 70.0,
 }
 
@@ -492,7 +496,7 @@ ENTITY_FIELDS = ("internal_temp_entity", "internal_temp_fallback_entity",
                  "control_entity", "heating_entity", "cop_entity", "flow_entity",
                  "thermal_power_entity", "flow_temp_entity", "return_temp_entity",
                  "compressor_entity", "water_flow_entity", "outdoor_voltage_entity",
-                 "outdoor_current_entity", "defrost_entity", "mode_entity")
+                 "outdoor_current_entity", "defrost_entity", "mode_entity", "start_delta_entity")
 BOOL_FIELDS = ("configured", "tariff_optimise", "notify_external_commands")
 
 
@@ -617,6 +621,7 @@ def to_zone_cfg(settings):
         "outdoor_current_entity": settings["outdoor_current_entity"],
         "defrost_entity": settings["defrost_entity"],
         "mode_entity": settings["mode_entity"],
+        "start_delta_entity": settings.get("start_delta_entity"),
         "pump_power_w": settings["pump_power_w"],
     }
 

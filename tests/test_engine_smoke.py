@@ -943,3 +943,39 @@ def test_a_high_compressor_minimum_does_not_push_the_flow_up(engine):
     # (The first slot or two may catch up a cold start.) Steady heating is low and slow.
     steady = flows[2:]
     assert steady and max(steady) <= 30.0, flows
+
+
+def test_a_planned_zone_heats_to_the_set_target_not_a_nudged_one(engine):
+    g, _ = engine
+    _seed_house(g, room_temp="19.0")
+    g._publish_thermal_forecast(g.get_now())
+    house = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]
+    targets = {p["target"] for p in house["flow"]["plan"]}
+    assert targets == {house["target_temp"]}, sorted(targets)
+
+
+def test_heating_stands_down_when_the_unit_holds_its_compressor_off(engine):
+    g, _ = engine
+    _seed_house(g, room_temp="17.5")
+    with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
+        json.dump({"target_temp": 20}, f)
+    from datetime import timedelta
+    sw = "switch.loft_heatpump_controller_water_flow_temperature_control_zone_1"
+    now = g.get_now()
+    g._publish_thermal_forecast(now)
+    assert ("switch/turn_on", {"target": {"entity_id": sw}}) in g.calls
+    # The unit takes the switch, runs its pump, but never starts the compressor.
+    g.states[sw]["state"] = "on"
+    g.states["number.loft_heatpump_controller_set_water_temperature_t1s_zone_1"]["state"] = \
+        str(g._thermal_control_state["House"]["flow_setpoint"])
+    g.states["sensor.loft_heatpump_controller_total_water_outlet_temperature_t1"]["state"] = "18.0"
+    for m in (5, 15):
+        g._publish_thermal_forecast(now + timedelta(minutes=m))
+    g.calls.clear()
+    g._publish_thermal_forecast(now + timedelta(minutes=30))
+    assert ("switch/turn_off", {"target": {"entity_id": sw}}) in g.calls
+    g.states[sw]["state"] = "off"
+    # ...and it stays down for the hour rather than flapping straight back on.
+    g.calls.clear()
+    g._publish_thermal_forecast(now + timedelta(minutes=45))
+    assert ("switch/turn_on", {"target": {"entity_id": sw}}) not in g.calls
