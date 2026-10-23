@@ -555,6 +555,12 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
     # among cost-tied allocations the solver prefers using the battery
     # now and deferring any unavoidable grid import, not the reverse.
     tiebreak_terms = [grid_to_load[i] * (n - i) for i in range(n)]
+    # ...and among equally priced charging slots, charge EARLY: a cheap
+    # stretch can end sooner than planned (an EV smart-charge dispatch
+    # cancelled, an evening heavier than forecast), and charge already
+    # in the battery is insurance against the peak rate; charge left for
+    # the last cheap slot isn't.
+    tiebreak_terms += [charge[i] * i for i in range(n)]
 
     # The real cheapest rate in the horizon (free slots aside) -- NOT
     # cfg.cheap_rate, which is a "counts as cheap" threshold (10p by

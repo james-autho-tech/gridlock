@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.67.21 - 2026-10-23
+
+### Battery
+- Among equally cheap slots the battery charges early, not in the last one: an EV smart-charge dispatch can end early, and charge already stored covers the evening instead of the peak rate
+
 ## 3.67.20 - 2026-10-23
 
 ### Fix

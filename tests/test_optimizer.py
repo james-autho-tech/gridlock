@@ -1031,3 +1031,15 @@ def test_a_cheap_night_isnt_used_to_fill_up_ahead_of_a_free_hour():
     free = sum(result.slots[i]["charge"] for i in (6, 7))
     assert free >= 4.0 - 1e-6
     assert night <= 1.2, night        # only what the peak slots before the free hour need
+
+
+def test_equally_cheap_slots_are_charged_early():
+    """A long cheap stretch (an EV dispatch running into the overnight
+    rate): the battery is topped up at the start of it, not left to the
+    last slot -- the stretch can end early."""
+    rows = [{"imp": 0.0666, "exp": 0.04, "load": 0.3} for _ in range(8)] + \
+        [{"imp": 0.34, "exp": 0.04, "load": 1.0} for _ in range(4)]
+    cfg = base_cfg(degradation=0.05, charge_kw=4.0)
+    result = optimizer.solve(make_slots(rows, CHEAP), soc0_pct=0.0, cfg=cfg)
+    charged = [result.slots[i]["charge"] for i in range(8)]
+    assert sum(charged[:3]) >= sum(charged) - 1e-6, charged     # all of it in the first slots
