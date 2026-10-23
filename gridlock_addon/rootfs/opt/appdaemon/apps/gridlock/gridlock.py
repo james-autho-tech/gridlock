@@ -4943,13 +4943,18 @@ class GridLock(hass.Hass):
             if zone is None:
                 continue
             flow = r.get("flow")
+            # The battery plan errs towards having enough: the COP model's
+            # figure, or the week's measured COP (the unit's own counters)
+            # if that's lower.
+            week_cop = (r.get("cop_breakdown") or {}).get("week")
             if flow and flow.get("plan"):
                 for p in flow["plan"]:
                     try:
                         key = self.load_provider.slot_key(self._iso(p["x"]))
                     except (ValueError, TypeError):
                         continue
-                    planned[key] = planned.get(key, 0.0) + p["heat_kwh"] / max(p["cop"], 0.5)
+                    cop = min(p["cop"], week_cop) if week_cop else p["cop"]
+                    planned[key] = planned.get(key, 0.0) + p["heat_kwh"] / max(cop, 0.5)
             dhw = r.get("dhw")
             if dhw and dhw.get("window_start") and dhw.get("window_end"):
                 try:
@@ -4960,9 +4965,20 @@ class GridLock(hass.Hass):
                     tank = r.get("current_temp")
                     setpoint = dhw.get("setpoint") or 53.0
                     hyst = dhw.get("start_hysteresis") or 2.0
-                    from_temp = tank if tank is not None else setpoint - hyst
-                    heat_kwh = max(0.0, setpoint - from_temp) * zone["params"].thermal_mass_wh_per_c / 1000.0
-                    if dhw.get("will_heat") or dhw.get("committed"):
+                    # Sized to what the run actually heats to: the nightly
+                    # fill (or tonight's target), or the legionella
+                    # temperature on a cycle night -- not the unit's own
+                    # setpoint, which the run raises for its duration.
+                    # window_cop already prices the immersion's share above
+                    # the heat pump's limit at COP 1.
+                    lg = dhw.get("legionella") or {}
+                    if lg.get("due") or lg.get("phase") not in (None, "idle"):
+                        heat_to = lg.get("temp") or 60.0
+                    else:
+                        heat_to = max(setpoint, dhw.get("daily_target") or setpoint)
+                    from_temp = tank if tank is not None else heat_to - hyst
+                    heat_kwh = max(0.0, heat_to - from_temp) * zone["params"].thermal_mass_wh_per_c / 1000.0
+                    if dhw.get("committed") or (dhw.get("needed") and dhw.get("status") in ("waiting", "running")):
                         elec = heat_kwh / max(dhw.get("window_cop") or zone["params"].heating_cop, 0.5)
                         n_slots = max(1, int((end - start).total_seconds() // 1800))
                         for i in range(n_slots):

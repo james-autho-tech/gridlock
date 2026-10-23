@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.67.19 - 2026-10-23
+
+### Fix
+- Heat pump load given to the battery plan was too low every day (planned 0–2.7 kWh, metered 2–9 kWh):
+  - Hot water run sized to what it actually heats to (the nightly fill or the legionella temperature), not the unit's own setpoint
+  - Hot water run counted whenever one is needed and booked, not only when the unit would start at its own setpoint
+  - Space heating electricity uses the lower of the COP model and the week's measured COP
+
 ## 3.67.18 - 2026-10-23
 
 ### Fix
