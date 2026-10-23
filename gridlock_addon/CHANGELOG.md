@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.67.20 - 2026-10-23
+
+### Fix
+- The battery plan gets GridWarm's whole 48 h heating plan, not the dashboard's 24 h view — its second day had no heat pump load at all
+
 ## 3.67.19 - 2026-10-23
 
 ### Fix

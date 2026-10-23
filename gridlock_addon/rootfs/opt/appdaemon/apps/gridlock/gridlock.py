@@ -3868,6 +3868,14 @@ class GridLock(hass.Hass):
         wanted = core_flow.flow_setpoint_for_power(
             required_w, internal_temp, emitter, zone["water_dt"], zone["flow_min"], zone["flow_max"], 1.0)
         ext_now = ext[0] if ext else 10.0
+        # The whole horizon (48 h) for the battery plan's heat pump load --
+        # the published plan below is the dashboard's 24 h view, and
+        # handing GridLock only that left its second day with no heating.
+        if not hasattr(self, "_flow_plan_full"):
+            self._flow_plan_full = {}
+        self._flow_plan_full[zone["name"]] = [
+            ((self._slot_floor(now) + timedelta(minutes=SLOT_MIN * i)).isoformat(), p["heat_kwh"], p["cop"])
+            for i, p in enumerate(plan or [])]
         steps_per_day = int(24 / slot_hours)
         today = plan[:steps_per_day]
         heat_kwh = sum(p["heat_kwh"] for p in today)
@@ -4947,14 +4955,15 @@ class GridLock(hass.Hass):
             # figure, or the week's measured COP (the unit's own counters)
             # if that's lower.
             week_cop = (r.get("cop_breakdown") or {}).get("week")
-            if flow and flow.get("plan"):
-                for p in flow["plan"]:
-                    try:
-                        key = self.load_provider.slot_key(self._iso(p["x"]))
-                    except (ValueError, TypeError):
-                        continue
-                    cop = min(p["cop"], week_cop) if week_cop else p["cop"]
-                    planned[key] = planned.get(key, 0.0) + p["heat_kwh"] / max(cop, 0.5)
+            full = (getattr(self, "_flow_plan_full", {}) or {}).get(r["name"]) if flow else None
+            rows = full if full else [(p["x"], p["heat_kwh"], p["cop"]) for p in (flow or {}).get("plan") or []]
+            for x, heat_kwh, slot_cop in rows:
+                try:
+                    key = self.load_provider.slot_key(self._iso(x))
+                except (ValueError, TypeError):
+                    continue
+                cop = min(slot_cop, week_cop) if week_cop else slot_cop
+                planned[key] = planned.get(key, 0.0) + heat_kwh / max(cop, 0.5)
             dhw = r.get("dhw")
             if dhw and dhw.get("window_start") and dhw.get("window_end"):
                 try:

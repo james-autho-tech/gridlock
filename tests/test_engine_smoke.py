@@ -1083,3 +1083,19 @@ def test_the_battery_plan_gets_the_full_nightly_hot_water_fill(engine):
     mass_kwh_per_c = 250 * 1.163 / 1000
     fill = (53 - 31) * mass_kwh_per_c / d["window_cop"]
     assert planned >= fill * 0.95, (planned, fill)     # not sized to the unit's own 45 °C
+
+
+def test_the_battery_plan_gets_two_days_of_heating(engine):
+    g, _ = engine
+    _seed_house(g, room_temp="19.0")
+    with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
+        json.dump({"target_temp": 20}, f)              # 4 °C outside: heating both days
+    now = g.get_now()
+    g._publish_thermal_forecast(now)
+    from gridlock import HEATPUMP_POWER_ENTITY
+    planned = g.load_provider.planned_circuit_kwh[HEATPUMP_POWER_ENTITY]
+    first = g.load_provider.slot_key(g._slot_floor(now))
+    day2 = sum(v for k, v in planned.items() if 48 <= k - first < 96)
+    assert day2 > 1.0, day2
+    house = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]
+    assert len(house["flow"]["plan"]) == 48          # the dashboard keeps its 24 h view
