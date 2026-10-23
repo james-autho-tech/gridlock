@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.67.15 - 2026-10-23
+
+### Fix
+- Radiator rating is only learned once the mean water temperature has settled (within 1 °C over 15+ min). From a cold start most of the heat warms the water and radiator metal, not the room; counting it as room output inflated the rating from 27 kW to 41 kW in one run
+
+### Dashboard
+- Weekly COP from the unit's own heat-out / electricity-in counters, shown ahead of its COP sensor (a lifetime ratio — 3.66 here — including years of hotter running)
+
 ## 3.67.14 - 2026-10-22
 
 ### Fix

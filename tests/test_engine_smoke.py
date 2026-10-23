@@ -979,3 +979,56 @@ def test_heating_stands_down_when_the_unit_holds_its_compressor_off(engine):
     g.calls.clear()
     g._publish_thermal_forecast(now + timedelta(minutes=45))
     assert ("switch/turn_on", {"target": {"entity_id": sw}}) not in g.calls
+
+
+def _run_heating(g, now, minutes, flow_at, ret_at, kw="5.2", hz="29"):
+    from datetime import timedelta
+    st = g.states
+    st["sensor.loft_heatpump_controller_active_state"]["state"] = "Heating"
+    st["switch.loft_heatpump_controller_water_flow_temperature_control_zone_1"]["state"] = "on"
+    st["sensor.loft_heatpump_controller_compressor_operating_frequency"]["state"] = hz
+    st["sensor.loft_heatpump_controller_ability_of_hydraulic_module"]["state"] = kw
+    st["sensor.loft_heatpump_controller_water_flow"]["state"] = "1.0"
+    for m in range(0, minutes + 1, 5):
+        st["sensor.loft_heatpump_controller_total_water_outlet_temperature_t1"]["state"] = str(flow_at(m))
+        st["sensor.loft_heatpump_controller_water_inlet_temperature"]["state"] = str(ret_at(m))
+        g._publish_thermal_forecast(now + timedelta(minutes=m))
+    return {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]
+
+
+def test_radiators_arent_learned_while_the_system_is_still_warming_up(engine):
+    g, _ = engine
+    _seed_house(g, room_temp="18.8")
+    now = g.get_now()
+    before = None
+    g._publish_thermal_forecast(now)
+    before = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]["learned_emitter_w_at_dt50"]
+    # Cold start: the water climbs 1 °C every 5 minutes the whole time.
+    house = _run_heating(g, now, 30, lambda m: 14 + m / 5, lambda m: 10 + m / 5)
+    assert house["learned_emitter_w_at_dt50"] == before
+
+
+def test_radiators_are_learned_once_the_water_has_settled(engine):
+    g, _ = engine
+    _seed_house(g, room_temp="18.8")
+    now = g.get_now()
+    g._publish_thermal_forecast(now)
+    before = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]["learned_emitter_w_at_dt50"]
+    house = _run_heating(g, now, 40, lambda m: 37, lambda m: 32)
+    assert house["learned_emitter_w_at_dt50"] != before
+
+
+def test_recent_cop_comes_from_the_units_counters_not_its_lifetime_ratio(engine):
+    g, _ = engine
+    _seed_house(g)
+    from datetime import timedelta
+    st = g.states
+    st["sensor.loft_heatpump_controller_power_output"] = {"state": "1000", "attributes": {}}
+    st["sensor.loft_heatpump_controller_electricity_consumption"] = {"state": "300", "attributes": {}}
+    now = g.get_now()
+    g._publish_thermal_forecast(now)
+    st["sensor.loft_heatpump_controller_power_output"]["state"] = "1050"
+    st["sensor.loft_heatpump_controller_electricity_consumption"]["state"] = "310"
+    g._publish_thermal_forecast(now + timedelta(days=2))
+    house = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]
+    assert house["cop_recent"] == 5.0          # 50 kWh heat / 10 kWh electricity

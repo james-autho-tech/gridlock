@@ -188,6 +188,11 @@ DEFAULTS = {
     # the setpoint (Midea dT1SH) -- below that and still idle, the unit is
     # holding off on its own (its room sensor, say), see the control step.
     "start_delta_entity": "number.loft_heatpump_controller_dt1sh",
+    # The unit's own lifetime heat-out / electricity-in counters (kWh) --
+    # differenced over a week they give a recent COP, unlike its COP
+    # sensor, which is the lifetime ratio.
+    "heat_counter_entity": "sensor.loft_heatpump_controller_power_output",
+    "elec_counter_entity": "sensor.loft_heatpump_controller_electricity_consumption",
     "pump_power_w": 70.0,
 }
 
@@ -501,7 +506,8 @@ ENTITY_FIELDS = ("internal_temp_entity", "internal_temp_fallback_entity",
                  "control_entity", "heating_entity", "cop_entity", "flow_entity",
                  "thermal_power_entity", "flow_temp_entity", "return_temp_entity",
                  "compressor_entity", "water_flow_entity", "outdoor_voltage_entity",
-                 "outdoor_current_entity", "defrost_entity", "mode_entity", "start_delta_entity")
+                 "outdoor_current_entity", "defrost_entity", "mode_entity", "start_delta_entity",
+                 "heat_counter_entity", "elec_counter_entity")
 BOOL_FIELDS = ("configured", "tariff_optimise", "notify_external_commands")
 
 
@@ -627,6 +633,8 @@ def to_zone_cfg(settings):
         "defrost_entity": settings["defrost_entity"],
         "mode_entity": settings["mode_entity"],
         "start_delta_entity": settings.get("start_delta_entity"),
+        "heat_counter_entity": settings.get("heat_counter_entity"),
+        "elec_counter_entity": settings.get("elec_counter_entity"),
         "pump_power_w": settings["pump_power_w"],
     }
 

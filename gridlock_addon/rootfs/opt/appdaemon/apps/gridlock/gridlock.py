@@ -3067,6 +3067,8 @@ class GridLock(hass.Hass):
                 "defrost_entity": z.get("defrost_entity"),
                 "mode_entity": z.get("mode_entity"),
                 "start_delta_entity": z.get("start_delta_entity"),
+                "heat_counter_entity": z.get("heat_counter_entity"),
+                "elec_counter_entity": z.get("elec_counter_entity"),
                 "pump_power_w": float(z.get("pump_power_w", 70.0)),
                 # Hot water scheduling (core/dhw_plan.py) -- set by the
                 # dashboard hot water zone; None for everything else.
@@ -3190,6 +3192,25 @@ class GridLock(hass.Hass):
                            f"({run['th_wh'] / 1000:.1f} kWh heat for {run['el_wh'] / 1000:.1f} kWh)")
         self._save_json("thermal_learning_state.json", self.thermal_learning_state)
 
+    def _recent_cop(self, zone, now):
+        """COP over the last week from the unit's own heat-out and
+        electricity-in counters (a daily snapshot, kept for 8 days). None
+        until enough electricity has gone through for the whole-kWh
+        counters to mean something."""
+        if not (zone.get("heat_counter_entity") and zone.get("elec_counter_entity")):
+            return None
+        heat = self.get_float_state(zone["heat_counter_entity"], None)
+        elec = self.get_float_state(zone["elec_counter_entity"], None)
+        if heat is None or elec is None:
+            return None
+        snaps = self.thermal_learning_state.setdefault(zone["name"], {}).setdefault("cop_counter_snaps", [])
+        day = now.astimezone().date().isoformat()
+        if not snaps or snaps[-1][0] != day:
+            snaps.append([day, heat, elec])
+            del snaps[:-8]
+        d_heat, d_elec = heat - snaps[0][1], elec - snaps[0][2]
+        return round(d_heat / d_elec, 2) if d_elec >= 5.0 and d_heat > 0 else None
+
     def _update_flow_learning(self, zone, now, internal_temp, external_temp, heating_on, hp):
         """Learns the three numbers dynamic flow control depends on, from
         the heat pump's own live readings while it's heating:
@@ -3214,9 +3235,30 @@ class GridLock(hass.Hass):
             elapsed_h = (now - self._iso(prior_ts)).total_seconds() / 3600.0 if prior_ts else None
         except (ValueError, TypeError):
             elapsed_h = None
+        # Mean water temperature over the last 20 min of heating: the
+        # radiators are only learned once it has settled. While the system
+        # is warming from cold, most of the heat goes into the water and
+        # the radiators' own metal, not the room -- counting it as room
+        # output at a still-low water temperature inflated the rating
+        # (27 kW -> 41 kW in one cold start).
+        hist = state.get("emitter_hist") or []
+        if heating_on and thermal_w > 300.0 and hp["flow_temp"] is not None and hp["return_temp"] is not None:
+            hist.append([now.isoformat(), (hp["flow_temp"] + hp["return_temp"]) / 2.0])
+            try:
+                hist = [h for h in hist if (now - self._iso(h[0])).total_seconds() <= 20 * 60]
+            except (ValueError, TypeError):
+                hist = hist[-1:]
+        else:
+            hist = []
+        state["emitter_hist"] = hist
+        try:
+            span_min = (now - self._iso(hist[0][0])).total_seconds() / 60.0 if hist else 0.0
+        except (ValueError, TypeError):
+            span_min = 0.0
+        settled = span_min >= 15.0 and (max(h[1] for h in hist) - min(h[1] for h in hist)) <= 1.0
         if heating_on and thermal_w > 300.0:
-            if hp["flow_temp"] is not None and hp["return_temp"] is not None:
-                mean = (hp["flow_temp"] + hp["return_temp"]) / 2.0
+            if settled:
+                mean = hist[-1][1]
                 obs = core_flow.implied_emitter_rating(thermal_w, mean, internal_temp)
                 if obs is not None and 500.0 <= obs <= 100000.0:
                     zone["emitter_rated_w_at_dt50"] = core_flow.blend(zone["emitter_rated_w_at_dt50"], obs)
@@ -4272,6 +4314,7 @@ class GridLock(hass.Hass):
                 "measured_runs": (self.thermal_learning_state.get(zone["name"], {}).get("cop_runs") or [])[-10:],
                 "min_output_learned": "yes" if self.thermal_learning_state.get(zone["name"], {}).get("min_output_w") else "no",
                 "cop": round(live_cop, 2) if live_cop is not None else zone["params"].heating_cop,
+                "cop_recent": self._recent_cop(zone, now),
                 "predicted_kwh_today": round(predicted_kwh_today, 2),
                 "predicted_kwh_today_baseline": round(baseline_kwh_today, 2),
                 "predicted_cost_today": round(predicted_cost_today, 2),
