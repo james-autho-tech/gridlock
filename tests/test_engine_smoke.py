@@ -1031,4 +1031,6 @@ def test_recent_cop_comes_from_the_units_counters_not_its_lifetime_ratio(engine)
     st["sensor.loft_heatpump_controller_electricity_consumption"]["state"] = "310"
     g._publish_thermal_forecast(now + timedelta(days=2))
     house = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]
-    assert house["cop_recent"] == 5.0          # 50 kWh heat / 10 kWh electricity
+    b = house["cop_breakdown"]
+    assert b["week"] == 5.0                    # 50 kWh heat / 10 kWh electricity
+    assert b["lifetime"] == round(1050 / 310, 2)

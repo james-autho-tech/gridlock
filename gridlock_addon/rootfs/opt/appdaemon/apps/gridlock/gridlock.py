@@ -3192,24 +3192,45 @@ class GridLock(hass.Hass):
                            f"({run['th_wh'] / 1000:.1f} kWh heat for {run['el_wh'] / 1000:.1f} kWh)")
         self._save_json("thermal_learning_state.json", self.thermal_learning_state)
 
-    def _recent_cop(self, zone, now):
-        """COP over the last week from the unit's own heat-out and
-        electricity-in counters (a daily snapshot, kept for 8 days). None
-        until enough electricity has gone through for the whole-kWh
-        counters to mean something."""
+    def _cop_breakdown(self, zone, now):
+        """COP over four spans, for the dashboard:
+        - run: the current run so far, from GridWarm's own measurement
+          (flow x ΔT out, outdoor unit V x A + pump in -- the current
+          sensor reads whole amps, so it's approximate);
+        - last_run: the last finished, measured run;
+        - week / month: the unit's own heat-out and electricity-in kWh
+          counters, differenced against a daily snapshot (kept 32 days);
+          None until enough electricity has gone through for whole-kWh
+          counters to mean something;
+        - lifetime: the same counters' totals -- what the unit's own COP
+          sensor shows."""
+        learn = self.thermal_learning_state.setdefault(zone["name"], {})
+        out = {"run": None, "last_run": None, "week": None, "month": None, "lifetime": None}
+        run = learn.get("cop_run")
+        if run and (run.get("el_wh") or 0.0) >= 100.0:
+            out["run"] = round(run["th_wh"] / run["el_wh"], 1)
+        runs = learn.get("measured_runs") or []
+        if runs:
+            out["last_run"] = runs[-1].get("cop")
         if not (zone.get("heat_counter_entity") and zone.get("elec_counter_entity")):
-            return None
+            return out
         heat = self.get_float_state(zone["heat_counter_entity"], None)
         elec = self.get_float_state(zone["elec_counter_entity"], None)
         if heat is None or elec is None:
-            return None
-        snaps = self.thermal_learning_state.setdefault(zone["name"], {}).setdefault("cop_counter_snaps", [])
+            return out
+        if elec > 0:
+            out["lifetime"] = round(heat / elec, 2)
+        snaps = learn.setdefault("cop_counter_snaps", [])
         day = now.astimezone().date().isoformat()
         if not snaps or snaps[-1][0] != day:
             snaps.append([day, heat, elec])
-            del snaps[:-8]
-        d_heat, d_elec = heat - snaps[0][1], elec - snaps[0][2]
-        return round(d_heat / d_elec, 2) if d_elec >= 5.0 and d_heat > 0 else None
+            del snaps[:-32]
+        for key, days in (("week", 7), ("month", 30)):
+            base = snaps[max(0, len(snaps) - 1 - days)]
+            d_heat, d_elec = heat - base[1], elec - base[2]
+            if d_elec >= 5.0 and d_heat > 0:
+                out[key] = round(d_heat / d_elec, 1)
+        return out
 
     def _update_flow_learning(self, zone, now, internal_temp, external_temp, heating_on, hp):
         """Learns the three numbers dynamic flow control depends on, from
@@ -4314,7 +4335,7 @@ class GridLock(hass.Hass):
                 "measured_runs": (self.thermal_learning_state.get(zone["name"], {}).get("cop_runs") or [])[-10:],
                 "min_output_learned": "yes" if self.thermal_learning_state.get(zone["name"], {}).get("min_output_w") else "no",
                 "cop": round(live_cop, 2) if live_cop is not None else zone["params"].heating_cop,
-                "cop_recent": self._recent_cop(zone, now),
+                "cop_breakdown": self._cop_breakdown(zone, now),
                 "predicted_kwh_today": round(predicted_kwh_today, 2),
                 "predicted_kwh_today_baseline": round(baseline_kwh_today, 2),
                 "predicted_cost_today": round(predicted_cost_today, 2),

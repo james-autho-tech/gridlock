@@ -1296,6 +1296,18 @@ async function setTankSetpoint(value) {
   setTimeout(() => { tankSpBusy = false; refresh(); }, 2500);
 }
 let hwBusy = false;
+function copLine(b, lifetime) {
+  // This run / last run / week / month / lifetime COP, whichever are known.
+  b = b || {};
+  const parts = [];
+  if (b.run) parts.push(`this run ${Number(b.run).toFixed(1)}<span title="Electricity side from the outdoor unit's whole-amp current sensor — approximate">*</span>`);
+  else if (b.last_run) parts.push(`last run ${Number(b.last_run).toFixed(1)}<span title="Electricity side from the outdoor unit's whole-amp current sensor — approximate">*</span>`);
+  if (b.week) parts.push(`week ${Number(b.week).toFixed(1)}`);
+  if (b.month) parts.push(`month ${Number(b.month).toFixed(1)}`);
+  const life = b.lifetime || lifetime;
+  if (life) parts.push(`lifetime ${Number(life).toFixed(2)}`);
+  return parts.length ? `<div class="sub">COP: ${parts.join(' · ')}</div>` : '';
+}
 async function hwSet(key, el) {
   if (hwBusy) return;
   const value = el.type === 'checkbox' ? el.checked : el.value;
@@ -1538,7 +1550,7 @@ function renderHouseHero(d) {
   const flowTile = c.flow_entity
     ? `<div class="gl-tile"><div class="lbl">Flow setpoint</div><div class="val num">${c.commanded === false ? '<span style="font-size:16px;color:var(--dim)">off</span>' : n1(c.flow_setpoint, 0, '°C')}</div><div class="sub">unit set to ${n1(hp.flow_setpoint_live, 0, '°C')} · water out ${n1(hp.flow_temp, 0, '°C')} / back ${n1(hp.return_temp, 0, '°C')}${f && c.commanded !== false ? ` · plan wants ${n1(f.flow_setpoint_wanted, 0, '°C')}` : ''}</div></div>`
     : '';
-  const hpTile = `<div class="gl-tile"><div class="lbl">Heat pump</div><div class="val" style="font-size:16px"><span class="gl-legend-dot" style="background:${z.heating_on ? 'var(--green)' : 'var(--dim)'}"></span>${z.heating_on ? 'Heating' : 'Not heating'}</div><div class="sub">${hp.compressor_hz !== undefined && hp.compressor_hz !== null ? `compressor ${n1(hp.compressor_hz, 0, ' Hz')} · ` : ''}${n1(hp.thermal_kw, 1, ' kW')} out · ${z.cop_recent ? `COP ${n1(z.cop_recent, 1)} this week · ` : ''}lifetime ${n1(hp.live_cop, 2)}</div></div>`;
+  const hpTile = `<div class="gl-tile"><div class="lbl">Heat pump</div><div class="val" style="font-size:16px"><span class="gl-legend-dot" style="background:${z.heating_on ? 'var(--green)' : 'var(--dim)'}"></span>${z.heating_on ? 'Heating' : 'Not heating'}</div><div class="sub">${hp.compressor_hz !== undefined && hp.compressor_hz !== null ? `compressor ${n1(hp.compressor_hz, 0, ' Hz')} · ` : ''}${n1(hp.thermal_kw, 1, ' kW')} out</div>${copLine(z.cop_breakdown, hp.live_cop)}</div>`;
   const planTile = f
     ? (Number(f.required_kw) < 0.05
         ? (() => {
@@ -2433,7 +2445,7 @@ function renderThermalZoneTable(zones) {
       <td><span class="gl-legend-dot" style="background:${z._color}"></span>${esc(z.name)}${z.heating_on ? ' 🔥' : ''}${z.learned_heat_loss_degrees != null ? ` <span style="color:var(--dim);cursor:help" title="Learned from ${z.thermal_learning_observations || 0} real cooling-period observation${z.thermal_learning_observations === 1 ? '' : 's'}:&#10;heat_loss_degrees ${Number(z.learned_heat_loss_degrees).toFixed(4)} (started ${Number(z.config_heat_loss_degrees).toFixed(4)})&#10;heat_loss_watts ${Number(z.learned_heat_loss_watts).toFixed(1)} (started ${Number(z.config_heat_loss_watts).toFixed(1)})&#10;Refines gradually — a single observation can't swing it. Needs 8+ observations spanning a real spread of conditions before both figures are fitted independently; below that, only heat_loss_degrees refines.">🧠</span>` : ''} <span style="color:var(--dim);cursor:pointer" title="Rename zone" onclick="renameZoneFromEl(this)" data-real-name="${encodeURIComponent(z.real_name)}" data-display-name="${encodeURIComponent(z.name)}">✏️</span></td>
       <td class="num">${z.current_temp === null || z.current_temp === undefined ? '<span style="color:var(--amber)" title="No usable reading from the room temperature entity — a controlled zone is held ON until one comes back">no reading</span>' : `${Number(z.current_temp).toFixed(1)}°C`}</td>
       <td class="num">${z.target_temp === null || z.target_temp === undefined ? '—' : `${Number(z.target_temp).toFixed(1)}°C`}${z.target_editable ? ` <span style="color:var(--dim);cursor:pointer" title="Set target temperature" onclick="setZoneTarget(${Number(z.target_temp)})">✏️</span>` : ''}</td>
-      <td class="num">${Number(z.cop_recent || z.cop).toFixed(2)}${z.cop_recent ? '' : ' <span style="color:var(--dim);font-size:10px">lifetime</span>'}</td>
+      <td class="num">${Number((z.cop_breakdown || {}).week || z.cop).toFixed(2)}${(z.cop_breakdown || {}).week ? ' <span style="color:var(--dim);font-size:10px">week</span>' : ' <span style="color:var(--dim);font-size:10px">lifetime</span>'}</td>
       <td class="num">£${Number(z.predicted_cost_today).toFixed(2)}</td>
       <td class="num" style="color:var(--dim)">£${Number(z.predicted_cost_today_baseline).toFixed(2)} fixed</td>
       ${anyShowers ? `<td class="num">${z.showers_available != null ? `<span title="${Number(z.usable_hot_water_litres).toFixed(0)}L usable at your configured shower temperature">${Number(z.showers_available).toFixed(1)} showers</span>` : '—'}</td>` : ''}

@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.67.16 - 2026-10-23
+
+### Dashboard
+- COP breakdown on the heat pump tile: this run (or last run), week, month and lifetime. Week/month from the unit's own kWh counters; the run figure is GridWarm's measurement, approximate (whole-amp current sensor)
+
 ## 3.67.15 - 2026-10-23
 
 ### Fix
