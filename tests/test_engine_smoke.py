@@ -1034,3 +1034,13 @@ def test_recent_cop_comes_from_the_units_counters_not_its_lifetime_ratio(engine)
     b = house["cop_breakdown"]
     assert b["week"] == 5.0                    # 50 kWh heat / 10 kWh electricity
     assert b["lifetime"] == round(1050 / 310, 2)
+
+
+def test_an_impossible_run_cop_is_hidden_not_shown(engine):
+    g, _ = engine
+    _seed_house(g, room_temp="18.8")
+    now = g.get_now()
+    g.states["sensor.loft_heatpump_controller_outdoor_unit_current"]["state"] = "1"   # under-reads
+    house = _run_heating(g, now, 40, lambda m: 31, lambda m: 26, kw="5.8")
+    b = house["cop_breakdown"]
+    assert b["run"] is None and b["run_unmeasurable"] is True

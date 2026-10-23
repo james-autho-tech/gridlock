@@ -3205,13 +3205,25 @@ class GridLock(hass.Hass):
         - lifetime: the same counters' totals -- what the unit's own COP
           sensor shows."""
         learn = self.thermal_learning_state.setdefault(zone["name"], {})
-        out = {"run": None, "last_run": None, "week": None, "month": None, "lifetime": None}
+        out = {"run": None, "last_run": None, "week": None, "month": None, "lifetime": None,
+               "run_unmeasurable": False}
+        # A run figure is only shown when it's physically believable: an
+        # implied Carnot fraction above 0.8 means the electricity reading
+        # is short (a whole-amp current sensor reading 1 A while the unit
+        # makes 5 kW of heat gave "COP 13.5").
         run = learn.get("cop_run")
-        if run and (run.get("el_wh") or 0.0) >= 100.0:
-            out["run"] = round(run["th_wh"] / run["el_wh"], 1)
-        runs = learn.get("measured_runs") or []
-        if runs:
+        if run and (run.get("el_wh") or 0.0) >= 100.0 and run.get("steady_h"):
+            cop = run["th_wh"] / run["el_wh"]
+            eta = core_flow.implied_eta(cop, run["flow_t"] / run["steady_h"], run["out_t"] / run["steady_h"])
+            if eta is not None and eta <= 0.8:
+                out["run"] = round(cop, 1)
+            else:
+                out["run_unmeasurable"] = True
+        runs = learn.get("cop_runs") or []
+        if runs and runs[-1].get("eta") is not None and runs[-1]["eta"] <= 0.8:
             out["last_run"] = runs[-1].get("cop")
+        elif runs:
+            out["run_unmeasurable"] = True
         if not (zone.get("heat_counter_entity") and zone.get("elec_counter_entity")):
             return out
         heat = self.get_float_state(zone["heat_counter_entity"], None)

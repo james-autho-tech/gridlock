@@ -1306,7 +1306,9 @@ function copLine(b, lifetime) {
   if (b.month) parts.push(`month ${Number(b.month).toFixed(1)}`);
   const life = b.lifetime || lifetime;
   if (life) parts.push(`lifetime ${Number(life).toFixed(2)}`);
-  return parts.length ? `<div class="sub">COP: ${parts.join(' · ')}</div>` : '';
+  const note = (!b.run && !b.last_run && b.run_unmeasurable)
+    ? `<div class="sub" style="color:var(--dim)">Per-run COP needs a power meter on the heat pump — its own current sensor under-reads.</div>` : '';
+  return parts.length ? `<div class="sub">COP: ${parts.join(' · ')}</div>${note}` : note;
 }
 async function hwSet(key, el) {
   if (hwBusy) return;

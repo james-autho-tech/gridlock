@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.67.17 - 2026-10-23
+
+### Fix
+- Run COP is only shown when physically believable (implied Carnot fraction ≤ 0.8); otherwise the tile says per-run COP needs a power meter. The outdoor unit's whole-amp current sensor read 1 A at 5.9 kW of heat ("COP 13.5")
+- "Last run" COP read the wrong key and never showed
+
 ## 3.67.16 - 2026-10-23
 
 ### Dashboard
