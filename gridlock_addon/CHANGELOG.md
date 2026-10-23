@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.67.18 - 2026-10-23
+
+### Fix
+- Heat pump power (and so the house load GridLock learns with it taken out) falls back to heat output ÷ the COP model when the outdoor unit's V × A is physically impossible against the heat being made. The whole-amp current sensor read 1 A at 5.9 kW of heat, leaving most of the heat pump's draw in the learned house load
+
 ## 3.67.17 - 2026-10-23
 
 ### Fix

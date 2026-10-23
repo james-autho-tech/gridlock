@@ -4984,8 +4984,24 @@ class GridLock(hass.Hass):
                 a = self.get_float_state(zone["outdoor_current_entity"], None)
                 hz = (self.get_float_state(zone["compressor_entity"], 0.0) or 0.0) if zone.get("compressor_entity") else 0.0
                 if v is not None and a is not None:
-                    live_w = core_flow.measured_electric_w(v, a, zone.get("pump_power_w", 70.0)) \
+                    measured = core_flow.measured_electric_w(v, a, zone.get("pump_power_w", 70.0)) \
                         if (a > 0 or hz > 5) else 0.0
+                    # ...unless it's physically impossible against the heat
+                    # being made: a whole-amp current sensor read 1 A at
+                    # 5.9 kW of heat. Then the estimate from heat output and
+                    # the COP model stands -- an under-read here left heat
+                    # pump use in the learned house load.
+                    thermal_w = (self.get_float_state(zone["thermal_power_entity"], 0.0) or 0.0) * 1000.0 \
+                        if zone.get("thermal_power_entity") else 0.0
+                    flow_t = self.get_float_state(zone["flow_temp_entity"], None) if zone.get("flow_temp_entity") else None
+                    ext = self.get_float_state(zone["external_temp_entity"], None) if zone.get("external_temp_entity") else None
+                    impossible = False
+                    if measured > 0 and thermal_w > 300 and flow_t is not None and ext is not None:
+                        cop = thermal_w / measured
+                        eta = core_flow.implied_eta(cop, flow_t, ext)
+                        impossible = cop >= core_flow.COP_PARASITIC or (eta is not None and eta > 0.8)
+                    if not (impossible and live_w > 0):
+                        live_w = measured
                 break
         self.load_provider.planned_circuit_kwh[HEATPUMP_POWER_ENTITY] = planned
         self.set_state(HEATPUMP_POWER_ENTITY, state=f"{live_w:.0f}",

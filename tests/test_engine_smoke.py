@@ -1044,3 +1044,23 @@ def test_an_impossible_run_cop_is_hidden_not_shown(engine):
     house = _run_heating(g, now, 40, lambda m: 31, lambda m: 26, kw="5.8")
     b = house["cop_breakdown"]
     assert b["run"] is None and b["run_unmeasurable"] is True
+
+
+def test_an_under_reading_current_sensor_doesnt_shrink_the_heat_pump_load(engine):
+    g, _ = engine
+    _seed_house(g, room_temp="18.8")
+    now = g.get_now()
+    g.states["sensor.loft_heatpump_controller_outdoor_unit_current"]["state"] = "1"   # reads 1 A at 5.8 kW heat
+    _run_heating(g, now, 10, lambda m: 31, lambda m: 26, kw="5.8")
+    w = float(g.published["sensor.gridlock_heatpump_power"]["state"])
+    assert w > 600, w            # the heat-output estimate, not 240 V x 1 A + pump (~310 W)
+
+
+def test_a_believable_current_reading_is_still_used(engine):
+    g, _ = engine
+    _seed_house(g, room_temp="18.8")
+    now = g.get_now()
+    g.states["sensor.loft_heatpump_controller_outdoor_unit_current"]["state"] = "5"   # 1.2 kW + pump
+    _run_heating(g, now, 10, lambda m: 31, lambda m: 26, kw="5.8")
+    w = float(g.published["sensor.gridlock_heatpump_power"]["state"])
+    assert abs(w - (240 * 5 + 70)) < 1, w
