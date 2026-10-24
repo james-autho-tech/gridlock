@@ -1197,6 +1197,9 @@ function renderSpaceHeatingSettings(s) {
         + entitySelect(s, 'flow_entity', 'Flow temperature setpoint', ['number'], { hint: 'With this set, GridWarm modulates the flow temperature every tick to the lowest that meets the plan — that\'s where the COP comes from. Blank = on/off only.' })
         + entitySelect(s, 'target_temp_entity', 'Take the target from', ['climate'], { hint: 'A room thermostat whose setpoint GridWarm follows — turn its dial or use its app and GridWarm follows; −/+ here writes back to it. Blank = the target below only.' })
         + num('target_temp', 'Target °C (or the fallback if that thermostat is off/unavailable)', 0.5)
+        + chk('night_setback_enabled', 'Night setback', 'drop the target overnight, warm again by the end of the window (on the cheap rate)')
+        + num('night_setback_temp', 'Night target °C', 0.5, 'The house rarely cools far in one night — this mostly means no heating overnight.')
+        + inp('night_setback_window', 'Night window (HH:MM-HH:MM)', '', 'At the day target again by the end of it.')
         + num('control_safety_min_temp', 'Safety floor °C', 0.5, 'Heat regardless of plan below this.')
         + inp('name', 'Zone name')
         + chk('configured', 'Show this zone', 'predicted and shown on this tab')
@@ -1547,9 +1550,17 @@ function renderHouseHero(d) {
   const roomTile = z.current_temp === null || z.current_temp === undefined
     ? `<div class="gl-tile"><div class="lbl">Room</div><div class="val" style="color:var(--amber);font-size:16px">no reading</div><div class="sub">room sensor unavailable — heating held on at ${n1(c.flow_setpoint, 0, '°C')} flow until it returns</div></div>`
     : `<div class="gl-tile"><div class="lbl">${z.rooms_averaged ? `House (${Math.round(Number(z.rooms_averaged))} rooms)` : 'Room'}</div><div class="val num">${n1(z.current_temp, 1, '°C')}</div><div class="sub">outside ${n1(z.external_temp, 1, '°C')}${z.reading_from_fallback ? ` · <span style="color:var(--amber)">from fallback sensor (${esc(String(z.reading_from_fallback).split('.').pop())}) — primary unavailable</span>` : ''}</div></div>`;
-  const savedTarget = Number((d.space_heating_settings || {}).target_temp ?? z.target_temp);
-  const applying = Math.abs(savedTarget - Number(z.target_temp)) > 0.05;
-  const targetTile = `<div class="gl-tile"><div class="lbl">Target</div><div class="val num"><span class="gl-target-val">${n1(savedTarget, 1, '°C')}</span><span class="gl-stepper"><button title="−0.5 °C" onclick="setZoneTargetTo((pendingTarget ?? ${savedTarget}) - 0.5)">−</button><button title="+0.5 °C" onclick="setZoneTargetTo((pendingTarget ?? ${savedTarget}) + 0.5)">+</button></span></div>${applying ? '<div class="sub" style="color:var(--amber)">applying — GridWarm re-plans within 30 seconds</div>' : ''}<div class="sub">may drift ${n1(d.space_heating_settings && d.space_heating_settings.comfort_below, 1)}° below / ${n1(d.space_heating_settings && d.space_heating_settings.comfort_above, 1)}° above for cheaper slots</div></div>`;
+  // Following a room thermostat: show what GridWarm is actually using (that
+  // thermostat's setpoint), not the saved fallback.
+  const shs = d.space_heating_settings || {};
+  const followEnt = shs.target_temp_entity || '';
+  const liveTarget = Number(z.target_temp);
+  const savedTarget = followEnt ? (pendingTarget ?? liveTarget) : Number(shs.target_temp ?? z.target_temp);
+  const applying = followEnt ? (pendingTarget !== null && Math.abs(pendingTarget - liveTarget) > 0.05)
+                             : Math.abs(savedTarget - liveTarget) > 0.05;
+  const nightLine = shs.night_setback_enabled ? `<div class="sub">nights ${n1(shs.night_setback_temp, 1, '°C')} ${esc(shs.night_setback_window || '')}, warm again by the end</div>` : '';
+  const followLine = followEnt ? `<div class="sub">set on ${esc(followEnt.split('.').pop().replace(/_/g, ' '))} — its dial or app changes it too</div>` : '';
+  const targetTile = `<div class="gl-tile"><div class="lbl">Target</div><div class="val num"><span class="gl-target-val">${n1(savedTarget, 1, '°C')}</span><span class="gl-stepper"><button title="−0.5 °C" onclick="setZoneTargetTo((pendingTarget ?? ${savedTarget}) - 0.5)">−</button><button title="+0.5 °C" onclick="setZoneTargetTo((pendingTarget ?? ${savedTarget}) + 0.5)">+</button></span></div>${applying ? '<div class="sub" style="color:var(--amber)">applying — GridWarm re-plans within 30 seconds</div>' : ''}${followLine}${nightLine}<div class="sub">may drift ${n1(d.space_heating_settings && d.space_heating_settings.comfort_below, 1)}° below / ${n1(d.space_heating_settings && d.space_heating_settings.comfort_above, 1)}° above for cheaper slots</div></div>`;
   const flowTile = c.flow_entity
     ? `<div class="gl-tile"><div class="lbl">Flow setpoint</div><div class="val num">${c.commanded === false ? '<span style="font-size:16px;color:var(--dim)">off</span>' : n1(c.flow_setpoint, 0, '°C')}</div><div class="sub">unit set to ${n1(hp.flow_setpoint_live, 0, '°C')} · water out ${n1(hp.flow_temp, 0, '°C')} / back ${n1(hp.return_temp, 0, '°C')}${f && c.commanded !== false ? ` · plan wants ${n1(f.flow_setpoint_wanted, 0, '°C')}` : ''}</div></div>`
     : '';
@@ -2967,7 +2978,14 @@ async function refresh() {
     d = await resp.json();
     latestPlanTable = d.plan_table || { columns: [], rows: [] };
     latestStatus = d;
-    if (pendingTarget !== null && !zoneTargetBusy && Math.abs(Number((d.space_heating_settings || {}).target_temp) - pendingTarget) < 0.05) pendingTarget = null;
+    if (pendingTarget !== null && !zoneTargetBusy) {
+      // Done once GridWarm itself is using it (following a thermostat, the
+      // saved value is only the fallback and lands first).
+      const hz = (d.thermal_zones || []).find(x => x.target_editable && !x.dhw);
+      const using = (d.space_heating_settings || {}).target_temp_entity && hz ? Number(hz.target_temp)
+                                                                            : Number((d.space_heating_settings || {}).target_temp);
+      if (Math.abs(using - pendingTarget) < 0.05) pendingTarget = null;
+    }
   } catch (e) {
     document.getElementById('app').innerHTML =
       `<div class="gl">Could not reach GridLock (${esc(e.message || e)}) — check the add-on log, or it may still be starting up.</div>`;

@@ -3019,6 +3019,7 @@ class GridLock(hass.Hass):
                                              if z.get("active", True) and not z.get("flow_entity") else 0.0),
                 "anticipation_max_adjust": (float(z.get("anticipation_max_adjust", 2.0))
                                             if z.get("active", True) and not z.get("flow_entity") else 0.0),
+                "night_setback": z.get("night_setback"),
                 # Active control -- opt-in, off unless control_entity is
                 # explicitly set. Everything else about this zone (the
                 # prediction, the anticipation curve) stays advisory-only
@@ -3809,6 +3810,31 @@ class GridLock(hass.Hass):
         of every per-slot curve here actually covers."""
         return now.replace(minute=(now.minute // SLOT_MIN) * SLOT_MIN, second=0, microsecond=0)
 
+    def _setback_ready_floor(self, zone, now, tgt, n):
+        """After a night setback: the house at (within 0.2 °C of) the day
+        target from the window's end, for two hours -- "warm again by
+        06:00", not merely back inside the comfort band. None elsewhere."""
+        setback = zone.get("night_setback")
+        if not setback or n <= 0:
+            return None
+        mask = core_dhw.night_mask(self._slot_floor(now).astimezone(), n, setback["window"], SLOT_MIN)
+        floor = [None] * n
+        for i in range(n):
+            if not mask[i] and any(mask[j] for j in range(max(0, i - 4), i)):
+                floor[i] = tgt[i] - 0.2
+        return floor
+
+    def _setback_ceiling(self, zone, now, tgt, n):
+        """Through a night setback the band's ceiling stays at the day
+        target's (only its floor drops), so the plan may warm the house
+        gradually before the window ends. None elsewhere."""
+        setback = zone.get("night_setback")
+        if not setback or n <= 0 or not tgt:
+            return None
+        mask = core_dhw.night_mask(self._slot_floor(now).astimezone(), n, setback["window"], SLOT_MIN)
+        day = max(tgt)
+        return [day + zone["comfort_above"] if mask[i] else None for i in range(n)]
+
     def _plan_flow(self, zone, now, internal_temp, external_curve, plan_curve, rate_curve,
                    grid_rate_curve=None, pricing_mode="tariff"):
         """The flow-temperature plan for one tick (see core/flow_control.py):
@@ -3860,6 +3886,8 @@ class GridLock(hass.Hass):
             # average at a low setpoint by running and resting -- forcing
             # 5.6 kW into every slot made the plan chase 37 °C flow.
             min_power_w=min(params.heat_min_power or low_w, low_w) or None, blocked_slots=blocked,
+            floor_curve=self._setback_ready_floor(zone, now, tgt, len(ext)),
+            ceiling_curve=self._setback_ceiling(zone, now, tgt, len(ext)),
             comfort_cost_per_degree_slot=core_flow.COMFORT_COST_BY_PRIORITY.get(
                 zone.get("comfort_priority", "cop"), core_flow.COMFORT_COST_PER_DEGREE_SLOT))
         if plan:
@@ -4270,6 +4298,12 @@ class GridLock(hass.Hass):
         plan_curve = core_thermal.anticipatory_target_curve(
             target_temp, external_curve, lookahead_steps=zone["anticipation_lookahead_steps"],
             sensitivity=zone["anticipation_sensitivity"], max_adjust=zone["anticipation_max_adjust"])
+        # Night setback: the target curve dips across the window (never
+        # raised by it), so the plan sees the morning step back up coming.
+        setback = zone.get("night_setback")
+        if setback and plan_curve:
+            mask = core_dhw.night_mask(now.astimezone(), len(plan_curve), setback["window"], THERMAL_STEP_MIN)
+            plan_curve = [min(v, setback["temp"]) if mask[k] else v for k, v in enumerate(plan_curve)]
         trace = core_thermal.simulate(internal_temp, external_curve, plan_curve, zone["params"],
                                        heating_on0=heating_on, step_minutes=THERMAL_STEP_MIN)
         baseline_trace = core_thermal.simulate(

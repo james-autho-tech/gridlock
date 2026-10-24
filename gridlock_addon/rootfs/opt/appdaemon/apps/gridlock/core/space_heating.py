@@ -46,6 +46,13 @@ DEFAULTS = {
     # thermostat is unavailable or switched off.
     "target_temp": 15.0,
     "target_temp_entity": "climate.bedroom_4_qing_thermo",
+    # Night setback: the target drops to night_setback_temp across the
+    # window, and the plan -- seeing the step back up ahead -- warms the
+    # house on the cheap overnight rate to be at the day target by the
+    # window's end, held for the first two hours of the morning.
+    "night_setback_enabled": True,
+    "night_setback_temp": 16.0,
+    "night_setback_window": "22:00-06:00",
     # The heat pump measures the outdoor temperature itself, at the
     # outdoor unit -- always present, no cloud. The forecast ahead comes
     # from whichever weather.* entity actually serves HA's get_forecasts
@@ -498,6 +505,7 @@ NUMERIC_BOUNDS = {
     "pump_power_w": (0.0, 500.0),
     "battery_wear_p_per_kwh": (0.0, 30.0),
     "end_buffer_pct": (0.0, 50.0),
+    "night_setback_temp": (10.0, 25.0),
     "min_on_minutes": (0.0, 180.0),
     "min_off_minutes": (0.0, 180.0),
     "emergency_temp": (3.0, 18.0),
@@ -514,7 +522,7 @@ ENTITY_FIELDS = ("internal_temp_entity", "internal_temp_fallback_entity",
                  "outdoor_current_entity", "defrost_entity", "mode_entity", "start_delta_entity",
                  "target_temp_entity",
                  "heat_counter_entity", "elec_counter_entity")
-BOOL_FIELDS = ("configured", "tariff_optimise", "notify_external_commands")
+BOOL_FIELDS = ("configured", "tariff_optimise", "notify_external_commands", "night_setback_enabled")
 
 
 def _clean_entity(value):
@@ -574,6 +582,8 @@ def merge_settings(saved):
         out["heat_pricing"] = str(saved["heat_pricing"]).lower()
     if str(saved.get("comfort_priority", "")).lower() in ("cop", "balanced", "comfort"):
         out["comfort_priority"] = str(saved["comfort_priority"]).lower()
+    if "night_setback_window" in saved:
+        out["night_setback_window"] = clean_window(saved["night_setback_window"]) or out["night_setback_window"]
     if out["flow_max"] < out["flow_min"]:
         out["flow_max"] = out["flow_min"]
     # The hot water zone rides along in the same file under its own key.
@@ -592,6 +602,8 @@ def to_zone_cfg(settings):
         "internal_temp_fallback_entity": settings["internal_temp_fallback_entity"],
         "target_temp_constant": settings["target_temp"],
         "target_temp_entity": settings.get("target_temp_entity"),
+        "night_setback": ({"temp": settings["night_setback_temp"], "window": settings["night_setback_window"]}
+                          if settings.get("night_setback_enabled") else None),
         # A climate entity's state is its mode; the setpoint is an attribute.
         "target_temp_attribute": ("temperature" if str(settings.get("target_temp_entity") or "").startswith("climate.")
                                   else None),

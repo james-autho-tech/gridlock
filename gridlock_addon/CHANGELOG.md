@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.67.25 - 2026-10-24
+
+### GridWarm
+- Night setback (default on, 16 °C, 22:00–06:00): the target dips across the window and the plan, seeing the morning step coming, warms the house gradually on the cheap rate to within 0.2 °C of the day target by the window's end, held for two hours. Only the band's floor drops overnight; its ceiling stays at the day level so the warm-up isn't squeezed into the last hour
+- The Target tile shows the followed thermostat's setpoint (it showed the saved fallback, 19 °C, while GridWarm was using 20 °C), and notes the night setback
+
 ## 3.67.24 - 2026-10-24
 
 ### GridWarm

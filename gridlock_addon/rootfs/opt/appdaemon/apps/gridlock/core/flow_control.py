@@ -233,7 +233,7 @@ def plan_heating(temp0, external_curve, rate_curve, target_curve, params, *,
                  comfort_cost_per_degree_slot=COMFORT_COST_PER_DEGREE_SLOT,
                  smoothing_cost_per_kwh_change=SMOOTHING_COST_PER_KWH_CHANGE,
                  heat_kwh_prev=None, gain_curve_w=None, segment_curve=None, min_power_w=None,
-                 blocked_slots=None):
+                 blocked_slots=None, floor_curve=None, ceiling_curve=None):
     """The heating plan: heat to deliver per slot (kWh) over the horizon
     at least cost, keeping the room inside [target - comfort_below,
     target + comfort_above]. Linear programme (PuLP) -- see the module
@@ -333,8 +333,20 @@ def plan_heating(temp0, external_curve, rate_curve, target_curve, params, *,
                            + params.heat_loss_watts - gains[i])
             heat_w_expr = (q_lo[i] + q_hi[i]) * 1000.0 / slot_hours
             prob += temp[i] == prev + (heat_w_expr - loss_w_expr) * slot_hours / mass
-            prob += temp[i] >= target_curve[i] - comfort_below - under[i]
-            prob += temp[i] <= target_curve[i] + comfort_above + over[i]
+            # floor_curve: a per-slot minimum above the band's own floor --
+            # "warm again by 06:00" after a night setback.
+            band_floor = target_curve[i] - comfort_below
+            if floor_curve and i < len(floor_curve) and floor_curve[i] is not None:
+                band_floor = max(band_floor, floor_curve[i])
+            prob += temp[i] >= band_floor - under[i]
+            # ceiling_curve: a per-slot upper limit in place of the band's
+            # own -- through a night setback the ceiling stays at the day
+            # level, so the house can be warmed gradually ahead of the
+            # morning instead of in a rush once the window ends.
+            ceiling = target_curve[i] + comfort_above
+            if ceiling_curve and i < len(ceiling_curve) and ceiling_curve[i] is not None:
+                ceiling = ceiling_curve[i]
+            prob += temp[i] <= ceiling + over[i]
             prob += dev_lo[i] >= target_curve[i] - temp[i]
             prob += dev_hi[i] >= temp[i] - target_curve[i]
             price = rate_curve[i] / 100.0  # p -> £
@@ -373,7 +385,8 @@ def plan_heating(temp0, external_curve, rate_curve, target_curve, params, *,
                                     smoothing_cost_per_kwh_change=smoothing_cost_per_kwh_change,
                                     heat_kwh_prev=heat_kwh_prev, gain_curve_w=gain_curve_w,
                                     segment_curve=segment_curve, min_power_w=None,
-                                    blocked_slots=blocked_slots)
+                                    blocked_slots=blocked_slots, floor_curve=floor_curve,
+                                    ceiling_curve=ceiling_curve)
             return fallback()
         out = []
         for i in range(n):

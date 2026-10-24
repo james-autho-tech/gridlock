@@ -1134,3 +1134,19 @@ def test_turning_qings_dial_replans_within_the_30s_watch(engine):
     g._watch_dashboard_settings({})
     house = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]
     assert house["target_temp"] == 20.0
+
+
+def test_night_setback_dips_overnight_and_is_warm_again_by_six(engine):
+    g, _ = engine
+    _seed_house(g, room_temp="19.5")
+    with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
+        json.dump({"target_temp": 20, "target_temp_entity": "", "night_setback_enabled": True,
+                   "night_setback_temp": 16, "night_setback_window": "22:00-06:00"}, f)
+    g._publish_thermal_forecast(g.get_now())
+    house = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]
+    plan = house["flow"]["plan"]
+    by_time = {p["x"][11:16]: p for p in plan}
+    assert by_time["23:00"]["target"] == 16.0                    # the dip
+    assert by_time["12:00"]["target"] == 20.0                    # the day
+    six = by_time["06:00"]
+    assert six["target"] == 20.0 and six["temp"] >= 19.8 - 0.05, six   # warm again by 06:00
