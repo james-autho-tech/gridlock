@@ -5383,6 +5383,26 @@ class GridLock(hass.Hass):
                                             else "mdi:transmission-tower"),
                                    "raw_state": off or "connected"})
 
+    def _battery_hours(self, soc_pct, now):
+        """Hours the battery would run the house at its forecast normal
+        use, from now -- None if the forecast is empty."""
+        usable = max(0.0, soc_pct - self.floor_soc) / 100.0 * self.cfg.battery_kwh
+        kwh = 0.0
+        for i in range(96):
+            slot = self.load_provider.load_kwh(now + timedelta(minutes=30 * i)) or 0.0
+            if kwh + slot >= usable:
+                return (i + (usable - kwh) / slot) / 2.0 if slot > 0 else i / 2.0
+            kwh += slot
+        return 48.0 if kwh > 0 else None
+
+    def _battery_hours_text(self, soc_pct, now):
+        hrs = self._battery_hours(soc_pct, now)
+        usable = max(0.0, soc_pct - self.floor_soc) / 100.0 * self.cfg.battery_kwh
+        if hrs is None:
+            return f"{usable:.0f} kWh in the battery"
+        return (f"{usable:.0f} kWh in the battery — about {hrs:.0f} h of normal use"
+                + ("+" if hrs >= 48 else ""))
+
     def publish_storm_status(self):
         """Surfaces the SAME reserve-sufficiency numbers storm_decision()
         itself weighs (see _tick_inner) -- without this, "why is it
@@ -5414,7 +5434,10 @@ class GridLock(hass.Hass):
                                                         if expected_load_kwh is not None else None,
                                    "usable_reserve_kwh": round(usable_kwh, 2)
                                                           if usable_kwh is not None else None,
-                                   "reserve_sufficient": reserve_sufficient})
+                                   "reserve_sufficient": reserve_sufficient,
+                                   "battery_hours": (round(self._battery_hours(
+                                       self.get_float_state(self.ent_soc, 0.0), self.get_now()) or 0.0, 1)),
+                                   "minimum_reserve_hours": self.storm_fallback_hours})
 
     def update_daily_financials(self):
         now = self.get_now()
@@ -5686,7 +5709,12 @@ class GridLock(hass.Hass):
 
         if bool(storm) != self._prev_storm_active:
             if storm:
-                self._notify("GridLock: Storm Watch active", storm)
+                self._notify("GridLock: Storm Watch active",
+                             f"{storm}. {self._battery_hours_text(self.get_float_state(self.ent_soc, 0.0), now)}. "
+                             "If the power does go, hot water waits and heating only runs if the house "
+                             "gets cold, which stretches it further. Charging at the peak rate only if "
+                             "the battery couldn't cover the next "
+                             f"{self.storm_fallback_hours:.0f} h.")
             else:
                 self._notify("GridLock: Storm Watch cleared",
                             "Back to normal cost-optimised planning.")
@@ -5712,7 +5740,9 @@ class GridLock(hass.Hass):
                 soc0, storm_target_soc=self.storm_target_soc,
                 discharge_kw=self.discharge_kw, charge_kw=self.charge_kw,
                 ev_concurrent_charge_kw=self.ev_concurrent_charge_kw, ev_active=ev_active,
-                usable_kwh=usable_kwh, expected_load_kwh=expected_load_kwh)
+                usable_kwh=usable_kwh, expected_load_kwh=expected_load_kwh,
+                charge_ok=cur["imp"] <= self.cheap_rate,
+                min_reserve_kwh=self._expected_load_kwh(now, min(outage_hours, self.storm_fallback_hours)))
 
         # Logged only on the transition into/out of this state, not every
         # tick it remains true — logging it unconditionally each tick (as
@@ -5799,15 +5829,15 @@ class GridLock(hass.Hass):
             if storm_decision["charging"]:
                 self.apply(self.mode_charge, storm_decision["disch_kw"], storm_decision["charge_kw"],
                            "Storm Watch — Charging",
-                           f"Weather alert ({storm}): charging to "
-                           f"{self.storm_target_soc:.0f}% regardless of rates",
+                           f"Weather alert ({storm}): charging toward {self.storm_target_soc:.0f}% @ "
+                           f"{cur['imp'] * 100:.1f}p — {self._battery_hours_text(soc0, now)}",
                            plan_html)
                 return
             if storm_decision["override"]:
                 self.apply(self.mode_eco, storm_decision["disch_kw"], storm_decision["charge_kw"],
                            "Storm Watch — Holding",
-                           f"Weather alert ({storm}): holding charge, "
-                           "exports suspended", plan_html)
+                           f"Weather alert ({storm}): exports suspended, topping up only at cheap "
+                           f"rates — {self._battery_hours_text(soc0, now)}", plan_html)
                 return
             # Reserve sufficient: already logged (once, on the transition
             # into this state) further up — nothing more to do here, just

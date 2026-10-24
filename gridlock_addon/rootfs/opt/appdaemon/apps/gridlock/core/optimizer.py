@@ -739,7 +739,8 @@ def solve(slots, soc0_pct, cfg, *, today_date=None):
 
 def storm_decision(soc0_pct, *, storm_target_soc, discharge_kw, charge_kw,
                     ev_concurrent_charge_kw, ev_active,
-                    usable_kwh=None, expected_load_kwh=None):
+                    usable_kwh=None, expected_load_kwh=None,
+                    charge_ok=True, min_reserve_kwh=None):
     """Pure port of the live Storm Watch override — charge to
     storm_target_soc regardless of price/peak-block, then hold (no
     exports). Deliberately not run through the LP: storm duration is
@@ -762,7 +763,13 @@ def storm_decision(soc0_pct, *, storm_target_soc, discharge_kw, charge_kw,
         return {"state": "Storm Watch — Reserve Sufficient", "disch_kw": disch,
                 "charge_kw": 0.0, "charging": False, "override": False}
     disch = 0.0 if ev_active else discharge_kw
-    if soc0_pct < storm_target_soc - 1:
+    # Topping up toward the target only at a cheap/free rate (charge_ok) --
+    # at any price only while the reserve is below min_reserve_kwh, the
+    # minimum worth paying the peak rate for. 66% in hand and a peak rate
+    # is not a reason to buy.
+    below_minimum = (usable_kwh is not None and min_reserve_kwh is not None
+                     and usable_kwh < min_reserve_kwh)
+    if soc0_pct < storm_target_soc - 1 and (charge_ok or below_minimum):
         chg = ev_concurrent_charge_kw if ev_active else charge_kw
         return {"state": "Storm Watch — Charging", "disch_kw": disch,
                 "charge_kw": chg, "charging": True, "override": True}

@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.67.27 - 2026-10-24
+
+### Storm Watch
+- No longer "charge to 100% regardless of rates": with a reserve short of the estimated outage it tops up only at cheap/free rates, and pays the peak rate only while the battery couldn't cover the next `storm_fallback_hours` (10 h) of normal use; otherwise it holds (exports suspended)
+- Reports the cover in hours ("22 kWh — about 21 h of normal use") in its alert, status and `sensor.gridlock_storm_status` (`battery_hours`)
+
 ## 3.67.26 - 2026-10-24
 
 ### Fix

@@ -1043,3 +1043,26 @@ def test_equally_cheap_slots_are_charged_early():
     result = optimizer.solve(make_slots(rows, CHEAP), soc0_pct=0.0, cfg=cfg)
     charged = [result.slots[i]["charge"] for i in range(8)]
     assert sum(charged[:3]) >= sum(charged) - 1e-6, charged     # all of it in the first slots
+
+
+def _storm(soc, usable, expected, charge_ok, min_reserve):
+    return optimizer.storm_decision(soc, storm_target_soc=100.0, discharge_kw=10.0, charge_kw=10.0,
+                                    ev_concurrent_charge_kw=5.0, ev_active=False,
+                                    usable_kwh=usable, expected_load_kwh=expected,
+                                    charge_ok=charge_ok, min_reserve_kwh=min_reserve)
+
+
+def test_storm_watch_doesnt_buy_at_peak_with_a_decent_reserve():
+    # 66% (22 kWh) vs 27 h of use (30 kWh), peak rate, 10 h minimum (10 kWh): hold, don't buy.
+    d = _storm(66.0, 22.0, 30.0, charge_ok=False, min_reserve=10.0)
+    assert d["state"] == "Storm Watch — Holding" and d["charge_kw"] == 0.0
+
+
+def test_storm_watch_tops_up_at_a_cheap_rate():
+    d = _storm(66.0, 22.0, 30.0, charge_ok=True, min_reserve=10.0)
+    assert d["charging"] is True
+
+
+def test_storm_watch_buys_at_peak_only_below_the_minimum():
+    d = _storm(20.0, 6.5, 30.0, charge_ok=False, min_reserve=10.0)
+    assert d["charging"] is True
