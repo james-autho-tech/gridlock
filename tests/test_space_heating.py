@@ -49,7 +49,10 @@ def test_merge_tolerates_a_non_dict_file():
 def test_to_zone_cfg_maps_onto_the_yaml_zone_shape():
     cfg = to_zone_cfg(merge_settings({"target_temp": 19.5}))
     assert cfg["target_temp_constant"] == 19.5
-    assert "target_temp_entity" not in cfg
+    # The target follows Qing's thermostat setpoint; the constant is its fallback.
+    assert cfg["target_temp_entity"] == "climate.bedroom_4_qing_thermo"
+    assert cfg["target_temp_attribute"] == "temperature"
+    assert to_zone_cfg(merge_settings({"target_temp_entity": ""}))["target_temp_entity"] is None
     assert cfg["heat_share"] == 1.0
     assert cfg["control_entity"] == DEFAULTS["control_entity"]
     assert cfg["control_requires"] == DEFAULTS["control_requires"]

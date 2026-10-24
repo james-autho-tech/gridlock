@@ -1099,3 +1099,21 @@ def test_the_battery_plan_gets_two_days_of_heating(engine):
     assert day2 > 1.0, day2
     house = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]
     assert len(house["flow"]["plan"]) == 48          # the dashboard keeps its 24 h view
+
+
+def test_the_house_target_follows_qings_thermostat(engine):
+    g, _ = engine
+    _seed_house(g, room_temp="18.5")
+    with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
+        json.dump({"target_temp": 19}, f)
+    q = g.states["climate.bedroom_4_qing_thermo"]
+    q["attributes"]["temperature"] = 20.5
+    g._publish_thermal_forecast(g.get_now())
+    house = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]
+    assert house["target_temp"] == 20.5 and house["target_editable"] is True
+    # Thermostat switched off: the dashboard's own target stands in.
+    q["state"] = "off"
+    from datetime import timedelta
+    g._publish_thermal_forecast(g.get_now() + timedelta(minutes=5))
+    house = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]
+    assert house["target_temp"] == 19.0

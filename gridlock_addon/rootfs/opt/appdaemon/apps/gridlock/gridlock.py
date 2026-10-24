@@ -3953,13 +3953,23 @@ class GridLock(hass.Hass):
         if not ent:
             return zone.get("target_temp_constant")
         attr = zone["target_temp_attribute"]
+        value = None
         if attr:
-            v = self.get_state(ent, attribute=attr)
-            try:
-                return float(v) if v not in (None, "unknown", "unavailable") else None
-            except (ValueError, TypeError):
-                return None
-        return self.get_float_state(ent, None)
+            # A thermostat switched off (or gone) has no setpoint worth
+            # following -- the zone's own target stands in.
+            if self.get_state(ent) not in (None, "unknown", "unavailable", "off"):
+                v = self.get_state(ent, attribute=attr)
+                try:
+                    value = float(v) if v not in (None, "unknown", "unavailable") else None
+                except (ValueError, TypeError):
+                    value = None
+        else:
+            value = self.get_float_state(ent, None)
+        if value is None:
+            return zone.get("target_temp_constant")
+        # A room thermostat's setpoint, never a typo'd 200 -- the same
+        # bounds the dashboard applies (a tank setpoint is read as-is).
+        return min(30.0, max(5.0, value)) if attr else value
 
     def _thermal_external_temp(self, zone):
         if zone["external_temp_entity"]:
@@ -4332,7 +4342,7 @@ class GridLock(hass.Hass):
                 "is_tank": zone["is_tank"],
                 # Only the dashboard zone's target is GridLock's own to
                 # change; a yaml zone's comes from its target entity.
-                "target_editable": zone.get("source") == "dashboard" and not zone["target_temp_entity"],
+                "target_editable": zone.get("source") == "dashboard" and not zone.get("is_tank"),
                 # The model's own first-step decision (already reflects
                 # the anticipation-adjusted plan_curve and its hysteresis
                 # band) -- this is what active control, if enabled for
@@ -4519,7 +4529,7 @@ class GridLock(hass.Hass):
                 "heating_on": self._thermal_heating_on(zone),
                 "no_reading": True,
                 "is_tank": zone["is_tank"],
-                "target_editable": zone.get("source") == "dashboard" and not zone["target_temp_entity"],
+                "target_editable": zone.get("source") == "dashboard" and not zone.get("is_tank"),
                 "desired_heating_on": True,
                 "flow": None,
                 "dhw": None,

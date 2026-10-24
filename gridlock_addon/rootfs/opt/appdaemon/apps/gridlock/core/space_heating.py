@@ -38,9 +38,13 @@ DEFAULTS = {
     "internal_temp_entities": ["climate.bedroom_4_qing_thermo"],
     # Used whenever the room sensor above is unavailable.
     "internal_temp_fallback_entity": None,
-    # GridLock owns the target itself — there's deliberately no
-    # thermostat in the loop. Set from the GridWarm tab's ✏️ or −/+.
+    # The house target. Set from the GridWarm tab's ✏️ or −/+ -- or, with
+    # target_temp_entity set, followed from a room thermostat's own
+    # setpoint (turn the dial, GridWarm follows; −/+ on the dashboard
+    # writes back to it). This value is then the fallback whenever that
+    # thermostat is unavailable or switched off.
     "target_temp": 15.0,
+    "target_temp_entity": "climate.bedroom_4_qing_thermo",
     # The heat pump measures the outdoor temperature itself, at the
     # outdoor unit -- always present, no cloud. The forecast ahead comes
     # from whichever weather.* entity actually serves HA's get_forecasts
@@ -507,6 +511,7 @@ ENTITY_FIELDS = ("internal_temp_entity", "internal_temp_fallback_entity",
                  "thermal_power_entity", "flow_temp_entity", "return_temp_entity",
                  "compressor_entity", "water_flow_entity", "outdoor_voltage_entity",
                  "outdoor_current_entity", "defrost_entity", "mode_entity", "start_delta_entity",
+                 "target_temp_entity",
                  "heat_counter_entity", "elec_counter_entity")
 BOOL_FIELDS = ("configured", "tariff_optimise", "notify_external_commands")
 
@@ -585,6 +590,10 @@ def to_zone_cfg(settings):
         "internal_temp_entities": settings["internal_temp_entities"],
         "internal_temp_fallback_entity": settings["internal_temp_fallback_entity"],
         "target_temp_constant": settings["target_temp"],
+        "target_temp_entity": settings.get("target_temp_entity"),
+        # A climate entity's state is its mode; the setpoint is an attribute.
+        "target_temp_attribute": ("temperature" if str(settings.get("target_temp_entity") or "").startswith("climate.")
+                                  else None),
         "external_temp_entity": settings["external_temp_entity"],
         "weather_entity": settings["weather_entity"],
         "heating_entity": settings["heating_entity"],

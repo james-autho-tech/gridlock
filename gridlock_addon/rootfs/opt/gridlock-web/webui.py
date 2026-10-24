@@ -1195,7 +1195,8 @@ function renderSpaceHeatingSettings(s) {
       ${section('What GridWarm commands', 'The heat pump\'s own space-heating controls. Nothing is written until the mode is ACTIVE and the zone isn\'t paused.',
         entitySelect(s, 'control_entity', 'Space heating on/off switch', ['switch'], { hint: 'Blank = predict only, never command.' })
         + entitySelect(s, 'flow_entity', 'Flow temperature setpoint', ['number'], { hint: 'With this set, GridWarm modulates the flow temperature every tick to the lowest that meets the plan — that\'s where the COP comes from. Blank = on/off only.' })
-        + num('target_temp', 'Target °C', 0.5)
+        + entitySelect(s, 'target_temp_entity', 'Take the target from', ['climate'], { hint: 'A room thermostat whose setpoint GridWarm follows — turn its dial or use its app and GridWarm follows; −/+ here writes back to it. Blank = the target below only.' })
+        + num('target_temp', 'Target °C (or the fallback if that thermostat is off/unavailable)', 0.5)
         + num('control_safety_min_temp', 'Safety floor °C', 0.5, 'Heat regardless of plan below this.')
         + inp('name', 'Zone name')
         + chk('configured', 'Show this zone', 'predicted and shown on this tab')
@@ -3327,6 +3328,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             saved = load_gridwarm_settings()
             saved["target_temp"] = value
             save_gridwarm_settings(space_heating_diff(saved))
+            # Following a room thermostat: the −/+ writes back to it, so
+            # the two never disagree (the saved value is the fallback).
+            ent = merge_space_heating_settings(saved).get("target_temp_entity")
+            if ent and str(ent).startswith("climate."):
+                ha_call_service("climate/set_temperature", ent, temperature=value)
             self._send(200, json.dumps({"ok": True, "value": value}).encode(), "application/json")
         except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
             self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
@@ -3418,6 +3424,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                    "number": [e for e in ids if e.split(".")[0] in ("number", "input_number")],
                    "sensor": [e for e in ids if e.startswith("sensor.")],
                    "weather": [e for e in ids if e.startswith("weather.")],
+                   "climate": [e for e in ids if e.startswith("climate.")],
                    "names": {e: ((st.get("attributes") or {}).get("friendly_name") or e)
                              for e, st in states.items()}}
             self._send(200, json.dumps(out).encode(), "application/json")

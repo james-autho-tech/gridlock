@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.67.22 - 2026-10-24
+
+### GridWarm
+- House target can follow a room thermostat's setpoint ("Take the target from", default Qing's Tado): turn its dial or use its app and GridWarm follows; the dashboard −/+ writes back to it. The dashboard target is the fallback while it's off or unavailable
+
 ## 3.67.21 - 2026-10-23
 
 ### Battery
