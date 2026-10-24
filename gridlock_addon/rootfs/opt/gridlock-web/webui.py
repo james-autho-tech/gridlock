@@ -1188,7 +1188,7 @@ function renderSpaceHeatingSettings(s) {
             cur.forEach(e => { if (!ids.includes(e)) ids.push(e); });
             return ids.sort((a, b) => entityLabel(a).localeCompare(entityLabel(b))).map(e => `<option value="${esc(e)}" ${cur.includes(e) ? 'selected' : ''}>${esc(entityLabel(e))}</option>`).join('');
           })()}</select><div style="color:var(--dim);font-size:10px;margin-top:2px">Ctrl/Cmd-click to pick several. Every one that's reporting is averaged.</div></div>`
-        + entitySelect(s, 'internal_temp_entity', 'Room temperature if none of those report', ['temperature'], { allowBlank: false, hint: 'A climate entity\'s current temperature is read automatically.' })
+        + entitySelect(s, 'internal_temp_entity', 'Room temperature if none of those report', ['temperature'], { hint: 'Blank = weather compensation (low flow, from the outdoor temperature) until a room reads again. A climate entity\'s current temperature is read automatically.' })
         + entitySelect(s, 'internal_temp_fallback_entity', 'Fallback room temperature', ['temperature', 'sensor'], { hint: 'Used whenever the one above is unavailable. The heat pump\'s own controller has a thermometer (its "Ta" sensor, once enabled on the unit) — coarse, but better than nothing.' })
         + entitySelect(s, 'external_temp_entity', 'Outdoor temperature', ['temperature', 'sensor'], { hint: 'Blank = auto: the weather entity\'s own reading.' })
         + entitySelect(s, 'weather_entity', 'Weather forecast', ['weather'], { hint: 'Blank = auto: whichever weather entity actually serves hourly forecasts (not all do).' }))}

@@ -177,6 +177,10 @@ def test_dashboard_zone_plans_flow_and_commands_the_heat_pump(engine):
 def test_fallback_room_sensor_is_used_when_the_primary_is_unavailable(engine):
     g, _ = engine
     _seed_house(g)
+    # A fallback has to be chosen now (none by default -- the unit's Ta
+    # reads a fixed 25 °C once its flag is off).
+    with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
+        json.dump({"internal_temp_entity": "sensor.loft_heatpump_controller_room_temperature_ta"}, f)
     for e in TADO:
         g.states[e] = {"state": "unavailable", "attributes": {}}
     g.states["sensor.loft_heatpump_controller_room_temperature_ta"]["state"] = "22"

@@ -24,13 +24,14 @@ DEFAULTS = {
     # commanded) without losing the rest of the settings.
     "configured": True,
     "name": "House",
-    # The one room thermometer the model treats as "the house". The heat
-    # pump's own wired controller has a thermometer in it: with the
-    # unit's "supports room temperature sensor Ta" installer flag on it
-    # reports it here at 1 °C resolution -- coarse, but always there,
-    # which a battery/Thread thermostat is not. A climate.* entity's
-    # current_temperature is read automatically if one is chosen instead.
-    "internal_temp_entity": "sensor.loft_heatpump_controller_room_temperature_ta",
+    # Fallback room thermometer, used only when every room below is
+    # unavailable. None: GridWarm then falls back to weather compensation
+    # (heat for the outdoor temperature, low flow cap) until a room reads
+    # again. Don't point this at the unit's own Ta sensor once the unit's
+    # Ta flag is off -- it then reports a fixed 25 °C, which would look
+    # like a warm house and never heat. A climate.* entity's
+    # current_temperature is read automatically if one is chosen.
+    "internal_temp_entity": None,
     # Rooms averaged into "the house" temperature -- every one that's
     # reporting counts, so the house is heated to how it is as a whole
     # rather than to its warmest spot. When this list is set, the single

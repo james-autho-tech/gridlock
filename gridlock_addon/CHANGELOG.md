@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.67.23 - 2026-10-24
+
+### GridWarm
+- No fallback room sensor by default (was the unit's Ta). With the unit's Ta flag off, Ta reads a fixed 25 °C, which would look like a warm house and never heat; with no room reading GridWarm uses weather compensation until one returns. The fallback can be left blank in the form
+
 ## 3.67.22 - 2026-10-24
 
 ### GridWarm
