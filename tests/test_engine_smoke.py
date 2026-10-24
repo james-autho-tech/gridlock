@@ -1121,3 +1121,16 @@ def test_the_house_target_follows_qings_thermostat(engine):
     g._publish_thermal_forecast(g.get_now() + timedelta(minutes=5))
     house = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]
     assert house["target_temp"] == 19.0
+
+
+def test_turning_qings_dial_replans_within_the_30s_watch(engine):
+    g, _ = engine
+    _seed_house(g, room_temp="18.5")
+    q = g.states["climate.bedroom_4_qing_thermo"]
+    q["attributes"]["temperature"] = 19.0
+    g._publish_thermal_forecast(g.get_now())
+    g._watch_dashboard_settings({})           # first look: remembers what's there
+    q["attributes"]["temperature"] = 20.0      # the dial turned
+    g._watch_dashboard_settings({})
+    house = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["House"]
+    assert house["target_temp"] == 20.0

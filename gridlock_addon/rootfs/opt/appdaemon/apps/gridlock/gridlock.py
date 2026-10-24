@@ -938,6 +938,7 @@ class GridLock(hass.Hass):
         # A setting changed on the dashboard (target, hot water...) re-plans
         # the heat pump within 30 s instead of waiting for the next tick.
         self._dash_mtime_seen = None
+        self._dash_targets_seen = None
         self.run_every(self._watch_dashboard_settings, "now+30", 30)
 
     # ------------------------------------------------------------------
@@ -4396,15 +4397,25 @@ class GridLock(hass.Hass):
                 and str(live).strip().lower() == str(zone["heating_entity_state"]).strip().lower())
 
     def _watch_dashboard_settings(self, kwargs):
+        """Re-plan within 30 s of a change the user just made -- the
+        dashboard's settings file, or the setpoint of a thermostat a zone
+        takes its target from (turning Qing's dial) -- rather than at the
+        next 5-minute tick."""
         try:
             mtime = os.path.getmtime(self._dashboard_path("gridwarm_settings.json"))
         except OSError:
+            mtime = 0.0          # no file yet (all defaults) -- still watch the thermostat
+        try:
+            zones = self._ui_space_heating_zone()[0] or []
+        except Exception:  # noqa: BLE001 — the regular tick still runs
+            zones = []
+        targets = {z["name"]: self._thermal_target_temp(z) for z in zones
+                   if z.get("target_temp_entity") and z.get("target_temp_attribute")}
+        if getattr(self, "_dash_mtime_seen", None) is None:
+            self._dash_mtime_seen, self._dash_targets_seen = mtime, targets
             return
-        if self._dash_mtime_seen is None:
-            self._dash_mtime_seen = mtime
-            return
-        if mtime != self._dash_mtime_seen:
-            self._dash_mtime_seen = mtime
+        if mtime != self._dash_mtime_seen or targets != getattr(self, "_dash_targets_seen", None):
+            self._dash_mtime_seen, self._dash_targets_seen = mtime, targets
             try:
                 self._publish_thermal_forecast(self.get_now())
             except Exception as exc:  # noqa: BLE001 — the regular tick still runs

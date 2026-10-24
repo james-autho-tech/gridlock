@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.67.24 - 2026-10-24
+
+### GridWarm
+- A change to the followed thermostat's setpoint is acted on within 30 s (same watch as dashboard settings), not at the next 5-minute tick
+
 ## 3.67.23 - 2026-10-24
 
 ### GridWarm
