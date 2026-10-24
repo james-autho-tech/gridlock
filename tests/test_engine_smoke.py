@@ -1150,3 +1150,20 @@ def test_night_setback_dips_overnight_and_is_warm_again_by_six(engine):
     assert by_time["12:00"]["target"] == 20.0                    # the day
     six = by_time["06:00"]
     assert six["target"] == 20.0 and six["temp"] >= 19.8 - 0.05, six   # warm again by 06:00
+
+
+def test_an_old_unplanned_fault_doesnt_trigger_storm_watch(engine):
+    g, _ = engine
+    from datetime import timedelta
+    now = g.get_now()
+    fault = {"ref": "UF1", "type": "LV", "restore": (now + timedelta(hours=27)).isoformat()}
+    g.ssen_state = {"local": 1, "planned": 0, "severe": False, "faults": [fault]}
+    g.storm_sources = []                                     # no weather alerts in the fake
+    g.ssen_postcode = "GU7 2"
+    g._ssen_first_seen = {"UF1": (now - timedelta(hours=20)).isoformat()}
+    assert g.storm_active() is None                         # open 20 h, we kept power: not ours
+    g._ssen_first_seen = {"UF1": (now - timedelta(minutes=30)).isoformat()}
+    assert g.storm_active()                                  # fresh: prepare
+    g._ssen_first_seen = {"UF1": (now - timedelta(hours=20)).isoformat()}
+    g.ssen_state["faults"] = [dict(fault, type="PSI")]
+    assert g.storm_active()                                  # planned interruptions always count

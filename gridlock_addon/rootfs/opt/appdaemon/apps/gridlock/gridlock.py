@@ -92,6 +92,11 @@ THERMAL_HORIZON_STEPS = SLOT_MIN * HORIZON_SLOTS // THERMAL_STEP_MIN
 # so this is thermal output divided by the modelled COP.
 HEATPUMP_POWER_ENTITY = "sensor.gridlock_heatpump_power"
 
+# An unplanned SSEN fault in the postcode counts for Storm Watch only this
+# long after it first appears -- still open after that with this house on
+# grid, it's on someone else's supply.
+STORM_FAULT_FRESH_HOURS = 2.0
+
 # A compressor running at or below this speed is near the bottom of its
 # range; only there does its output say anything about the minimum it can
 # turn down to. Inverter heat pumps typically bottom out around 15-25 Hz.
@@ -725,6 +730,9 @@ class GridLock(hass.Hass):
             "https://external.distribution.prd.ssen.co.uk"
             "/opendataportal-prd/v4/api/getallfaults")
         self.ssen_state = {"local": 0, "planned": 0, "severe": False, "faults": []}
+        # When each SSEN fault ref was first seen (persisted, so a restart
+        # doesn't make an old fault look new again).
+        self._ssen_first_seen = self._load_json("ssen_first_seen.json", {}) or {}
 
         self.compare_tariffs = a.get("compare_tariffs", [])
 
@@ -1930,6 +1938,14 @@ class GridLock(hass.Hass):
             return
         prev = self.ssen_state
         self.ssen_state = self.parse_ssen(data)
+        now_iso = self.get_now().isoformat()
+        refs = {f.get("ref") for f in self.ssen_state["faults"] if f.get("ref")}
+        seen = {r: t for r, t in self._ssen_first_seen.items() if r in refs}
+        for r in refs:
+            seen.setdefault(r, now_iso)
+        if seen != self._ssen_first_seen:
+            self._ssen_first_seen = seen
+            self._save_json("ssen_first_seen.json", seen)
         self.set_state("sensor.gridlock_ssen_local_outages",
                        state=str(self.ssen_state["local"]),
                        attributes={"friendly_name": "SSEN Outages (local)",
@@ -2208,7 +2224,7 @@ class GridLock(hass.Hass):
         there's no such estimate at all (a weather-alert or manual-override
         trigger neither carry one) or it can't be parsed."""
         times = []
-        for f in self.ssen_state.get("faults", []):
+        for f in self._storm_faults():
             r = f.get("restore")
             if not r:
                 continue
@@ -2226,12 +2242,34 @@ class GridLock(hass.Hass):
         return sum(self.load_provider.load_kwh(now + timedelta(minutes=30 * i))
                    for i in range(n_slots))
 
+    def _storm_faults(self):
+        """The SSEN faults worth preparing for: a planned interruption, or
+        an unplanned fault first seen under STORM_FAULT_FRESH_HOURS ago.
+        An unplanned fault that has been open longer while this house kept
+        its power isn't on this supply -- one open since the evening before
+        had Storm Watch buying to 100% at the peak rate, sized to the 27 h
+        until SSEN expected to fix someone else's cable."""
+        out = []
+        now = self.get_now()
+        for f in self.ssen_state.get("faults", []):
+            if f.get("type") == "PSI":
+                out.append(f)
+                continue
+            first = (getattr(self, "_ssen_first_seen", {}) or {}).get(f.get("ref"))
+            try:
+                age_h = (now - self._iso(first)).total_seconds() / 3600.0 if first else 0.0
+            except (ValueError, TypeError):
+                age_h = 0.0
+            if age_h < STORM_FAULT_FRESH_HOURS:
+                out.append(f)
+        return out
+
     def storm_active(self):
         if self.get_state("input_boolean.gridlock_storm_watch") == "on":
             return "manual override"
-        if self.ssen_state.get("local", 0) > 0:
-            n = self.ssen_state["local"]
-            return f"SSEN outage at {self.ssen_postcode} ({n} fault(s))"
+        faults = self._storm_faults()
+        if faults:
+            return f"SSEN outage at {self.ssen_postcode} ({len(faults)} fault(s))"
         for ent, severity in self.storm_sources:
             if not ent or not self.entity_exists(ent):
                 continue

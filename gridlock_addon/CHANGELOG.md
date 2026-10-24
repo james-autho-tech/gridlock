@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.67.26 - 2026-10-24
+
+### Fix
+- Storm Watch ignores an unplanned SSEN fault in the postcode once it has been open 2 h without this house losing power (first-seen times persisted). A fault open since the previous evening had it charging to 100% at the 34p peak rate, sized to the 27 h until SSEN expected to fix someone else's supply. Planned interruptions and weather alerts still count
+
 ## 3.67.25 - 2026-10-24
 
 ### GridWarm
