@@ -1236,3 +1236,34 @@ def test_axle_is_off_without_a_key_and_follows_the_schedule_with_one(engine, mon
     (tmp_path / "axle_settings.json").write_text(json.dumps({}))
     g.poll_axle({})
     assert g._axle_events == [] and g.published["sensor.gridlock_axle"]["state"] == "Off"
+
+
+def test_car_charge_reported_but_only_commanded_with_charge_assist_on(engine, tmp_path):
+    """EDF's smart charging runs the car through the charger; GridLock
+    commanding the car too fought it (and failed on an unpaired key). The
+    car's charge is always reported; commands only with assist turned on."""
+    g, gridlock = engine
+    stem = "driveway_qing_mobile"
+    g.ev_vehicle_stems = [stem]
+    g.ev_vehicle_last_commanded = {stem: None}
+    g.ent_import_rate, g.ent_dispatch = "sensor.rate", None
+    g.states.update({
+        "sensor.rate": {"state": "0.05", "attributes": {}},
+        f"sensor.{stem}_charging": {"state": "charging", "attributes": {}},
+        f"sensor.{stem}_battery_level": {"state": "62",
+                                         "attributes": {"friendly_name": "Driveway Qing Mobile Battery level"}},
+        f"number.{stem}_charge_limit": {"state": "80", "attributes": {}},
+        f"sensor.{stem}_battery_range": {"state": "320.4", "attributes": {}},
+        f"sensor.{stem}_charger_power": {"state": "7.1", "attributes": {}},
+    })
+    g._log_decision = lambda *a, **k: None
+
+    g._manage_ev_charge_assist()
+    assert not [c for c in g.calls if c[0].startswith("switch/")]
+    car = g.published["sensor.gridlock_ev_charge_assist"]["attributes"]["vehicles"][stem]
+    assert car["battery_pct"] == 62 and car["charge_limit_pct"] == 80 and car["name"] == "Driveway Qing Mobile"
+    assert g.published["sensor.gridlock_ev_charge_assist"]["state"] == "Driveway Qing Mobile: 62% (charging)"
+
+    (tmp_path / "ev_schedule_settings.json").write_text(json.dumps({"charge_assist": True}))
+    g._manage_ev_charge_assist()
+    assert [c for c in g.calls if c[0] == "switch/turn_on"]

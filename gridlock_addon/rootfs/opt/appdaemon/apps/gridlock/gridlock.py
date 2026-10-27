@@ -2415,27 +2415,37 @@ class GridLock(hass.Hass):
             self.ent_import_rate, self.default_import) <= self.cheap_rate
         if self.ent_dispatch and self.get_state(self.ent_dispatch) == "on":
             in_cheap_window = True
+        # Reported always; only commanded when the user turns charge assist
+        # on — off by default, since a supplier's smart charging (EDF's,
+        # through the charger) usually runs the car and two controllers
+        # would fight.
+        assist_on = bool(self._load_dashboard_json("ev_schedule_settings.json", {}).get("charge_assist"))
         vehicles = {}
         for stem in self.ev_vehicle_stems:
             charging_state = self.get_state(f"sensor.{stem}_charging")
             plugged_in = bool(charging_state) and charging_state not in (
                 "disconnected", "unavailable", "unknown")
-            battery_pct = self.get_float_state(f"sensor.{stem}_battery_level", None) \
-                if plugged_in else None
-            charge_limit_pct = self.get_float_state(f"number.{stem}_charge_limit", None) \
-                if plugged_in else None
+            battery_pct = self.get_float_state(f"sensor.{stem}_battery_level", None)
+            charge_limit_pct = self.get_float_state(f"number.{stem}_charge_limit", None)
+            name = str(self.get_state(f"sensor.{stem}_battery_level", attribute="friendly_name") or stem)
+            name = re.sub(r"\s*battery level$", "", name, flags=re.I) or stem
             command = core_ev_charge_assist.should_charge(
-                battery_pct, charge_limit_pct, in_cheap_window) if plugged_in else False
+                battery_pct, charge_limit_pct, in_cheap_window) if (plugged_in and assist_on) else False
             # _json_safe(), not the raw None — a None reaching HA's state
             # attributes silently breaks serialisation (confirmed live:
             # the whole nested vehicle dict came back empty, not just
             # this one field), the same failure mode _json_safe was
             # already built to guard plan_table cells against.
-            vehicles[stem] = {"plugged_in": plugged_in,
+            vehicles[stem] = {"name": name, "plugged_in": plugged_in,
+                               "charging_state": str(charging_state or "unknown"),
                                "battery_pct": self._json_safe(battery_pct),
                                "charge_limit_pct": self._json_safe(charge_limit_pct),
+                               "range_km": self._json_safe(
+                                   self.get_float_state(f"sensor.{stem}_battery_range", None)),
+                               "charger_kw": self._json_safe(
+                                   self.get_float_state(f"sensor.{stem}_charger_power", None)),
                                "charging": command}
-            if not plugged_in:
+            if not plugged_in or not assist_on:
                 self.ev_vehicle_last_commanded[stem] = None
                 continue
             if command == self.ev_vehicle_last_commanded.get(stem):
@@ -2449,12 +2459,14 @@ class GridLock(hass.Hass):
                 f"EV Charge Assist: {stem} {'charging' if command else 'idle'}",
                 f"{stem} at {battery_pct}% (target {charge_limit_pct}%), "
                 f"{'a cheap/dispatch window is active' if in_cheap_window else 'no cheap/dispatch window right now'}")
-        plugged = [s for s, v in vehicles.items() if v["plugged_in"]]
-        overview = ", ".join(f"{s}: {'charging' if vehicles[s]['charging'] else 'waiting'}"
-                              for s in plugged) if plugged else "no vehicle connected"
-        self.set_state("sensor.gridlock_ev_charge_assist", state=overview,
+        overview = ", ".join(
+            f"{v['name']}: {v['battery_pct']:.0f}% ({v['charging_state']})"
+            if isinstance(v["battery_pct"], (int, float)) else f"{v['name']}: {v['charging_state']}"
+            for v in vehicles.values()) or "no vehicle"
+        self.set_state("sensor.gridlock_ev_charge_assist", state=overview[:255],
                        attributes={"friendly_name": "GridLock EV Charge Assist",
                                    "icon": "mdi:ev-station",
+                                   "assist_enabled": assist_on,
                                    "in_cheap_window": in_cheap_window,
                                    "vehicles": vehicles})
 

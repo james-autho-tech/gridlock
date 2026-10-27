@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.68.1 - 2026-10-27
+
+### EV
+- Overview shows a tile per discovered car: charge %, bar against its charge limit, charging state, charger kW and range
+- GridLock no longer starts/stops the car's charging unless **GridLock controls charging** is ticked on that tile (off by default) — a supplier's smart charging through the charger usually runs the car, and two controllers fight
+- Saving the EV Charging (Agile) card no longer drops other EV settings
+
 ## 3.68.0 - 2026-10-27
 
 ### Axle grid events (optional)

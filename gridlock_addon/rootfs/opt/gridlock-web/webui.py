@@ -377,6 +377,9 @@ def build_status():
         "mode_override": (get("input_select.gridlock_mode_override") or {}).get("state", "auto"),
         "cheap_rate_p": (status_attrs.get("cheap_rate_threshold") or 0.10) * 100,
         "ev_planned_kwh": ev_dispatch.get("state", "0.00"),
+        "evs": list(((get("sensor.gridlock_ev_charge_assist") or {}).get("attributes", {})
+                     .get("vehicles") or {}).values()),
+        "ev_charge_assist": bool(load_ev_schedule_settings().get("charge_assist")),
         "log_entries": list(reversed(decision_log.get("attributes", {}).get("entries") or [])),
         "solar_today_kwh": solar.get("attributes", {}).get("today_kwh", 0),
         "solar_tomorrow_kwh": solar.get("attributes", {}).get("tomorrow_kwh", 0),
@@ -2085,6 +2088,30 @@ function renderEvSchedule(ev) {
     </div>
   </div>`;
 }
+// One tile per car: charge level against its limit, state and range.
+function renderEvTiles(evs, assistOn) {
+  return (evs || []).map(v => {
+    const pct = typeof v.battery_pct === 'number' ? v.battery_pct : null;
+    const limit = typeof v.charge_limit_pct === 'number' ? v.charge_limit_pct : null;
+    const kw = typeof v.charger_kw === 'number' && v.charger_kw > 0 ? ` · ${v.charger_kw.toFixed(1)} kW` : '';
+    const range = typeof v.range_km === 'number' ? ` · ${Math.round(v.range_km)} km` : '';
+    const bar = pct === null ? '' : `<div class="gl-soc-mini-track" style="margin-top:4px;position:relative;width:100%"><div class="gl-soc-mini-fill" style="width:${Math.max(0, Math.min(100, pct))}%"></div>${limit === null ? '' : `<div style="position:absolute;top:-2px;bottom:-2px;left:${limit}%;width:2px;background:var(--ink);opacity:.6"></div>`}</div>`;
+    return `<div class="gl-tile"><div class="lbl">${esc(v.name || 'EV')}</div>
+      <div class="val num" style="color:var(--cyan)">${pct === null ? '—' : Math.round(pct) + '%'}</div>${bar}
+      <div style="color:var(--dim);font-size:10px;margin-top:4px">${limit === null ? '' : `limit ${Math.round(limit)}% · `}${esc(String(v.charging_state || '').toLowerCase())}${kw}${range}</div>
+      <label style="color:var(--dim);font-size:10px;display:flex;gap:4px;align-items:center;margin-top:4px" title="Off: the car's charging is left to your supplier's smart charging. On: GridLock starts and stops it itself in cheap windows."><input type="checkbox" ${assistOn ? 'checked' : ''} onchange="setEvAssist(this.checked)">GridLock controls charging</label></div>`;
+  }).join('');
+}
+async function setEvAssist(on) {
+  try {
+    const resp = await fetch('api/ev-assist', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: on }),
+    });
+    if (!resp.ok) window.alert('Failed to save.');
+  } catch (e) { window.alert('Failed to save — network error.'); }
+  refresh();
+}
 let axleBusy = false;
 function renderAxle(ax) {
   ax = ax || {};
@@ -3103,6 +3130,7 @@ async function refresh() {
           <div class="gl-tile"><div class="lbl">Plan cost 24h</div><div class="val num" style="color:${Number(d.plan_cost_24h) <= 0 ? 'var(--green)' : 'var(--amber)'}">£${Number(d.plan_cost_24h).toFixed(2)}</div>${sparkline(planCol(d.plan_table, 'total_gbp'), 'var(--cyan)')}</div>
           <div class="gl-tile"><div class="lbl">Best tariff</div><div class="val" style="font-size:16px">${d.best_tariff}</div></div>
           <div class="gl-tile"><div class="lbl">EV planned</div><div class="val num" style="color:var(--cyan)">${d.ev_planned_kwh} kWh</div></div>
+          ${renderEvTiles(d.evs, d.ev_charge_assist)}
         </div>
         <div class="gl-bar">
           <div class="lbl"><span>Battery ${Math.round(d.soc)}%</span><span>target ${Math.round(d.target)}%</span></div>
@@ -3351,6 +3379,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_warranty_delete()
         elif path.endswith("/api/ev-schedule"):
             self._handle_ev_schedule()
+        elif path.endswith("/api/ev-assist"):
+            self._handle_ev_assist()
         elif path.endswith("/api/axle"):
             self._handle_axle()
         else:
@@ -3684,9 +3714,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send(400, json.dumps(
                     {"error": "high_price_notify_p must be a number"}).encode(), "application/json")
                 return
-            settings = {"daily_charge_hours": hours, "high_price_notify_p": notify_p}
+            settings = {**load_ev_schedule_settings(),
+                        "daily_charge_hours": hours, "high_price_notify_p": notify_p}
             save_ev_schedule_settings(settings)
             self._send(200, json.dumps({"ok": True, **settings}).encode(), "application/json")
+        except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
+            self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
+
+    def _handle_ev_assist(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+            settings = {**load_ev_schedule_settings(), "charge_assist": bool(body.get("enabled"))}
+            save_ev_schedule_settings(settings)
+            self._send(200, json.dumps({"ok": True, "charge_assist": settings["charge_assist"]}).encode(),
+                       "application/json")
         except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
             self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
 
