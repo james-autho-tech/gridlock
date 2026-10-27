@@ -2093,7 +2093,7 @@ function renderEvTiles(evs, assistOn) {
   return (evs || []).map(v => {
     const pct = typeof v.battery_pct === 'number' ? v.battery_pct : null;
     const limit = typeof v.charge_limit_pct === 'number' ? v.charge_limit_pct : null;
-    const kw = typeof v.charger_kw === 'number' && v.charger_kw > 0 ? ` · ${v.charger_kw.toFixed(1)} kW` : '';
+    const kw = typeof v.charger_kw === 'number' && v.charger_kw > 0.05 ? ` · ${v.charger_kw.toFixed(1)} kW` : '';
     const range = typeof v.range_km === 'number' ? ` · ${Math.round(v.range_km)} km` : '';
     const bar = pct === null ? '' : `<div class="gl-soc-mini-track" style="margin-top:4px;position:relative;width:100%"><div class="gl-soc-mini-fill" style="width:${Math.max(0, Math.min(100, pct))}%"></div>${limit === null ? '' : `<div style="position:absolute;top:-2px;bottom:-2px;left:${limit}%;width:2px;background:var(--ink);opacity:.6"></div>`}</div>`;
     return `<div class="gl-tile"><div class="lbl">${esc(v.name || 'EV')}</div>

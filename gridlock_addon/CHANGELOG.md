@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.68.2 - 2026-10-27
+
+### Fix
+- Car tiles no longer show "0.0 kW" for an idle charger
+
 ## 3.68.1 - 2026-10-27
 
 ### EV
