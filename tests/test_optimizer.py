@@ -1066,3 +1066,13 @@ def test_storm_watch_tops_up_at_a_cheap_rate():
 def test_storm_watch_buys_at_peak_only_below_the_minimum():
     d = _storm(20.0, 6.5, 30.0, charge_ok=False, min_reserve=10.0)
     assert d["charging"] is True
+
+
+def test_storm_watch_tops_up_on_the_cheap_rate_even_with_enough_banked():
+    d = _storm(60.0, 20.0, 8.0, charge_ok=True, min_reserve=6.0)
+    assert d["charging"] is True
+
+
+def test_storm_watch_stands_down_at_peak_with_enough_banked():
+    d = _storm(60.0, 20.0, 8.0, charge_ok=False, min_reserve=6.0)
+    assert d["state"] == "Storm Watch — Reserve Sufficient" and d["override"] is False

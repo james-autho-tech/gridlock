@@ -740,7 +740,7 @@ def solve(slots, soc0_pct, cfg, *, today_date=None):
 def storm_decision(soc0_pct, *, storm_target_soc, discharge_kw, charge_kw,
                     ev_concurrent_charge_kw, ev_active,
                     usable_kwh=None, expected_load_kwh=None,
-                    charge_ok=True, min_reserve_kwh=None):
+                    charge_ok=False, min_reserve_kwh=None):
     """Pure port of the live Storm Watch override — charge to
     storm_target_soc regardless of price/peak-block, then hold (no
     exports). Deliberately not run through the LP: storm duration is
@@ -757,8 +757,12 @@ def storm_decision(soc0_pct, *, storm_target_soc, discharge_kw, charge_kw,
     has nothing left to protect against for this slot — "override": False
     tells the caller to run its own normal price-optimised action instead
     of forcing charge/hold against a risk that's already covered."""
+    # On a cheap/free rate a top-up is cheap insurance whatever the
+    # reserve already covers -- the "sufficient, carry on as normal"
+    # stand-down only applies when charging would cost the peak rate.
     if (usable_kwh is not None and expected_load_kwh is not None
-            and usable_kwh >= expected_load_kwh):
+            and usable_kwh >= expected_load_kwh
+            and not (charge_ok and soc0_pct < storm_target_soc - 1)):
         disch = 0.0 if ev_active else discharge_kw
         return {"state": "Storm Watch — Reserve Sufficient", "disch_kw": disch,
                 "charge_kw": 0.0, "charging": False, "override": False}
@@ -769,7 +773,9 @@ def storm_decision(soc0_pct, *, storm_target_soc, discharge_kw, charge_kw,
     # is not a reason to buy.
     below_minimum = (usable_kwh is not None and min_reserve_kwh is not None
                      and usable_kwh < min_reserve_kwh)
-    if soc0_pct < storm_target_soc - 1 and (charge_ok or below_minimum):
+    # No price information at all (min_reserve_kwh None, the original
+    # contract) keeps the original "charge to the target" behaviour.
+    if soc0_pct < storm_target_soc - 1 and (charge_ok or below_minimum or min_reserve_kwh is None):
         chg = ev_concurrent_charge_kw if ev_active else charge_kw
         return {"state": "Storm Watch — Charging", "disch_kw": disch,
                 "charge_kw": chg, "charging": True, "override": True}

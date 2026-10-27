@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.67.28 - 2026-10-27
+
+### Storm Watch
+- On a cheap or free rate it tops up toward its target even when the reserve already covers the estimated outage; the "enough banked, carry on" stand-down now only applies when charging would cost the peak rate
+
 ## 3.67.27 - 2026-10-24
 
 ### Storm Watch
