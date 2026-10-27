@@ -554,6 +554,21 @@ def test_ev_dispatch_slot_caps_charge_rate_and_blocks_export():
     )
 
 
+def test_ev_slot_solar_feeds_the_car_not_the_battery():
+    """Live "EV Protection" locks the battery at 0 while the car charges, so
+    surplus PV goes to the car. The plan used to bank that PV in the battery
+    instead (SoC 33% -> 70% across a dispatch) while live it never moved."""
+    rows = [{"imp": CHEAP, "exp": 0.04, "load": 0.5, "pv": 2.5,
+             "dispatch": True, "ev_kwh": 3.7}]
+    cfg = base_cfg(battery_kwh=20.0, charge_kw=0.0, ev_concurrent_charge_kw=0.0)
+
+    result = optimizer.solve(make_slots(rows, CHEAP), soc0_pct=30.0, cfg=cfg)
+    assert not result.infeasible
+    assert abs(result.trace[0] - 30.0) < 1e-3, "battery must not take PV while the EV charges"
+    # 2.0 kWh of surplus PV offsets the car: only 1.7 kWh is imported for it.
+    assert abs(result.cost_trace[0]["delta"] - CHEAP * 1.7) < 1e-3
+
+
 def test_ev_charging_cost_is_folded_into_cost_trace_delta():
     """A real Plan table row showed grid_kwh 0.27, EV 3.70kWh, import 3.5p
     and a cost_delta of only +0.9p — 0.27 x 3.5p, with the 3.7kWh of EV

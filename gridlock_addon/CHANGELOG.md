@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.67.29 - 2026-10-27
+
+### Fix
+- The plan now locks the battery while the EV charges, matching live EV Protection: no solar into the battery in those slots, so surplus PV feeds the car instead of being banked. It had shown the battery filling from solar across a dispatch (33% → 70%) while the real battery never moved. Cheap grid charging alongside the car is still allowed up to `ev_concurrent_charge_kw`
+
 ## 3.67.28 - 2026-10-27
 
 ### Storm Watch

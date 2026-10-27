@@ -194,6 +194,11 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
     pv_to_load = [pulp.LpVariable(f"pv_load_{i}", 0) for i in range(n)]
     pv_to_batt = [pulp.LpVariable(f"pv_batt_{i}", 0) for i in range(n)]
     pv_to_grid = [pulp.LpVariable(f"pv_grid_{i}", 0) for i in range(n)]
+    # PV feeding the EV directly while it charges — live "EV Protection"
+    # locks the battery at 0, so any PV beyond the house load goes to the
+    # car (then export), never into the battery.
+    pv_to_ev = [pulp.LpVariable(f"pv_ev_{i}", 0, max(0.0, s.get("ev_kwh", 0.0)))
+                for i, s in enumerate(slots)]
     batt_to_load = [pulp.LpVariable(f"batt_load_{i}", 0, max_d) for i in range(n)]
     grid_to_load = [pulp.LpVariable(f"grid_load_{i}", 0) for i in range(n)]
     soc = [pulp.LpVariable(f"soc_{i}", floor_kwh, cap) for i in range(n)]
@@ -238,8 +243,9 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
 
     for i, s in enumerate(slots):
         pv, load, imp, exp = s["pv"], s["load"], s["imp"], s["exp"]
+        ev_locked = s.get("ev_kwh", 0.0) > 0 or bool(s.get("dispatch"))
 
-        prob += pv_to_load[i] + pv_to_batt[i] + pv_to_grid[i] == pv
+        prob += pv_to_load[i] + pv_to_batt[i] + pv_to_grid[i] + pv_to_ev[i] == pv
         prob += pv_to_load[i] + eff * batt_to_load[i] + grid_to_load[i] == load
         prob += batt_to_load[i] + batt_to_export[i] <= max_d
 
@@ -299,9 +305,14 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
         # likely reason a fixed 1e5 constant took hours to solve on real
         # data. Using pv directly removes that risk without changing
         # what's actually allowed.
-        battery_full = pulp.LpVariable(f"batt_full_{i}", cat="Binary")
-        prob += soc[i] >= (cap - full_tol_kwh) * battery_full
-        prob += pv_to_grid[i] <= pv * battery_full
+        if ev_locked:
+            # Battery locked while the EV charges: no PV into it, so the
+            # fill-before-export rule doesn't apply this slot.
+            prob += pv_to_batt[i] == 0
+        else:
+            battery_full = pulp.LpVariable(f"batt_full_{i}", cat="Binary")
+            prob += soc[i] >= (cap - full_tol_kwh) * battery_full
+            prob += pv_to_grid[i] <= pv * battery_full
 
         prev = soc0_kwh if i == 0 else soc[i - 1]
         prob += soc[i] == prev + eff * (charge[i] + pv_to_batt[i]) \
@@ -449,7 +460,7 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
         # IOG window) — folded in here rather than tracked as a separate
         # figure so cost_delta_p/total_gbp are the true total spend, not
         # an approximation that quietly excludes EV.
-        grid_cost_terms.append(imp * (grid_in + s.get("ev_kwh", 0.0)) - exp * grid_out)
+        grid_cost_terms.append(imp * (grid_in + s.get("ev_kwh", 0.0) - pv_to_ev[i]) - exp * grid_out)
 
         # Octoplus Power Down (formerly Saving Sessions): reward for
         # importing LESS than the predicted per-slot baseline, paid in
@@ -616,7 +627,7 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
 
         grid_in = _val(charge[i]) + _val(grid_to_load[i])
         grid_out = _val(pv_to_grid[i]) + eff * _val(batt_to_export[i])
-        delta = s["imp"] * (grid_in + s.get("ev_kwh", 0.0)) - s["exp"] * grid_out
+        delta = s["imp"] * (grid_in + s.get("ev_kwh", 0.0) - _val(pv_to_ev[i])) - s["exp"] * grid_out
         grid_cost_total += delta
         soc_pct = _val(soc[i]) / cap * 100.0
         trace.append(round(soc_pct, 1))
