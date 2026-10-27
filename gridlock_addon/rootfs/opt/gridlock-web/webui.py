@@ -2103,12 +2103,11 @@ function renderEvTiles(evs, assistOn) {
       <label style="color:var(--dim);font-size:10px;display:flex;gap:4px;align-items:center;margin-top:4px" title="Off: the car's charging is left to your supplier's smart charging. On: GridLock starts and stops it itself in cheap windows."><input type="checkbox" ${assistOn ? 'checked' : ''} onchange="setEvAssist(this.checked)">GridLock controls charging</label></div>`;
   }).join('');
 }
-const hhmm = iso => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 function evNeedLine(v) {
   if (typeof v.need_kwh !== 'number') return '';
   if (v.need_kwh < 0.1) return '<div style="color:var(--dim);font-size:10px">at its limit</div>';
   const cap = `${v.capacity_learned === true || v.capacity_learned === 'true' ? '' : '~'}${Math.round(v.capacity_kwh)} kWh battery`;
-  return `<div style="color:var(--ink);font-size:10px" title="${esc(cap)}, charging at ${Number(v.rate_kw).toFixed(1)} kW">needs ${v.need_kwh.toFixed(1)} kWh${v.finish ? ` · done ~${esc(hhmm(v.finish))}` : ''}${typeof v.need_cost_gbp === 'number' ? ` · ~£${v.need_cost_gbp.toFixed(2)}` : ''}</div>`;
+  return `<div style="color:var(--ink);font-size:10px" title="${esc(cap)}, charging at ${Number(v.rate_kw).toFixed(1)} kW">needs ${v.need_kwh.toFixed(1)} kWh${v.finish ? ` · done ~${esc(new Date(v.finish).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}` : ''}${typeof v.need_cost_gbp === 'number' ? ` · ~£${v.need_cost_gbp.toFixed(2)}` : ''}</div>`;
 }
 function evCostLine(v) {
   const parts = [];

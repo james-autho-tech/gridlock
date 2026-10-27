@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.69.1 - 2026-10-27
+
+### Fix
+- Dashboard failed to load in 3.69.0 (a duplicated script helper)
+
 ## 3.69.0 - 2026-10-27
 
 ### EV-aware planning
