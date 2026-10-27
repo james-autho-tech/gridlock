@@ -2588,7 +2588,9 @@ class GridLock(hass.Hass):
             if i == 0 and live_label:
                 act = live_label
                 ll = live_label.lower()
-                if "hold" in ll or "protection" in ll:
+                if "ev/pv" in ll:
+                    colour = "#60a5fa"
+                elif "hold" in ll or "protection" in ll:
                     colour = "#fbbf24"
                 elif "charg" in ll:
                     colour = "#22c55e"
@@ -2605,7 +2607,13 @@ class GridLock(hass.Hass):
                 # no export) is worth its own label rather than blending
                 # into "self-consumption" — but which label depends on WHY
                 # the battery sat idle:
-                if (act == "ECO" and cost_trace[i]["grid_in"] > core_optimizer.EPS
+                if act == "ECO" and (s.get("dispatch") or s.get("ev_kwh", 0.0) > 0):
+                    # Battery locked while the EV charges (optimizer.py's
+                    # ev_locked): solar and grid feed the house and car, so
+                    # this isn't self-consumption.
+                    act = "EV/PV Bypass"
+                    colour = "#60a5fa"
+                elif (act == "ECO" and cost_trace[i]["grid_in"] > core_optimizer.EPS
                         and cost_trace[i]["battery_kwh"] <= core_optimizer.EPS):
                     if s["imp"] <= self.cheap_rate:
                         # Deliberate, and cost-optimal: optimizer.py forces
@@ -5722,9 +5730,9 @@ class GridLock(hass.Hass):
 
         ev_protection_now = ev_active and action != "CHARGE"
         if ev_protection_now and not self._prev_ev_protection:
-            self._notify("GridLock: EV Protection engaged",
-                        "Battery discharge clamped to 0 while your EV "
-                        "is charging concurrently.")
+            self._notify("GridLock: EV/PV Bypass engaged",
+                        "Battery locked while your EV charges — solar and "
+                        "grid feed the house and car.")
         self._prev_ev_protection = ev_protection_now
 
         # Computed whenever storm is active regardless of off_grid, not
@@ -5776,7 +5784,7 @@ class GridLock(hass.Hass):
         elif session and soc0 > self.floor_soc + 5:
             live_label = "Saving Session Export"
         elif ev_active:
-            live_label = "Charging (EV concurrent)" if action == "CHARGE" else "EV Protection"
+            live_label = "Charging (EV concurrent)" if action == "CHARGE" else "EV/PV Bypass"
         else:
             live_label = None
 
@@ -5886,7 +5894,7 @@ class GridLock(hass.Hass):
                 # taking any of that PV, so surplus solar goes to the house/
                 # EV instead of topping up the battery while it's charging.
                 self.apply(self.inverter_adapter.MODE_CHARGE_PV_FIRST, 0.0, 0.0,
-                           "EV Protection",
+                           "EV/PV Bypass",
                            "EV charging: battery charge/discharge both "
                            "clamped to 0 — PV still free to serve the house",
                            plan_html)

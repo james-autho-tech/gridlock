@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.67.30 - 2026-10-27
+
+### Plan
+- Slots where the EV charges and the battery is locked show **EV/PV Bypass** instead of ECO (ECO is self-consumption, with solar and the battery supporting the house). The live status, notification and power-flow note use the same name in place of "EV Protection"
+
 ## 3.67.29 - 2026-10-27
 
 ### Fix

@@ -303,7 +303,7 @@ def build_status():
         "battery_charging": is_on(get(status_attrs.get("battery_charging_entity"))),
         "battery_discharging": is_on(get(status_attrs.get("battery_discharging_entity"))),
         "ev_charging": is_on(get(status_attrs.get("ev_entity"))),
-        "ev_protected": status.get("state") == "EV Protection",
+        "ev_protected": status.get("state") in ("EV/PV Bypass", "EV Protection"),
     }
 
     return {
@@ -919,6 +919,9 @@ function isBypass(state) {
 function isPlannedBypass(state) {
   return String(state || '').trim() === 'Bypass';
 }
+function isEvBypass(state) {
+  return String(state || '').includes('EV/PV');
+}
 function isStormHold(state) {
   return String(state || '').includes('Storm');
 }
@@ -926,6 +929,7 @@ function isStormHold(state) {
 function actionPill(action) {
   const a = String(action || '');
   if (isBypass(a)) return `<span class="gl-pill gl-pill-bypass">⚠️ BYPASS</span>`;
+  if (isEvBypass(a)) return `<span class="gl-pill gl-pill-bypass-planned">⚡ EV/PV BYPASS</span>`;
   if (isPlannedBypass(a)) return `<span class="gl-pill gl-pill-bypass-planned">BYPASS</span>`;
   if (isStormHold(a)) return `<span class="gl-pill gl-pill-storm">🔴 STORM_HOLD</span>`;
   if (a.includes('CHARGE') || a.includes('Charg')) return `<span class="gl-pill gl-pill-charge">🟢 CHARGE</span>`;
@@ -941,6 +945,7 @@ function actionLegendHtml() {
     ['EXPORT', 'Battery discharges to sell — the export price clears the degradation cost.'],
     ['ECO', 'Self-consumption — load is covered by solar and/or the battery.'],
     ['Bypass', "Grid covers load directly and the battery is left alone on purpose — importing fresh at this cheap/off-peak rate is cheaper than cycling stored charge to avoid it. No extra wear, no loss."],
+    ['EV/PV Bypass', 'The EV is charging: the battery is locked so it never feeds the car, and solar plus grid cover the house and car.'],
     ['Forced Bypass', 'Grid had to cover load directly because the battery was already at its floor SoC with no solar to help — a genuine shortfall, not a planning choice.'],
     ['Storm Watch — Holding', 'A weather alert is active — Storm Watch overrides the normal plan entirely, charging to its target SoC and holding regardless of price.'],
   ];
@@ -1890,7 +1895,7 @@ function renderFlow(f, bypassActive) {
     ${lines}
     <circle class="flow-hub ${anyActive ? 'active' : ''}" cx="${CX}" cy="${CY}" r="${hubR.toFixed(1)}" />
     ${nodeEls}
-  </svg></div>${f.ev_protected ? '<div style="text-align:center;color:var(--violet);font-size:13px;margin-top:8px">🛡️ EV Protection active — battery discharge clamped to 0</div>' : ''}`;
+  </svg></div>${f.ev_protected ? '<div style="text-align:center;color:var(--violet);font-size:13px;margin-top:8px">⚡ EV/PV Bypass — battery locked while the EV charges</div>' : ''}`;
 }
 // Column order is gridlock.py's publish_plan()'s plan_table.columns —
 // read positionally rather than assuming it, so this can't silently
