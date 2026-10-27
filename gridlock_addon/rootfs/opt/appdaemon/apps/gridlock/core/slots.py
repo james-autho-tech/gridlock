@@ -67,6 +67,7 @@ def build_slots(now, *, import_windows, export_windows, dispatch_windows,
                  power_down_windows=(), power_up_windows=(),
                  power_down_export_windows=(), power_up_export_windows=(),
                  free_electricity_windows=(), stale_dispatch=None,
+                 adjusted_windows=None, ev_windows=(),
                  axle_windows=(), axle_rate=1.0):
     """Returns a list of slot dicts:
     {start, end, imp, exp, pv, load, dispatch, ev_kwh, free_electricity,
@@ -84,16 +85,24 @@ def build_slots(now, *, import_windows, export_windows, dispatch_windows,
     stop — so it's applied as a straight import-rate override rather
     than routed through the optimiser's session-reward machinery.
 
-    stale_dispatch: (start, end, £/kWh) or None — the rest of a dispatch
-    the car has stopped drawing in. The supplier only bills the cheap rate
-    for dispatch time the car actually charges, so those slots are priced
-    at the given (peak) rate and lose their dispatch/EV flags.
+    stale_dispatch: (start, end, £/kWh), a list of them, or None — dispatch
+    time the car won't charge in (stopped drawing, or past what it needs).
+    The supplier only bills the cheap rate for dispatch time the car
+    actually charges, so those slots lose their dispatch/EV flags and are
+    priced at the given (peak) rate — only where the published rate is
+    dispatch-adjusted, when adjusted_windows [(start, end), ...] is given,
+    so the tariff's own off-peak stays cheap.
+
+    ev_windows: [(start, end, kwh), ...] — the car's expected charging
+    where no dispatch is scheduled yet; sets ev_kwh only, never the price.
 
     axle_windows: [(start, end, "export"|"import"), ...] — Axle grid
     events. A slot overlapping one gets "axle" set; export events pay
     axle_rate per kWh exported, import events make importing free.
     """
     cheap_floor = min([v for _, _, v in import_windows], default=live_import_rate)
+    stale_list = ([stale_dispatch] if isinstance(stale_dispatch, tuple)
+                  else list(stale_dispatch or []))
 
     base = now.replace(minute=(0 if now.minute < 30 else 30),
                         second=0, microsecond=0)
@@ -102,9 +111,11 @@ def build_slots(now, *, import_windows, export_windows, dispatch_windows,
         s = base + timedelta(minutes=slot_min * i)
         e = s + timedelta(minutes=slot_min)
         imp = rate_at(import_windows, s, live_import_rate if i == 0 else default_import_rate)
-        stale = bool(stale_dispatch) and stale_dispatch[0] <= s < stale_dispatch[1]
-        if stale:
-            imp = max(imp, stale_dispatch[2])
+        stale_rate = next((r for ws, we, r in stale_list if ws <= s < we), None)
+        stale = stale_rate is not None
+        if stale and (adjusted_windows is None
+                      or any(ws <= s < we for ws, we in adjusted_windows)):
+            imp = max(imp, stale_rate)
         in_free = any(ws <= s < we for ws, we in free_electricity_windows)
         if in_free:
             imp = 0.0
@@ -120,6 +131,8 @@ def build_slots(now, *, import_windows, export_windows, dispatch_windows,
             ds, de, win_kwh = ev_win
             num_slots = max(1, round((de - ds).total_seconds() / (slot_min * 60)))
             ev_slot_kwh = win_kwh / num_slots
+        elif not stale:
+            ev_slot_kwh = sum(kwh for ws, we, kwh in ev_windows if ws <= s < we)
         slots.append({
             "start": s, "end": e,
             "imp": imp,

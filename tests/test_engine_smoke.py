@@ -1257,6 +1257,7 @@ def test_car_charge_reported_but_only_commanded_with_charge_assist_on(engine, tm
         f"sensor.{stem}_charger_power": {"state": "7.1", "attributes": {}},
     })
     g._log_decision = lambda *a, **k: None
+    g.tariff_provider = types.SimpleNamespace(import_windows=lambda: [])
 
     g._manage_ev_charge_assist()
     assert not [c for c in g.calls if c[0].startswith("switch/")]
@@ -1267,3 +1268,52 @@ def test_car_charge_reported_but_only_commanded_with_charge_assist_on(engine, tm
     (tmp_path / "ev_schedule_settings.json").write_text(json.dumps({"charge_assist": True}))
     g._manage_ev_charge_assist()
     assert [c for c in g.calls if c[0] == "switch/turn_on"]
+
+
+def _tesla(g, stem, *, state, pct, limit=80, energy=0.0, power=0.0):
+    g.states.update({
+        f"sensor.{stem}_charging": {"state": state, "attributes": {}},
+        f"sensor.{stem}_battery_level": {"state": str(pct), "attributes": {"friendly_name": f"{stem} Battery level"}},
+        f"number.{stem}_charge_limit": {"state": str(limit), "attributes": {}},
+        f"sensor.{stem}_charge_energy_added": {"state": str(energy), "attributes": {}},
+        f"sensor.{stem}_charger_power": {"state": str(power), "attributes": {}},
+        f"sensor.{stem}_battery_range": {"state": str(pct * 5), "attributes": {}},
+    })
+
+
+def test_plan_dispatch_cut_to_the_cars_need_and_sessions_costed(engine):
+    g, gridlock = engine
+    from datetime import timedelta
+    g.ev_vehicle_stems = ["car"]
+    g.ev_vehicle_last_commanded = {"car": None}
+    g._ev_learning = {"car": {"capacity_kwh": 75.0, "rate_kw": 7.0}}
+    g._ev_sessions, g._ev_session_tick = {}, None
+    g.ent_import_rate, g.ent_dispatch, g.ent_ev_power = "sensor.rate", None, "sensor.ev_power"
+    g.states["sensor.rate"] = {"state": "0.0666", "attributes": {}}
+    g.states["sensor.ev_power"] = {"state": "7000", "attributes": {"unit_of_measurement": "W"}}
+    now = datetime(2026, 10, 27, 11, 20, tzinfo=timezone.utc)
+    g.tariff_provider = types.SimpleNamespace(import_windows=lambda: [(now, now + timedelta(hours=4), 0.0666)])
+
+    _tesla(g, "car", state="charging", pct=78, power=7.0)   # 2% of 75 kWh = ~1.7 kWh at the wall
+    dispatch = [(now.replace(minute=30), now.replace(hour=14, minute=30), 22.2)]
+    kept, dropped, ev = g._ev_plan_windows(now, dispatch)
+    assert len(kept) == 1 and dropped and dropped[0][0] == now.replace(hour=12, minute=0) and ev == []
+
+    _tesla(g, "car", state="stopped", pct=50)
+    _, _, ev = g._ev_plan_windows(now, [])
+    assert ev and sum(k for *_, k in ev) > 20, "plugged in, nothing scheduled: expected in cheap slots"
+
+    _tesla(g, "car", state="disconnected", pct=50)
+    assert g._ev_plan_windows(now, dispatch) == (dispatch, [], []), "no car on the charger: trust the dispatch"
+
+    _tesla(g, "car", state="charging", pct=60, power=7.0)
+    g.get_now = lambda: now
+    g._track_ev_sessions(now)
+    g._track_ev_sessions(now + timedelta(minutes=10))
+    _tesla(g, "car", state="complete", pct=80)
+    g._track_ev_sessions(now + timedelta(minutes=12))
+    done = g._ev_sessions["done"]
+    assert len(done) == 1 and abs(done[0]["kwh"] - 7.0 * 10 / 60) < 1e-3
+    assert abs(done[0]["cost_gbp"] - done[0]["kwh"] * 0.0666) < 1e-4
+    stats = g._ev_session_stats("car", now + timedelta(minutes=12))
+    assert stats["last_kwh"] == 1.2 and stats["last_p_per_mile"] > 0

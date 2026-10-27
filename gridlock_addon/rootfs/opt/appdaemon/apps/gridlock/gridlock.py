@@ -35,6 +35,7 @@ from core.ev_schedule import find_cheapest_window
 from core import ev_charge_assist as core_ev_charge_assist
 from core import tariff_backtest as core_tariff_backtest
 from core import axle as core_axle
+from core import ev_model as core_ev_model
 
 STATE_FILES = ("load_profile.json", "savings_state.json", "savings_history.json",
                "cost_tracking_state.json", "decision_log.json",
@@ -519,6 +520,11 @@ class GridLock(hass.Hass):
         # (_apply_thermal_control) elsewhere in this file.
         self.ev_vehicle_stems = self.registry.find_tesla_vehicle_stems()
         self.ev_vehicle_last_commanded = {stem: None for stem in self.ev_vehicle_stems}
+        # Per car: learned battery size / charge rate (core/ev_model.py),
+        # and charging sessions for cost per charge and per mile.
+        self._ev_learning = self._load_json("ev_learning.json", {}) or {}
+        self._ev_sessions = self._load_json("ev_sessions.json", {}) or {}
+        self._ev_session_tick = None
         self.cheap_rate = float(a.get("cheap_rate_threshold", 0.10))
         self.min_export_pct = float(a.get("min_export_pct", 5.0))
         # Superseded by the LP optimiser, which paces battery use
@@ -2396,6 +2402,85 @@ class GridLock(hass.Hass):
             return kw > 0.05
         return bool(self.ent_ev) and self.get_state(self.ent_ev) == "on"
 
+    def _track_ev_sessions(self, now):
+        """Charging sessions per car at home, for cost per charge and per
+        mile: the charger's energy priced at the live import rate each
+        tick. A session closes when the car reports complete or is
+        unplugged — not on "stopped", which is just smart charging pausing."""
+        last = getattr(self, "_ev_session_tick", None)
+        self._ev_session_tick = now
+        hours = min(0.25, max(0.0, (now - last).total_seconds() / 3600.0)) if last else 0.0
+        if not isinstance(getattr(self, "_ev_sessions", None), dict):
+            self._ev_sessions = {}
+        sessions = self._ev_sessions
+        open_ = sessions.setdefault("open", {})
+        done = sessions.setdefault("done", [])
+        changed = False
+        rate = self.get_float_state(self.ent_import_rate, self.default_import)
+        ev_power = getattr(self, "ent_ev_power", None)
+        charger_kw = self._read_live_kw(ev_power) if ev_power else None
+        for stem in self.ev_vehicle_stems:
+            car = self._ev_car(stem)
+            rng = self.get_float_state(f"sensor.{stem}_battery_range", None)
+            sess = open_.get(stem)
+            if car["charging"] and car["home"]:
+                if sess is None:
+                    sess = open_[stem] = {"name": car["name"], "start": now.isoformat(),
+                                          "pct_from": car["pct"], "range_from": rng,
+                                          "kwh": 0.0, "cost_gbp": 0.0}
+                kw = charger_kw if charger_kw is not None else (
+                    self.get_float_state(f"sensor.{stem}_charger_power", 0.0) or 0.0)
+                if kw > 0.05 and hours:
+                    sess["kwh"] = round(sess["kwh"] + kw * hours, 3)
+                    sess["cost_gbp"] = round(sess["cost_gbp"] + kw * hours * rate, 4)
+                sess["pct_to"], sess["range_to"] = car["pct"], rng
+                changed = True
+            elif sess is not None and (not car["plugged_in"]
+                                       or car["charging_state"].lower() == "complete"):
+                open_.pop(stem)
+                if sess["kwh"] >= 0.3:
+                    # The car's final level and range, not the last
+                    # reading taken while it was still charging.
+                    if car["pct"] is not None:
+                        sess["pct_to"] = car["pct"]
+                    if rng is not None:
+                        sess["range_to"] = rng
+                    sess.update({"stem": stem, "end": now.isoformat()})
+                    done.append(sess)
+                    del done[:-100]
+                changed = True
+        if changed:
+            self._save_json("ev_sessions.json", sessions)
+
+    def _ev_session_stats(self, stem, now):
+        """Last charge and this month's charging for one car."""
+        sessions = getattr(self, "_ev_sessions", None) or {}
+        mine = [x for x in sessions.get("done", []) if x.get("stem") == stem]
+        current = sessions.get("open", {}).get(stem)
+        out = {}
+
+        def per_mile(x):
+            gain = (x.get("range_to") or 0) - (x.get("range_from") or 0)
+            return x["cost_gbp"] * 100 / (gain / 1.609) if gain > 5 else None
+
+        if mine:
+            last = mine[-1]
+            out.update({"last_kwh": round(last["kwh"], 1), "last_cost_gbp": round(last["cost_gbp"], 2),
+                        "last_end": last.get("end")})
+            p = per_mile(last)
+            if p is not None:
+                out["last_p_per_mile"] = round(p, 1)
+        month = now.astimezone().strftime("%Y-%m")
+        this_month = [x for x in mine if str(x.get("start", "")).startswith(month)]
+        if current:
+            out["session_kwh"] = round(current["kwh"], 1)
+            out["session_cost_gbp"] = round(current["cost_gbp"], 2)
+            this_month.append(current)
+        if this_month:
+            out["month_kwh"] = round(sum(x["kwh"] for x in this_month), 1)
+            out["month_cost_gbp"] = round(sum(x["cost_gbp"] for x in this_month), 2)
+        return out
+
     def _manage_ev_charge_assist(self):
         """For each Tesla Fleet vehicle discovered (self.ev_vehicle_stems),
         take over active charge control if it's the one currently plugged
@@ -2420,31 +2505,46 @@ class GridLock(hass.Hass):
         # through the charger) usually runs the car and two controllers
         # would fight.
         assist_on = bool(self._load_dashboard_json("ev_schedule_settings.json", {}).get("charge_assist"))
+        now = self.get_now()
+        self._track_ev_sessions(now)
+        cheap_p = min((v for _, _, v in self.tariff_provider.import_windows()),
+                      default=self.cheap_rate)
         vehicles = {}
         for stem in self.ev_vehicle_stems:
-            charging_state = self.get_state(f"sensor.{stem}_charging")
-            plugged_in = bool(charging_state) and charging_state not in (
-                "disconnected", "unavailable", "unknown")
-            battery_pct = self.get_float_state(f"sensor.{stem}_battery_level", None)
-            charge_limit_pct = self.get_float_state(f"number.{stem}_charge_limit", None)
-            name = str(self.get_state(f"sensor.{stem}_battery_level", attribute="friendly_name") or stem)
-            name = re.sub(r"\s*battery level$", "", name, flags=re.I) or stem
+            car = self._ev_car(stem)
+            plugged_in, battery_pct, charge_limit_pct = car["plugged_in"], car["pct"], car["limit"]
+            if not isinstance(getattr(self, "_ev_learning", None), dict):
+                self._ev_learning = {}
+            learned = core_ev_model.learn(
+                self._ev_learning.get(stem), charging=car["charging"] and car["home"], pct=battery_pct,
+                energy_added_kwh=self.get_float_state(f"sensor.{stem}_charge_energy_added", None),
+                power_kw=self.get_float_state(f"sensor.{stem}_charger_power", None))
+            if learned != self._ev_learning.get(stem):
+                self._ev_learning[stem] = learned
+                self._save_json("ev_learning.json", self._ev_learning)
             command = core_ev_charge_assist.should_charge(
                 battery_pct, charge_limit_pct, in_cheap_window) if (plugged_in and assist_on) else False
-            # _json_safe(), not the raw None — a None reaching HA's state
-            # attributes silently breaks serialisation (confirmed live:
-            # the whole nested vehicle dict came back empty, not just
-            # this one field), the same failure mode _json_safe was
-            # already built to guard plan_table cells against.
-            vehicles[stem] = {"name": name, "plugged_in": plugged_in,
-                               "charging_state": str(charging_state or "unknown"),
-                               "battery_pct": self._json_safe(battery_pct),
-                               "charge_limit_pct": self._json_safe(charge_limit_pct),
-                               "range_km": self._json_safe(
-                                   self.get_float_state(f"sensor.{stem}_battery_range", None)),
-                               "charger_kw": self._json_safe(
-                                   self.get_float_state(f"sensor.{stem}_charger_power", None)),
-                               "charging": command}
+            # Unknown values are left out rather than sent as None/0 — a
+            # None reaching HA's state attributes broke the whole nested
+            # dict before, and AppDaemon mangles falsy values in here.
+            v = {"name": car["name"], "plugged_in": plugged_in,
+                 "charging_state": car["charging_state"],
+                 "capacity_kwh": round(car["capacity_kwh"], 1),
+                 "capacity_learned": car["capacity_learned"],
+                 "rate_kw": round(car["rate_kw"], 1), "charging": command}
+            for key, val in (("battery_pct", battery_pct), ("charge_limit_pct", charge_limit_pct),
+                             ("range_km", self.get_float_state(f"sensor.{stem}_battery_range", None)),
+                             ("charger_kw", self.get_float_state(f"sensor.{stem}_charger_power", None))):
+                if val is not None:
+                    v[key] = round(val, 1)
+            if car["need_kwh"] is not None and plugged_in and car["home"]:
+                v["need_kwh"] = round(car["need_kwh"], 1)
+                v["need_cost_gbp"] = round(car["need_kwh"] * cheap_p, 2)
+                if car["charging"] and car["need_kwh"] > 0.05:
+                    v["finish"] = core_ev_model.finish_time(
+                        car["need_kwh"], car["rate_kw"], now).isoformat()
+            v.update(self._ev_session_stats(stem, now))
+            vehicles[stem] = v
             if not plugged_in or not assist_on:
                 self.ev_vehicle_last_commanded[stem] = None
                 continue
@@ -2574,11 +2674,17 @@ class GridLock(hass.Hass):
     def build_slots(self, now):
         live_imp = self.get_float_state(self.ent_import_rate, self.default_import)
         live_exp = self.get_float_state(self.ent_export_rate, self.default_export)
+        dispatch, dropped, ev_windows = self._ev_plan_windows(now, self.tariff_provider.dispatch_windows())
+        stale = [(s, e, self._peak_import_rate()) for s, e in dropped]
+        current = self._stale_dispatch(now)
+        if current:
+            stale.append(current)
+        provider = self.tariff_provider
         return core_slots.build_slots(
             now,
-            import_windows=self.tariff_provider.import_windows(),
-            export_windows=self.tariff_provider.export_windows(),
-            dispatch_windows=self.tariff_provider.dispatch_windows(),
+            import_windows=provider.import_windows(),
+            export_windows=provider.export_windows(),
+            dispatch_windows=dispatch,
             pv_curve=self.forecast_provider.pv_curve(),
             load_kwh_fn=self.load_provider.load_kwh,
             cheap_rate=self.cheap_rate,
@@ -2591,9 +2697,70 @@ class GridLock(hass.Hass):
                 self.ent_power_down_export_baseline, self._power_down_points_for_session),
             power_up_export_windows=self._octoplus_session_windows(self.ent_power_up_export_baseline),
             free_electricity_windows=self._edf_free_electricity_windows(),
-            stale_dispatch=self._stale_dispatch(now),
+            stale_dispatch=stale,
+            adjusted_windows=(provider.adjusted_windows() if hasattr(provider, "adjusted_windows")
+                              else None),
+            ev_windows=ev_windows,
             axle_windows=self._axle_events, axle_rate=self._axle_rate,
             horizon_slots=self.cfg.horizon_slots, slot_min=self.cfg.slot_min)
+
+    def _ev_car(self, stem):
+        """A Tesla's own readings plus what's learned about it."""
+        charging_state = str(self.get_state(f"sensor.{stem}_charging") or "unknown")
+        location = self.get_state(f"device_tracker.{stem}_location")
+        learned = (getattr(self, "_ev_learning", {}) or {}).get(stem, {})
+        pct = self.get_float_state(f"sensor.{stem}_battery_level", None)
+        limit = self.get_float_state(f"number.{stem}_charge_limit", None)
+        capacity = learned.get("capacity_kwh") or core_ev_model.DEFAULT_CAPACITY_KWH
+        name = str(self.get_state(f"sensor.{stem}_battery_level", attribute="friendly_name") or stem)
+        return {
+            "stem": stem,
+            "name": re.sub(r"\s*battery level$", "", name, flags=re.I) or stem,
+            "charging_state": charging_state,
+            "plugged_in": charging_state.lower() not in ("disconnected", "unavailable", "unknown"),
+            "home": location in (None, "home"),
+            "charging": charging_state.lower() == "charging",
+            "pct": pct, "limit": limit,
+            "capacity_kwh": capacity, "capacity_learned": bool(learned.get("capacity_kwh")),
+            "rate_kw": learned.get("rate_kw") or core_ev_model.DEFAULT_RATE_KW,
+            "need_kwh": core_ev_model.need_kwh(pct, limit, capacity),
+        }
+
+    def _ev_car_on_charger(self):
+        """The Tesla plugged in at home that the charger is serving — the
+        one charging, else the one needing most. None if no Tesla is
+        plugged in at home (another make, or nothing: nothing to trim)."""
+        cars = [self._ev_car(stem) for stem in getattr(self, "ev_vehicle_stems", None) or []]
+        cars = [c for c in cars if c["plugged_in"] and c["home"] and c["need_kwh"] is not None]
+        if not cars:
+            return None
+        return max(cars, key=lambda c: (c["charging"], c["need_kwh"]))
+
+    def _ev_plan_windows(self, now, dispatch):
+        """Dispatch and expected EV charging for the plan, from the car's
+        own charge level: a dispatch is cut to the half-hours the car
+        needs (the rest won't be billed cheap — the supplier drops it once
+        the car reaches its limit), and with nothing scheduled yet the car
+        is expected in the next cheap half-hours. -> (dispatch, dropped
+        [(start, end)], ev_windows)."""
+        car = self._ev_car_on_charger()
+        if car is None:
+            return dispatch, [], []
+        if dispatch:
+            kept, dropped = core_ev_model.trim_dispatches(
+                dispatch, car["need_kwh"], car["rate_kw"], now, SLOT_MIN)
+            return kept, dropped, []
+        step = timedelta(minutes=SLOT_MIN)
+        next_slot = self._slot_floor(now) + step
+        cheap = sorted({t for s, e, v in self.tariff_provider.import_windows()
+                        if v <= self.cheap_rate
+                        for t in (s + step * k for k in range(int((e - s) / step)))
+                        if next_slot <= t < now + timedelta(hours=24)})
+        return [], [], core_ev_model.expected_charge(car["need_kwh"], car["rate_kw"], cheap, SLOT_MIN)
+
+    def _peak_import_rate(self):
+        peak = max((v for _, _, v in self.tariff_provider.import_windows()), default=self.default_import)
+        return max(peak, self.default_import)
 
     def _stale_dispatch(self, now):
         """The rest of a dispatch in progress that the car isn't drawing in
@@ -2618,8 +2785,7 @@ class GridLock(hass.Hass):
             end = nxt
         if end == slot_start:
             return None
-        peak = max((v for _, _, v in provider.import_windows()), default=self.default_import)
-        return (slot_start, end, max(peak, self.default_import))
+        return (slot_start, end, self._peak_import_rate())
 
     def _solve_plan(self, slots, soc0, now):
         settings = self._ui_zone_cache[2] if self._ui_zone_cache else None
@@ -2779,7 +2945,7 @@ class GridLock(hass.Hass):
                     # too, instead of only the current slot getting credit.
                     act = "Saving Session Export"
             ev_cell = (f"<span style='color:#38bdf8'>⚡ {s['ev_kwh']:.2f}</span>"
-                       if s["dispatch"] else "—")
+                       if s.get("ev_kwh", 0.0) > 0 else "—")
             saving_cell = "<span style='color:#facc15'>💰</span>" if in_saving_session else "—"
             # Power Up (Free Electricity) doesn't need its own window
             # list the way Saving Sessions does — no opt-in, so every

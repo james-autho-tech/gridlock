@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.69.0 - 2026-10-27
+
+### EV-aware planning
+- The plan cuts a supplier's smart-charge dispatch to what the car on the charger actually needs (its % and charge limit, at the learned charge rate). The half-hour it finishes in stays cheap; the rest of the dispatch is planned at the peak rate where the published rate was dispatch-adjusted, since the supplier drops it once the car is full. The tariff's own off-peak is untouched
+- Car plugged in with nothing scheduled yet: its expected charge is planned into the next cheap half-hours (battery locked alongside it, as live), so the cost forecast includes it
+- No Tesla plugged in at home: dispatches are trusted as before
+- Learns each car's battery size (energy added per % gained) and charging rate
+- Charging sessions are costed at the live import rate: car tiles show what's needed, finish time and expected cost while charging, the last charge's kWh, cost and p/mile, and this month's total
+- Any EV charging slot (dispatch or expected) now caps battery charging at `ev_concurrent_charge_kw`, matching live
+
 ## 3.68.2 - 2026-10-27
 
 ### Fix

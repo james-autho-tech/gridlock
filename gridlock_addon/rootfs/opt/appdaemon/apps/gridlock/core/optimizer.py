@@ -409,7 +409,7 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
             prob += charge[i] + pv_to_batt[i] + axle_short >= max_c
             axle_terms.append(axle_short)
 
-        if s.get("dispatch") and axle != "export":
+        if ev_locked and axle != "export":
             prob += charge[i] <= cfg.ev_concurrent_charge_kw / 2.0
             prob += batt_to_export[i] == 0
 

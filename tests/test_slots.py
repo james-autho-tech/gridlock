@@ -246,3 +246,22 @@ def test_axle_export_event_pays_the_event_rate_and_import_event_is_free():
     assert len(exp_slots) == 2 and all(s["exp"] == 1.0 for s in exp_slots)
     assert len(imp_slots) == 1 and imp_slots[0]["imp"] == 0.0
     assert all(s["exp"] == 0.04 and s["imp"] == 0.34 for s in slots if not s["axle"])
+
+
+def test_dropped_dispatch_reprices_only_dispatch_adjusted_slots():
+    """Cut dispatch time loses its cheap price only where the published rate
+    was dispatch-adjusted — the tariff's own overnight off-peak stays cheap."""
+    peak_end = NOW + timedelta(hours=1)
+    slots = build_slots(
+        NOW,
+        import_windows=[(NOW, NOW + timedelta(hours=72), 0.0666)],
+        export_windows=[(NOW, NOW + timedelta(hours=72), 0.04)],
+        dispatch_windows=[], pv_curve={}, load_kwh_fn=lambda s: 0.4, cheap_rate=0.10,
+        live_import_rate=0.0666, live_export_rate=0.04,
+        default_import_rate=0.25, default_export_rate=0.04,
+        stale_dispatch=[(NOW, NOW + timedelta(hours=2), 0.34465)],
+        adjusted_windows=[(NOW, peak_end)],
+        ev_windows=[(NOW + timedelta(hours=3), NOW + timedelta(hours=3, minutes=30), 3.5)],
+        horizon_slots=8, slot_min=30)
+    assert [s["imp"] for s in slots[:4]] == [0.34465, 0.34465, 0.0666, 0.0666]
+    assert slots[6]["ev_kwh"] == 3.5 and not slots[6]["dispatch"] and slots[6]["imp"] == 0.0666
