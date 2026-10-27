@@ -1194,3 +1194,45 @@ def test_dispatch_the_car_stopped_drawing_in_is_priced_at_peak(engine):
 
     g.states["sensor.hypervolt_ev_power"] = {"state": "7100", "attributes": {}}
     assert g._stale_dispatch(at(11, 48)) is None, "car drawing: the dispatch is real"
+
+
+def test_axle_is_off_without_a_key_and_follows_the_schedule_with_one(engine, monkeypatch, tmp_path):
+    g, gridlock = engine
+    import io
+    import urllib.error
+    calls = []
+
+    def fake_urlopen(req, timeout=None):
+        calls.append(req)
+        if g._fake_axle == 401:
+            raise urllib.error.HTTPError(req.full_url, 401, "no", {}, None)
+        return io.BytesIO(json.dumps(g._fake_axle).encode())
+
+    monkeypatch.setattr(gridlock.urllib.request, "urlopen", fake_urlopen)
+    g._axle_events, g._axle_error, g._axle_last_poll = [], None, None
+    g.ticks = 0
+    g.tick = lambda kwargs: setattr(g, "ticks", g.ticks + 1)
+    g._notify = lambda *a, **k: None
+    now = g.get_now()
+
+    g.poll_axle({})
+    assert not calls and g.published["sensor.gridlock_axle"]["state"] == "Off"
+
+    (tmp_path / "axle_settings.json").write_text(json.dumps({"api_key": "k1", "rate_gbp": 1.0}))
+    g._fake_axle = {"start_time": "2026-10-17T17:00:00Z", "end_time": "2026-10-17T18:00:00Z",
+                    "import_export": "export"}
+    g.poll_axle({})
+    assert calls[-1].get_header("Authorization") == "Bearer k1"
+    assert g._axle_events and g._axle_events[0][2] == "export" and g.ticks == 1
+    assert g.published["sensor.gridlock_axle"]["state"] == "Scheduled"
+    assert "k1" not in json.dumps(g.published["sensor.gridlock_axle"]["attributes"])
+    assert g._axle_events[0][0] > now
+
+    g._fake_axle = 401
+    g.poll_axle({})
+    assert g.published["sensor.gridlock_axle"]["state"] == "Error"
+    assert g._axle_events, "a failed poll keeps the known schedule"
+
+    (tmp_path / "axle_settings.json").write_text(json.dumps({}))
+    g.poll_axle({})
+    assert g._axle_events == [] and g.published["sensor.gridlock_axle"]["state"] == "Off"

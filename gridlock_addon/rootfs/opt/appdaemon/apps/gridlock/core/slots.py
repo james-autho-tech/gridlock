@@ -66,7 +66,8 @@ def build_slots(now, *, import_windows, export_windows, dispatch_windows,
                  horizon_slots, slot_min,
                  power_down_windows=(), power_up_windows=(),
                  power_down_export_windows=(), power_up_export_windows=(),
-                 free_electricity_windows=(), stale_dispatch=None):
+                 free_electricity_windows=(), stale_dispatch=None,
+                 axle_windows=(), axle_rate=1.0):
     """Returns a list of slot dicts:
     {start, end, imp, exp, pv, load, dispatch, ev_kwh, free_electricity,
      charge, export,
@@ -87,6 +88,10 @@ def build_slots(now, *, import_windows, export_windows, dispatch_windows,
     the car has stopped drawing in. The supplier only bills the cheap rate
     for dispatch time the car actually charges, so those slots are priced
     at the given (peak) rate and lose their dispatch/EV flags.
+
+    axle_windows: [(start, end, "export"|"import"), ...] — Axle grid
+    events. A slot overlapping one gets "axle" set; export events pay
+    axle_rate per kWh exported, import events make importing free.
     """
     cheap_floor = min([v for _, _, v in import_windows], default=live_import_rate)
 
@@ -103,6 +108,9 @@ def build_slots(now, *, import_windows, export_windows, dispatch_windows,
         in_free = any(ws <= s < we for ws, we in free_electricity_windows)
         if in_free:
             imp = 0.0
+        axle = next((kind for ws, we, kind in axle_windows if ws < e and we > s), None)
+        if axle == "import":
+            imp = min(imp, 0.0)
         ev_win = None if stale else next(
             ((ds, de, kwh) for ds, de, kwh in dispatch_windows if ds <= s < de), None)
         in_disp = ev_win is not None
@@ -115,13 +123,15 @@ def build_slots(now, *, import_windows, export_windows, dispatch_windows,
         slots.append({
             "start": s, "end": e,
             "imp": imp,
-            "exp": rate_at(export_windows, s,
-                           live_export_rate if i == 0 else default_export_rate),
+            "exp": max(rate_at(export_windows, s,
+                               live_export_rate if i == 0 else default_export_rate),
+                       axle_rate if axle == "export" else 0.0),
             "pv": _pv_for_slot(pv_curve, s),
             "load": load_kwh_fn(s),
             "dispatch": in_disp,
             "ev_kwh": ev_slot_kwh,
             "free_electricity": in_free,
+            "axle": axle,
             "charge": 0.0,
             "export": 0.0,
         })

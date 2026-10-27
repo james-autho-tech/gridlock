@@ -3,6 +3,7 @@ import math
 import os
 import re
 import shutil
+import urllib.error
 import urllib.request
 from dataclasses import replace
 
@@ -33,6 +34,7 @@ from core import warranty as core_warranty
 from core.ev_schedule import find_cheapest_window
 from core import ev_charge_assist as core_ev_charge_assist
 from core import tariff_backtest as core_tariff_backtest
+from core import axle as core_axle
 
 STATE_FILES = ("load_profile.json", "savings_state.json", "savings_history.json",
                "cost_tracking_state.json", "decision_log.json",
@@ -733,6 +735,12 @@ class GridLock(hass.Hass):
         # When each SSEN fault ref was first seen (persisted, so a restart
         # doesn't make an old fault look new again).
         self._ssen_first_seen = self._load_json("ssen_first_seen.json", {}) or {}
+        # Axle grid events: opt-in, polled only once an API key is saved on
+        # the dashboard. Persisted so a restart mid-event still follows it.
+        self._axle_events = core_axle.parse_events(self._load_json("axle_events.json", []))
+        self._axle_rate = core_axle.DEFAULT_RATE_GBP
+        self._axle_error = None
+        self._axle_last_poll = None
 
         self.compare_tariffs = a.get("compare_tariffs", [])
 
@@ -942,6 +950,9 @@ class GridLock(hass.Hass):
             self.run_every(self.poll_heatpump_diagnostics, "now", 1800)
 
         self.run_every(self.poll_carbon_intensity, "now", 1800)
+        # Every 10 min, as Axle's own HA sensor does; a no-op without a key.
+        self.run_every(self.poll_axle, "now+15", 600)
+        self._axle_mtime_seen = None
         self.run_every(self.tick, "now", 300)
         # A setting changed on the dashboard (target, hot water...) re-plans
         # the heat pump within 30 s instead of waiting for the next tick.
@@ -1971,6 +1982,84 @@ class GridLock(hass.Hass):
                          f"SSEN lists a planned interruption for {self.ssen_postcode}"
                          + (f" (power back by {restore})" if restore else "") + ". " + outcome)
 
+    def poll_axle(self, kwargs):
+        """Fetch the Axle event schedule (see core/axle.py). No API key on
+        the dashboard means Axle is off: no request, no events."""
+        cfg = core_axle.clean_settings(self._load_dashboard_json("axle_settings.json", {}))
+        self._axle_rate = cfg["rate_gbp"]
+        now = self.get_now()
+        if not cfg["api_key"]:
+            self._axle_error = None
+            self._set_axle_events([], now)
+            self.publish_axle_status(cfg)
+            return
+        try:
+            req = urllib.request.Request(core_axle.API_URL, headers={
+                "Authorization": f"Bearer {cfg['api_key']}",
+                "Accept": "application/json", "User-Agent": "GridLock/3"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                body = resp.read()
+            data = json.loads(body) if body.strip() else None
+        except urllib.error.HTTPError as exc:
+            self._axle_error = ("Axle rejected the API key" if exc.code in (401, 403)
+                                else f"Axle returned HTTP {exc.code}")
+            self.log(f"Axle poll failed: {self._axle_error}", level="WARNING")
+            self.publish_axle_status(cfg)
+            return
+        except Exception as exc:  # noqa: BLE001 — network is best-effort
+            self._axle_error = "Couldn't reach Axle"
+            self.log(f"Axle poll failed: {exc!r}", level="WARNING")
+            self.publish_axle_status(cfg)
+            return
+        self._axle_error = None
+        self._axle_last_poll = now.isoformat()
+        events = core_axle.parse_events(data, now)
+        # The API describes the *next* event; one already under way is kept
+        # to its end even if it drops out of the response — Axle is
+        # commanding the battery through it regardless.
+        running = core_axle.event_at(self._axle_events, now)
+        if running and running not in events:
+            events = sorted(events + [running])
+        for start, end, kind in events:
+            if (start, end, kind) not in self._axle_events:
+                what = ("export: GridLock will have the battery charged and export at full rate"
+                        if kind == "export" else "import: GridLock will charge the battery from the grid")
+                self._notify("GridLock: Axle grid event",
+                             f"{start.astimezone().strftime('%a %H:%M')}–"
+                             f"{end.astimezone().strftime('%H:%M')} {what} "
+                             f"({cfg['rate_gbp'] * 100:.0f}p/kWh).")
+        self._set_axle_events(events, now)
+        self.publish_axle_status(cfg)
+
+    def _set_axle_events(self, events, now):
+        events = [ev for ev in events if ev[1] > now]
+        if events == self._axle_events:
+            return
+        self._axle_events = events
+        self._save_json("axle_events.json", core_axle.to_json(events))
+        self.tick({})
+
+    def publish_axle_status(self, cfg):
+        """sensor.gridlock_axle for the dashboard card — never the key."""
+        now = self.get_now()
+        running = core_axle.event_at(self._axle_events, now)
+        upcoming = [ev for ev in self._axle_events if ev[0] > now]
+        if not cfg["api_key"]:
+            state = "Off"
+        elif self._axle_error:
+            state = "Error"
+        elif running:
+            state = "Event now"
+        elif upcoming:
+            state = "Scheduled"
+        else:
+            state = "No events"
+        self.set_state("sensor.gridlock_axle", state=state, attributes={
+            "friendly_name": "GridLock Axle Events", "icon": "mdi:transmission-tower-export",
+            "enabled": bool(cfg["api_key"]), "rate_gbp": cfg["rate_gbp"],
+            "events": core_axle.to_json(self._axle_events),
+            "error": self._axle_error, "last_poll": self._axle_last_poll})
+
     def _agile_slot_key(self, dt):
         dt = dt.astimezone(timezone.utc)
         minute = 30 if dt.minute >= 30 else 0
@@ -2491,6 +2580,7 @@ class GridLock(hass.Hass):
             power_up_export_windows=self._octoplus_session_windows(self.ent_power_up_export_baseline),
             free_electricity_windows=self._edf_free_electricity_windows(),
             stale_dispatch=self._stale_dispatch(now),
+            axle_windows=self._axle_events, axle_rate=self._axle_rate,
             horizon_slots=self.cfg.horizon_slots, slot_min=self.cfg.slot_min)
 
     def _stale_dispatch(self, now):
@@ -2629,12 +2719,16 @@ class GridLock(hass.Hass):
                 act = core_optimizer.action(s)
                 colour = {"CHARGE": "#22c55e", "EXPORT": "#38bdf8",
                           "ECO": "#9ca3af"}[act]
+                if s.get("axle") == "export" and act == "EXPORT":
+                    act = "Axle Event Export"
+                elif s.get("axle") == "import" and act == "CHARGE":
+                    act = "Axle Event Charge"
                 # An "ECO" slot where grid served the load directly and the
                 # battery didn't move at all (no charge, no self-consumption,
                 # no export) is worth its own label rather than blending
                 # into "self-consumption" — but which label depends on WHY
                 # the battery sat idle:
-                if act == "ECO" and (s.get("dispatch") or s.get("ev_kwh", 0.0) > 0):
+                elif act == "ECO" and (s.get("dispatch") or s.get("ev_kwh", 0.0) > 0):
                     # Battery locked while the EV charges (optimizer.py's
                     # ev_locked): solar and grid feed the house and car, so
                     # this isn't self-consumption.
@@ -4509,6 +4603,16 @@ class GridLock(hass.Hass):
         takes its target from (turning Qing's dial) -- rather than at the
         next 5-minute tick."""
         try:
+            axle_mtime = os.path.getmtime(self._dashboard_path("axle_settings.json"))
+        except OSError:
+            axle_mtime = 0.0
+        if axle_mtime != getattr(self, "_axle_mtime_seen", None):
+            # Key added, changed or removed: act on it now, not in 10 min.
+            first = getattr(self, "_axle_mtime_seen", None) is None
+            self._axle_mtime_seen = axle_mtime
+            if not first:
+                self.poll_axle({})
+        try:
             mtime = os.path.getmtime(self._dashboard_path("gridwarm_settings.json"))
         except OSError:
             mtime = 0.0          # no file yet (all defaults) -- still watch the thermostat
@@ -5723,6 +5827,7 @@ class GridLock(hass.Hass):
         self._manage_ev_charge_assist()
         session = self.active_saving_session(now)
         storm = self.storm_active()
+        axle_event = core_axle.event_at(getattr(self, "_axle_events", []), now)
         off_grid = self.grid_connection_off()
 
         if bool(off_grid) != self._prev_off_grid:
@@ -5755,7 +5860,7 @@ class GridLock(hass.Hass):
                             "Back to normal cost-optimised planning.")
         self._prev_storm_active = bool(storm)
 
-        ev_protection_now = ev_active and action != "CHARGE"
+        ev_protection_now = ev_active and action != "CHARGE" and not axle_event
         if ev_protection_now and not self._prev_ev_protection:
             self._notify("GridLock: EV/PV Bypass engaged",
                         "Battery locked while your EV charges — solar and "
@@ -5808,6 +5913,8 @@ class GridLock(hass.Hass):
             live_label = "Off-Grid — Self Consumption"
         elif storm:
             live_label = storm_decision["state"]
+        elif axle_event:
+            live_label = "Axle Event — Exporting" if axle_event[2] == "export" else "Axle Event — Charging"
         elif session and soc0 > self.floor_soc + 5:
             live_label = "Saving Session Export"
         elif ev_active:
@@ -5879,6 +5986,25 @@ class GridLock(hass.Hass):
             # fall through to the normal price-optimised action below,
             # which logs its own decision exactly as it would with no
             # storm active at all.
+
+        # --- Axle grid event: Axle commands the battery itself through the
+        #     Sigen cloud while one runs, so GridLock does the same thing
+        #     rather than fight it — ahead of EV Protection too (a car
+        #     charging during an event takes part of the export). Storm
+        #     Watch and off-grid, above, still come first. ---
+        if axle_event:
+            rate_p = getattr(self, "_axle_rate", core_axle.DEFAULT_RATE_GBP) * 100
+            until = axle_event[1].astimezone().strftime("%H:%M")
+            if axle_event[2] == "export":
+                self.apply(self.mode_discharge, self.discharge_kw, self.charge_kw,
+                           "Axle Event — Exporting",
+                           f"Axle grid event until {until}: exporting at full rate ({rate_p:.0f}p/kWh)",
+                           plan_html)
+            else:
+                self.apply(self.mode_charge, 0.0, self.charge_kw,
+                           "Axle Event — Charging",
+                           f"Axle import event until {until}: charging from the grid", plan_html)
+            return
 
         # --- Saving session: force export, but only when it's actually
         #     worth it. Joining a session is always free (no downside

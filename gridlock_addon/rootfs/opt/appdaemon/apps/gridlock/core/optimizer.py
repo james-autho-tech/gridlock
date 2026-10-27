@@ -51,6 +51,13 @@ def _val(var, default=0.0):
 # forcing the LP to report "no solution" instead of just importing more
 # than planned would be strictly worse for a live battery controller.
 RESERVE_PENALTY = 1000.0
+# An Axle grid event commands the battery itself (through the
+# manufacturer's cloud), so the plan has to show it happening: full
+# discharge in an export event, full charge in an import event, short
+# only where the battery physically can't. Above RESERVE_PENALTY so the
+# evening reserve can't talk the plan out of an event — it gets rebuilt
+# beforehand from cheap slots instead.
+AXLE_PENALTY = 2 * RESERVE_PENALTY
 
 # The end-of-day margin (SiteConfig.end_buffer_pct) is valued at this share
 # of the import rate of the slot it's checked in -- the last peak slot
@@ -217,6 +224,7 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
     grid_cost_terms = []
     degradation_terms = []
     reserve_penalty_terms = []
+    axle_terms = []
     # Per-slot "credit" toward the future reserve requirement for battery
     # already spent on THIS slot's own mandatory on-peak self-consumption
     # — see the reserve constraint below for why this exists.
@@ -244,6 +252,7 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
     for i, s in enumerate(slots):
         pv, load, imp, exp = s["pv"], s["load"], s["imp"], s["exp"]
         ev_locked = s.get("ev_kwh", 0.0) > 0 or bool(s.get("dispatch"))
+        axle = s.get("axle")
 
         prob += pv_to_load[i] + pv_to_batt[i] + pv_to_grid[i] + pv_to_ev[i] == pv
         prob += pv_to_load[i] + eff * batt_to_load[i] + grid_to_load[i] == load
@@ -309,6 +318,9 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
             # Battery locked while the EV charges: no PV into it, so the
             # fill-before-export rule doesn't apply this slot.
             prob += pv_to_batt[i] == 0
+        elif axle == "export":
+            # Battery discharging flat out: PV exports alongside it.
+            pass
         else:
             battery_full = pulp.LpVariable(f"batt_full_{i}", cat="Binary")
             prob += soc[i] >= (cap - full_tol_kwh) * battery_full
@@ -388,7 +400,16 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
         # (core/slots.py), so the cheap-rate branch above already
         # zeroes batt_to_load here too — only export and the charge
         # rate itself need this extra rule.
-        if s.get("dispatch"):
+        if axle == "export":
+            axle_short = pulp.LpVariable(f"axle_short_{i}", 0, max_d)
+            prob += batt_to_load[i] + batt_to_export[i] + axle_short >= max_d
+            axle_terms.append(axle_short)
+        elif axle == "import":
+            axle_short = pulp.LpVariable(f"axle_short_{i}", 0, max_c)
+            prob += charge[i] + pv_to_batt[i] + axle_short >= max_c
+            axle_terms.append(axle_short)
+
+        if s.get("dispatch") and axle != "export":
             prob += charge[i] <= cfg.ev_concurrent_charge_kw / 2.0
             prob += batt_to_export[i] == 0
 
@@ -593,6 +614,7 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
 
     prob += (pulp.lpSum(grid_cost_terms) + pulp.lpSum(degradation_terms)
              + RESERVE_PENALTY * pulp.lpSum(reserve_penalty_terms)
+             + AXLE_PENALTY * pulp.lpSum(axle_terms)
              + pulp.lpSum(buffer_terms)
              - soc[n - 1] * end_value_gbp
              - pulp.lpSum(session_reward_terms)
@@ -675,10 +697,10 @@ def _apply_min_export_block_filter(slots, cost_trace, cfg):
     i = 0
     n = len(slots)
     while i < n:
-        if slots[i]["export"] > EPS:
+        if slots[i]["export"] > EPS and not slots[i].get("axle"):
             j = i
             block_kwh = 0.0
-            while j < n and slots[j]["export"] > EPS:
+            while j < n and slots[j]["export"] > EPS and not slots[j].get("axle"):
                 block_kwh += slots[j]["export"]
                 j += 1
             if block_kwh < min_export_kwh:
@@ -708,7 +730,7 @@ def _apply_daily_target_cutoff(slots, cost_trace, cfg, today_date):
         return None
     override = {}
     for i, s in enumerate(slots):
-        if s["start"].date() == today_date and i > cutoff and s["export"] > EPS:
+        if s["start"].date() == today_date and i > cutoff and s["export"] > EPS and not s.get("axle"):
             override[i] = 0.0
     return override or None
 

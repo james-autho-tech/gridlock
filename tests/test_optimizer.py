@@ -1091,3 +1091,25 @@ def test_storm_watch_tops_up_on_the_cheap_rate_even_with_enough_banked():
 def test_storm_watch_stands_down_at_peak_with_enough_banked():
     d = _storm(60.0, 20.0, 8.0, charge_ok=False, min_reserve=6.0)
     assert d["state"] == "Storm Watch — Reserve Sufficient" and d["override"] is False
+
+
+def test_axle_export_event_discharges_flat_out_and_precharges_on_cheap():
+    """Axle commands the battery through the event regardless, so the plan
+    must show it exporting at full rate even into a peak evening — and fill
+    the battery from the cheap slot beforehand rather than import at peak."""
+    rows = ([{"imp": CHEAP / 2, "exp": 0.04, "load": 0.5}]
+            + [{"imp": 0.34, "exp": 0.04, "load": 0.5}]
+            + [{"imp": 0.34, "exp": 1.0, "load": 0.5, "axle": "export"}] * 2
+            + [{"imp": 0.34, "exp": 0.04, "load": 1.0}] * 6)
+    slots = make_slots(rows, CHEAP)
+    for s, r in zip(slots, rows):
+        s["axle"] = r.get("axle")
+    cfg = base_cfg(battery_kwh=20.0, charge_kw=20.0, discharge_kw=10.0, export_rate_kw=10.0,
+                   mode=Mode.ECO, export_degradation=0.25)
+
+    result = optimizer.solve(slots, soc0_pct=30.0, cfg=cfg)
+    assert not result.infeasible
+    for i in (2, 3):
+        assert result.slots[i]["export"] + result.cost_trace[i]["battery_kwh"] >= 5.0 - 1e-3
+        assert result.slots[i]["export"] > 4.0, "event slots export near the full 5 kWh/slot"
+    assert result.slots[0]["charge"] > 5.0, "the cheap slot before the event fills the battery"

@@ -116,6 +116,39 @@ def save_ev_schedule_settings(settings):
         json.dump(settings, f)
 
 
+AXLE_SETTINGS_PATH = os.path.join(ENGINE_DIR, "axle_settings.json")
+
+
+def load_axle_settings():
+    try:
+        with open(AXLE_SETTINGS_PATH) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_axle_settings(settings):
+    with open(AXLE_SETTINGS_PATH, "w") as f:
+        json.dump(settings, f)
+    try:
+        os.chmod(AXLE_SETTINGS_PATH, 0o600)  # holds an API key
+    except OSError:
+        pass
+
+
+def axle_status(sensor):
+    """The Axle card's data: the engine's sensor.gridlock_axle, plus
+    whether a key is saved (read here, so the key itself never leaves
+    this file)."""
+    attrs = sensor.get("attributes", {}) or {}
+    saved = load_axle_settings()
+    return {"has_key": bool(str(saved.get("api_key") or "").strip()),
+            "rate_gbp": saved.get("rate_gbp", attrs.get("rate_gbp", 1.0)),
+            "state": sensor.get("state"), "events": attrs.get("events") or [],
+            "error": attrs.get("error"), "last_poll": attrs.get("last_poll")}
+
+
 def ha_get_all_states():
     """One bulk call instead of one HTTP round-trip per entity —
     build_status() looks up 20+ entities per request; fetching them
@@ -338,6 +371,7 @@ def build_status():
         "compare_html": compare.get("attributes", {}).get("compare_html") or "",
         "compare_results": compare.get("attributes", {}).get("results") or [],
         "ev_schedule": compare.get("attributes", {}).get("ev_schedule") or {},
+        "axle": axle_status(get("sensor.gridlock_axle") or {}),
         "weather": find_weather_entity(states),
         "mode_active": status_attrs.get("battery_risk_profile") or "balanced",
         "mode_override": (get("input_select.gridlock_mode_override") or {}).get("state", "auto"),
@@ -922,6 +956,9 @@ function isPlannedBypass(state) {
 function isEvBypass(state) {
   return String(state || '').includes('EV/PV');
 }
+function isAxle(state) {
+  return String(state || '').includes('Axle');
+}
 function isStormHold(state) {
   return String(state || '').includes('Storm');
 }
@@ -929,6 +966,9 @@ function isStormHold(state) {
 function actionPill(action) {
   const a = String(action || '');
   if (isBypass(a)) return `<span class="gl-pill gl-pill-bypass">⚠️ BYPASS</span>`;
+  if (isAxle(a)) return a.includes('Charg')
+    ? `<span class="gl-pill gl-pill-charge">⚡ AXLE CHARGE</span>`
+    : `<span class="gl-pill gl-pill-export">⚡ AXLE EXPORT</span>`;
   if (isEvBypass(a)) return `<span class="gl-pill gl-pill-bypass-planned">⚡ EV/PV BYPASS</span>`;
   if (isPlannedBypass(a)) return `<span class="gl-pill gl-pill-bypass-planned">BYPASS</span>`;
   if (isStormHold(a)) return `<span class="gl-pill gl-pill-storm">🔴 STORM_HOLD</span>`;
@@ -946,6 +986,7 @@ function actionLegendHtml() {
     ['ECO', 'Self-consumption — load is covered by solar and/or the battery.'],
     ['Bypass', "Grid covers load directly and the battery is left alone on purpose — importing fresh at this cheap/off-peak rate is cheaper than cycling stored charge to avoid it. No extra wear, no loss."],
     ['EV/PV Bypass', 'The EV is charging: the battery is locked so it never feeds the car, and solar plus grid cover the house and car.'],
+    ['Axle Event Export', 'An Axle grid event: the battery exports at full rate for the event payment. GridLock charges it beforehand on cheap rates.'],
     ['Forced Bypass', 'Grid had to cover load directly because the battery was already at its floor SoC with no solar to help — a genuine shortfall, not a planning choice.'],
     ['Storm Watch — Holding', 'A weather alert is active — Storm Watch overrides the normal plan entirely, charging to its target SoC and holding regardless of price.'],
   ];
@@ -2043,6 +2084,53 @@ function renderEvSchedule(ev) {
       <button class="gl-btn-sm" style="padding:7px 14px" onclick="saveEvSchedule()">Save</button>
     </div>
   </div>`;
+}
+let axleBusy = false;
+function renderAxle(ax) {
+  ax = ax || {};
+  const rate = ax.rate_gbp != null ? ax.rate_gbp : 1.0;
+  const fmt = iso => new Date(iso).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+  const events = (ax.events || []).map(e =>
+    `<li>${esc(fmt(e.start_time))}–${esc(new Date(e.end_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))} · ${esc(e.import_export)}</li>`).join('');
+  let status;
+  if (!ax.has_key) status = '<span style="color:var(--dim)">Off</span> — add your Axle API key to turn it on.';
+  else if (ax.error) status = `<span style="color:var(--warn, #fbbf24)">${esc(ax.error)}</span>`;
+  else if (ax.state === 'Event now') status = '<span style="color:var(--green)">Event running now</span> — exporting at full rate.';
+  else if (events) status = '<span style="color:var(--green)">On</span> — events below.';
+  else status = `<span style="color:var(--green)">On</span> — no events scheduled${ax.last_poll ? ` (checked ${esc(new Date(ax.last_poll).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))})` : ''}.`;
+  const inpStyle = 'background:#0b1220;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:6px 8px;font-family:inherit';
+  return `<div class="gl-wrap">
+    <div class="gl-h">Axle grid events</div>
+    <div class="gl-sub">Optional. Axle pays for exporting during short grid events, and commands the battery itself while one runs. With your Axle API key here, GridLock reads the event schedule, charges the battery beforehand on cheap rates, keeps enough for the evening, and follows each event instead of fighting it. Storm Watch still comes first. Get the key from the Axle app in <b>Events Only</b> mode (Home Assistant token). No key = off.</div>
+    <div class="gl-sub" style="margin-bottom:10px">${status}</div>
+    ${events ? `<ul style="margin:0 0 10px 18px;padding:0;font-size:13px">${events}</ul>` : ''}
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:end">
+      <div><div class="lbl" style="font-size:10px">API key</div><input id="gl-axle-key" type="password" autocomplete="off" placeholder="${ax.has_key ? 'saved — paste a new one to replace' : 'paste your Axle key'}" style="${inpStyle};width:260px"></div>
+      <div><div class="lbl" style="font-size:10px">Event payment (£/kWh)</div><input id="gl-axle-rate" type="number" min="0" max="5" step="0.05" value="${esc(String(rate))}" style="${inpStyle};width:90px"></div>
+      <button class="gl-btn-sm" style="padding:7px 14px" onclick="saveAxle(false)">Save</button>
+      ${ax.has_key ? '<button class="gl-btn-sm" style="padding:7px 14px" onclick="saveAxle(true)">Remove key</button>' : ''}
+    </div>
+  </div>`;
+}
+async function saveAxle(clear) {
+  if (axleBusy) return;
+  if (clear && !window.confirm('Remove the Axle key? GridLock stops following Axle events.')) return;
+  const rate = document.getElementById('gl-axle-rate').value.trim();
+  if (!clear && (rate === '' || Number(rate) < 0 || Number(rate) > 5)) {
+    window.alert('Event payment must be between £0 and £5 per kWh.'); return;
+  }
+  axleBusy = true;
+  try {
+    const resp = await fetch('api/axle', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(clear ? { clear_key: true }
+        : { api_key: document.getElementById('gl-axle-key').value, rate_gbp: rate }),
+    });
+    const result = await resp.json();
+    if (!resp.ok) window.alert(result.error || 'Failed to save.');
+    else refresh();
+  } catch (e) { window.alert('Failed to save — network error.'); }
+  axleBusy = false;
 }
 function heatColor(pence, cheapP) {
   // Relative to the site's own configured cheap-rate threshold (blue),
@@ -3181,6 +3269,7 @@ async function refresh() {
         ${renderTariffBacktest(d.tariff_backtest_totals, d.tariff_backtest_days)}
       </div>
       ${renderEvSchedule(d.ev_schedule)}
+      ${renderAxle(d.axle)}
     </div>
     <div class="tab-page" data-tab="entities">
       <div class="gl-wrap">
@@ -3262,6 +3351,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_warranty_delete()
         elif path.endswith("/api/ev-schedule"):
             self._handle_ev_schedule()
+        elif path.endswith("/api/axle"):
+            self._handle_axle()
         else:
             self._send(404, b"not found", "text/plain")
 
@@ -3596,6 +3687,37 @@ class Handler(http.server.BaseHTTPRequestHandler):
             settings = {"daily_charge_hours": hours, "high_price_notify_p": notify_p}
             save_ev_schedule_settings(settings)
             self._send(200, json.dumps({"ok": True, **settings}).encode(), "application/json")
+        except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
+            self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
+
+    def _handle_axle(self):
+        """Save the Axle card: a new key replaces the old one, a blank key
+        keeps it, clear_key removes it (which turns Axle off)."""
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+            settings = load_axle_settings()
+            key = body.get("api_key")
+            if body.get("clear_key"):
+                settings.pop("api_key", None)
+            elif isinstance(key, str) and key.strip():
+                key = key.strip()
+                if key.lower().startswith("bearer "):
+                    key = key[7:].strip()
+                settings["api_key"] = key
+            if "rate_gbp" in body:
+                try:
+                    rate = float(body["rate_gbp"])
+                except (TypeError, ValueError):
+                    rate = -1
+                if not 0 <= rate <= 5:
+                    self._send(400, json.dumps(
+                        {"error": "Event rate must be between £0 and £5 per kWh"}).encode(), "application/json")
+                    return
+                settings["rate_gbp"] = rate
+            save_axle_settings(settings)
+            self._send(200, json.dumps({"ok": True, "has_key": bool(settings.get("api_key"))}).encode(),
+                       "application/json")
         except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
             self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
 

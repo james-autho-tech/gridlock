@@ -227,3 +227,22 @@ def test_stale_dispatch_slots_priced_at_peak_and_lose_ev_flags():
     assert stale and all(s["imp"] == 0.34465 and not s["dispatch"] and s["ev_kwh"] == 0 for s in stale)
     later = [s for s in slots if s["dispatch"]]
     assert later and all(s["imp"] == 0.0666 for s in later), "future dispatches stay cheap"
+
+
+def test_axle_export_event_pays_the_event_rate_and_import_event_is_free():
+    ev_start = NOW + timedelta(hours=1)
+    slots = build_slots(
+        NOW,
+        import_windows=[(NOW, NOW + timedelta(hours=72), 0.34)],
+        export_windows=[(NOW, NOW + timedelta(hours=72), 0.04)],
+        dispatch_windows=[], pv_curve={}, load_kwh_fn=lambda s: 0.4, cheap_rate=0.10,
+        live_import_rate=0.34, live_export_rate=0.04,
+        default_import_rate=0.34, default_export_rate=0.04,
+        axle_windows=[(ev_start, ev_start + timedelta(hours=1), "export"),
+                      (ev_start + timedelta(hours=3), ev_start + timedelta(hours=3, minutes=30), "import")],
+        axle_rate=1.0, horizon_slots=12, slot_min=30)
+    exp_slots = [s for s in slots if s["axle"] == "export"]
+    imp_slots = [s for s in slots if s["axle"] == "import"]
+    assert len(exp_slots) == 2 and all(s["exp"] == 1.0 for s in exp_slots)
+    assert len(imp_slots) == 1 and imp_slots[0]["imp"] == 0.0
+    assert all(s["exp"] == 0.04 and s["imp"] == 0.34 for s in slots if not s["axle"])

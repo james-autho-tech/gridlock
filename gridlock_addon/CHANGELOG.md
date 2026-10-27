@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.68.0 - 2026-10-27
+
+### Axle grid events (optional)
+- New **Axle grid events** card on the Tariffs tab. Off until an Axle API key (the Home Assistant token from the Axle app, Events Only mode) is saved; removing the key turns it off again
+- With a key, GridLock polls Axle's event schedule every 10 minutes (and straight away after saving), notifies on each new event, and shows them on the card
+- The plan prices export events at the event payment (£1/kWh by default, editable) and shows the battery exporting flat out through them, so it charges beforehand on cheap rates and keeps enough for the evening rather than importing at peak. Import events make importing free and charge the battery
+- Live: during an event GridLock exports (or charges) at full rate itself, matching what Axle commands through the Sigen cloud instead of fighting it. Storm Watch and off-grid still take priority; an event under way is followed to its end
+- Plan rows show **AXLE EXPORT** / **AXLE CHARGE**; the API key is never published to Home Assistant
+
 ## 3.67.31 - 2026-10-27
 
 ### Fix
