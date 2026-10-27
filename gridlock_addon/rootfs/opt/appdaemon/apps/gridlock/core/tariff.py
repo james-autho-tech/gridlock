@@ -58,6 +58,21 @@ class KrakenTariffProvider(TariffProvider):
     def export_windows(self):
         return self._rate_windows(self.ent_export_rates)
 
+    def adjusted_windows(self):
+        """-> [(start, end), ...] import slots priced cheap only because of a
+        smart-charge dispatch (is_intelligent_adjusted) — billed at that
+        rate only if the car actually charges in them."""
+        wins = []
+        for e in self.ent_rates:
+            for r in self._attr_list(e, "rates"):
+                if not r.get("is_intelligent_adjusted"):
+                    continue
+                try:
+                    wins.append((_iso(r["start"]), _iso(r["end"])))
+                except (KeyError, ValueError, TypeError):
+                    continue
+        return wins
+
     def dispatch_windows(self):
         """Octopus reports charge_in_kwh as negative (energy flowing to
         the car) — normalised to positive here."""

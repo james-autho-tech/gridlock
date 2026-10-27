@@ -209,3 +209,21 @@ def test_power_down_and_power_up_export_windows_populate_only_their_own_slots():
     assert all(s["power_down_export_baseline_kwh"] is None
                and s["power_up_export_baseline_kwh"] is None for s in others), \
         "slots outside both windows must stay None, not leak a neighbour's data"
+
+
+def test_stale_dispatch_slots_priced_at_peak_and_lose_ev_flags():
+    end = NOW + timedelta(hours=2)
+    slots = build_slots(
+        NOW,
+        import_windows=[(NOW, NOW + timedelta(hours=72), 0.0666)],
+        export_windows=[(NOW, NOW + timedelta(hours=72), 0.04)],
+        dispatch_windows=[(NOW, end, 14.8), (end + timedelta(hours=6), end + timedelta(hours=7), 3.7)],
+        pv_curve={}, load_kwh_fn=lambda s: 0.4, cheap_rate=0.10,
+        live_import_rate=0.0666, live_export_rate=0.04,
+        default_import_rate=0.25, default_export_rate=0.04,
+        stale_dispatch=(NOW, end, 0.34465),
+        horizon_slots=20, slot_min=30)
+    stale = [s for s in slots if s["start"] < end]
+    assert stale and all(s["imp"] == 0.34465 and not s["dispatch"] and s["ev_kwh"] == 0 for s in stale)
+    later = [s for s in slots if s["dispatch"]]
+    assert later and all(s["imp"] == 0.0666 for s in later), "future dispatches stay cheap"

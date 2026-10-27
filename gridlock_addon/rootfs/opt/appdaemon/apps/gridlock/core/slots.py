@@ -66,7 +66,7 @@ def build_slots(now, *, import_windows, export_windows, dispatch_windows,
                  horizon_slots, slot_min,
                  power_down_windows=(), power_up_windows=(),
                  power_down_export_windows=(), power_up_export_windows=(),
-                 free_electricity_windows=()):
+                 free_electricity_windows=(), stale_dispatch=None):
     """Returns a list of slot dicts:
     {start, end, imp, exp, pv, load, dispatch, ev_kwh, free_electricity,
      charge, export,
@@ -82,6 +82,11 @@ def build_slots(now, *, import_windows, export_windows, dispatch_windows,
     isn't a baseline-vs-excess reward — the whole window is free, full
     stop — so it's applied as a straight import-rate override rather
     than routed through the optimiser's session-reward machinery.
+
+    stale_dispatch: (start, end, £/kWh) or None — the rest of a dispatch
+    the car has stopped drawing in. The supplier only bills the cheap rate
+    for dispatch time the car actually charges, so those slots are priced
+    at the given (peak) rate and lose their dispatch/EV flags.
     """
     cheap_floor = min([v for _, _, v in import_windows], default=live_import_rate)
 
@@ -92,10 +97,14 @@ def build_slots(now, *, import_windows, export_windows, dispatch_windows,
         s = base + timedelta(minutes=slot_min * i)
         e = s + timedelta(minutes=slot_min)
         imp = rate_at(import_windows, s, live_import_rate if i == 0 else default_import_rate)
+        stale = bool(stale_dispatch) and stale_dispatch[0] <= s < stale_dispatch[1]
+        if stale:
+            imp = max(imp, stale_dispatch[2])
         in_free = any(ws <= s < we for ws, we in free_electricity_windows)
         if in_free:
             imp = 0.0
-        ev_win = next(((ds, de, kwh) for ds, de, kwh in dispatch_windows if ds <= s < de), None)
+        ev_win = None if stale else next(
+            ((ds, de, kwh) for ds, de, kwh in dispatch_windows if ds <= s < de), None)
         in_disp = ev_win is not None
         ev_slot_kwh = 0.0
         if in_disp:

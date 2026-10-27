@@ -1167,3 +1167,30 @@ def test_an_old_unplanned_fault_doesnt_trigger_storm_watch(engine):
     g._ssen_first_seen = {"UF1": (now - timedelta(hours=20)).isoformat()}
     g.ssen_state["faults"] = [dict(fault, type="PSI")]
     assert g.storm_active()                                  # planned interruptions always count
+
+
+def test_dispatch_the_car_stopped_drawing_in_is_priced_at_peak(engine):
+    """The car hit its 80% limit at 11:38 with EDF's dispatch still planned to
+    14:30 and the rate sensors at 6.66p. GridLock kept treating it as cheap
+    and grid-charged the battery at 12 kW, billed at peak. The rest of an
+    in-progress dispatch the car isn't drawing in is peak; later dispatches
+    and the non-dispatch off-peak stay cheap."""
+    g, gridlock = engine
+    from datetime import timedelta
+    day = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    at = lambda h, m=0: day + timedelta(hours=h, minutes=m)
+    rates = [(at(6), at(9), 0.34465), (at(9), at(14, 30), 0.0666),
+             (at(14, 30), at(22, 30), 0.34465), (at(22, 30), at(23), 0.0666),
+             (at(23), at(30), 0.0666)]
+    g.tariff_provider = types.SimpleNamespace(
+        import_windows=lambda: rates,
+        dispatch_windows=lambda: [(at(11, 30), at(14, 30), 22.2), (at(22, 30), at(23), 3.7)],
+        adjusted_windows=lambda: [(at(9), at(14, 30)), (at(22, 30), at(23))])
+    g.ent_ev_power = "sensor.hypervolt_ev_power"
+
+    g.states["sensor.hypervolt_ev_power"] = {"state": "0", "attributes": {}}
+    assert g._stale_dispatch(at(11, 48)) == (at(11, 30), at(14, 30), 0.34465)
+    assert g._stale_dispatch(at(15)) is None, "no dispatch in progress"
+
+    g.states["sensor.hypervolt_ev_power"] = {"state": "7100", "attributes": {}}
+    assert g._stale_dispatch(at(11, 48)) is None, "car drawing: the dispatch is real"

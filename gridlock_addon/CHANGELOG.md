@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.67.31 - 2026-10-27
+
+### Fix
+- A smart-charge dispatch the car has stopped drawing in (charge limit reached, or paused) is priced at the peak rate for the rest of that dispatch: the supplier keeps it planned and the rate sensors cheap, but only bills the cheap rate for time the car actually charges. GridLock had grid-charged the battery at 12 kW after the car hit 80%. Later dispatches and the normal off-peak stay cheap; the dispatch is trusted again as soon as the car draws power
+
 ## 3.67.30 - 2026-10-27
 
 ### Plan

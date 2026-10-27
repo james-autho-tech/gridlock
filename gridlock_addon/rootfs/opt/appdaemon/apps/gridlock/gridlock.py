@@ -2490,7 +2490,34 @@ class GridLock(hass.Hass):
                 self.ent_power_down_export_baseline, self._power_down_points_for_session),
             power_up_export_windows=self._octoplus_session_windows(self.ent_power_up_export_baseline),
             free_electricity_windows=self._edf_free_electricity_windows(),
+            stale_dispatch=self._stale_dispatch(now),
             horizon_slots=self.cfg.horizon_slots, slot_min=self.cfg.slot_min)
+
+    def _stale_dispatch(self, now):
+        """The rest of a dispatch in progress that the car isn't drawing in
+        (it reached its limit, or paused), priced at the peak rate. The
+        supplier keeps the dispatch planned and the rate sensors at the cheap
+        rate, but only bills that rate for time the car really charges —
+        trusting it here grid-charged the battery at 12 kW after the car
+        finished. Future dispatches are left alone."""
+        if self._ev_is_charging():
+            return None
+        provider = self.tariff_provider
+        wins = [(s, e) for s, e, _ in provider.dispatch_windows()]
+        if hasattr(provider, "adjusted_windows"):
+            wins += provider.adjusted_windows()
+        slot_start = now.replace(minute=(0 if now.minute < 30 else 30), second=0, microsecond=0)
+        # Extend through back-to-back windows covering now.
+        end = slot_start
+        while True:
+            nxt = max((e for s, e in wins if s <= end < e), default=None)
+            if nxt is None:
+                break
+            end = nxt
+        if end == slot_start:
+            return None
+        peak = max((v for _, _, v in provider.import_windows()), default=self.default_import)
+        return (slot_start, end, max(peak, self.default_import))
 
     def _solve_plan(self, slots, soc0, now):
         settings = self._ui_zone_cache[2] if self._ui_zone_cache else None
