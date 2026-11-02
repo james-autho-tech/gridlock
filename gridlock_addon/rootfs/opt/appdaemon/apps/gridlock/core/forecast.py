@@ -23,7 +23,7 @@ dryer that only runs some days) the way silently discarding it would.
 import json
 import os
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 
 def _iso(dt_str):
@@ -70,11 +70,117 @@ class ForecastProvider(ABC):
 
 
 class SolcastForecastProvider(ForecastProvider):
-    def __init__(self, app, entities):
+    """Solcast's curve, scaled by how this array has actually performed
+    against it.
+
+    Solcast's median can sit well above a real roof's output for weeks
+    (winter shading at low sun, a mis-entered site) — one install
+    generated ~65% of forecast across eight straight days, and planning
+    the overnight top-up on the raw figure left the battery flat by the
+    evening peak. sample() compares live PV against the forecast Solcast
+    gave at the START of each day (what the overnight plan charged
+    against), slot by slot over the same minutes only, so restarts or
+    gaps can't skew the ratio. Learned per UTC hour (shading depends on
+    sun position), shrunk toward the overall ratio where an hour has
+    little data. Capped at 1.0: a good run never inflates the forecast
+    past Solcast's own figure — under-forecasting costs a little cheap
+    import, over-forecasting costs peak import."""
+
+    WINDOW_DAYS = 14
+    MIN_FORECAST_KWH = 15.0   # overall forecast energy before any correction
+    HOUR_PRIOR_KWH = 2.0      # shrinkage weight toward the overall ratio
+    FACTOR_MIN, FACTOR_MAX = 0.3, 1.0
+    MAX_SAMPLE_GAP_H = 10 / 60
+
+    def __init__(self, app, entities, path=None):
         self.app = app
         self.entities = entities or []
+        self.path = path
+        self.stats, self.snapshot = self._load()
+        self._last_sample = None
+        self._factors = self._compute_factors()
+
+    def _load(self):
+        if not self.path:
+            return {}, {}
+        try:
+            with open(self.path) as f:
+                data = json.load(f)
+            return data.get("stats", {}), data.get("snapshot", {})
+        except (OSError, ValueError):
+            return {}, {}
+
+    def _save(self):
+        if not self.path:
+            return
+        try:
+            with open(self.path, "w") as f:
+                json.dump({"stats": self.stats, "snapshot": self.snapshot}, f)
+        except OSError:
+            pass
+
+    def _compute_factors(self):
+        fc_tot = sum(h[0] for d in self.stats.values() for h in d.values())
+        act_tot = sum(h[1] for d in self.stats.values() for h in d.values())
+        if fc_tot < self.MIN_FORECAST_KWH:
+            return {"overall": 1.0, "hours": {}, "forecast_kwh": fc_tot, "actual_kwh": act_tot}
+        clamp = lambda x: max(self.FACTOR_MIN, min(self.FACTOR_MAX, x))  # noqa: E731
+        overall = act_tot / fc_tot
+        hours = {}
+        for hr in range(24):
+            k = str(hr)
+            fc_h = sum(d.get(k, (0, 0))[0] for d in self.stats.values())
+            act_h = sum(d.get(k, (0, 0))[1] for d in self.stats.values())
+            if fc_h > 0:
+                hours[k] = round(clamp((act_h + self.HOUR_PRIOR_KWH * overall)
+                                       / (fc_h + self.HOUR_PRIOR_KWH)), 3)
+        return {"overall": round(clamp(overall), 3), "hours": hours,
+                "forecast_kwh": round(fc_tot, 1), "actual_kwh": round(act_tot, 1)}
+
+    def accuracy(self):
+        """{overall, hours{utc_hour: factor}, forecast_kwh, actual_kwh}."""
+        return self._factors
+
+    def factor_for(self, t):
+        hr = str(t.astimezone(timezone.utc).hour)
+        return self._factors["hours"].get(hr, self._factors["overall"])
+
+    def sample(self, now, pv_kw):
+        """One tick of live PV (kW) against the day-start forecast."""
+        now_utc = now.astimezone(timezone.utc)
+        day = now_utc.date().isoformat()
+        if self.snapshot.get("day") != day:
+            raw = self.raw_curve()
+            self.snapshot = {"day": day, "slots": {
+                t.astimezone(timezone.utc).isoformat(): kwh
+                for t, kwh in raw.items() if t.astimezone(timezone.utc).date() == now_utc.date()}}
+            cutoff = (now_utc - timedelta(days=self.WINDOW_DAYS)).date().isoformat()
+            self.stats = {d: v for d, v in self.stats.items() if d > cutoff}
+            self._factors = self._compute_factors()
+            self._save()
+        last, self._last_sample = self._last_sample, now_utc
+        if pv_kw is None or last is None:
+            return
+        dt_h = (now_utc - last).total_seconds() / 3600.0
+        if dt_h <= 0 or dt_h > self.MAX_SAMPLE_GAP_H:
+            return
+        slot = now_utc.replace(minute=(now_utc.minute // 30) * 30, second=0, microsecond=0)
+        fc_slot = self.snapshot.get("slots", {}).get(slot.isoformat())
+        if fc_slot is None:
+            return
+        fc_kwh = fc_slot / 0.5 * dt_h
+        act_kwh = max(0.0, pv_kw) * dt_h
+        if fc_kwh <= 0 and act_kwh <= 0:
+            return
+        hour = self.stats.setdefault(day, {}).setdefault(str(now_utc.hour), [0.0, 0.0])
+        hour[0] += fc_kwh
+        hour[1] += act_kwh
+        self._save()
 
     def pv_curve(self):
+        return {t: kwh * self.factor_for(t) for t, kwh in self.raw_curve().items()}
+
+    def raw_curve(self):
         curve = {}
         for e in self.entities:
             if not e or not self.app.entity_exists(e):

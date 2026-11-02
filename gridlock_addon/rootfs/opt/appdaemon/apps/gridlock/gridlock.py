@@ -39,7 +39,7 @@ from core import ev_model as core_ev_model
 
 STATE_FILES = ("load_profile.json", "savings_state.json", "savings_history.json",
                "cost_tracking_state.json", "decision_log.json",
-               "circuit_state.json", "circuit_history.json")
+               "circuit_state.json", "circuit_history.json", "solar_accuracy.json")
 
 # publish_plan()'s per-slot row shape — a single source of truth for both
 # the row length it builds and the "columns" name list it publishes
@@ -581,7 +581,8 @@ class GridLock(hass.Hass):
 
         self.tariff_provider = KrakenTariffProvider(
             self, self.ent_rates, self.ent_export_rates, self.ent_dispatch)
-        self.forecast_provider = SolcastForecastProvider(self, self.ent_solcast)
+        self.forecast_provider = SolcastForecastProvider(
+            self, self.ent_solcast, self._state_path("solar_accuracy.json"))
         self.load_provider = LearnedLoadForecastProvider(
             self, self._state_path("load_profile.json"),
             load_power_entity=self.ent_load_power, ev_entity=self.ent_ev,
@@ -2561,7 +2562,7 @@ class GridLock(hass.Hass):
                 f"{'a cheap/dispatch window is active' if in_cheap_window else 'no cheap/dispatch window right now'}")
         overview = ", ".join(
             f"{v['name']}: {v['battery_pct']:.0f}% ({v['charging_state']})"
-            if isinstance(v["battery_pct"], (int, float)) else f"{v['name']}: {v['charging_state']}"
+            if isinstance(v.get("battery_pct"), (int, float)) else f"{v['name']}: {v['charging_state']}"
             for v in vehicles.values()) or "no vehicle"
         self.set_state("sensor.gridlock_ev_charge_assist", state=overview[:255],
                        attributes={"friendly_name": "GridLock EV Charge Assist",
@@ -3267,6 +3268,10 @@ class GridLock(hass.Hass):
         today_kwh = sum(kwh for t, kwh in curve.items() if t.date() == now.date())
         tomorrow_kwh = sum(kwh for t, kwh in curve.items()
                            if t.date() == (now + timedelta(days=1)).date())
+        raw = self.forecast_provider.raw_curve()
+        raw_today = sum(kwh for t, kwh in raw.items() if t.date() == now.date())
+        raw_tomorrow = sum(kwh for t, kwh in raw.items()
+                           if t.date() == (now + timedelta(days=1)).date())
         self.set_state("sensor.gridlock_solar_forecast",
                        state=f"{today_kwh:.2f}",
                        attributes={"friendly_name": "GridLock Solar Forecast",
@@ -3274,7 +3279,10 @@ class GridLock(hass.Hass):
                                    "icon": "mdi:solar-power-variant",
                                    "forecast_data": fc,
                                    "today_kwh": round(today_kwh, 2),
-                                   "tomorrow_kwh": round(tomorrow_kwh, 2)})
+                                   "tomorrow_kwh": round(tomorrow_kwh, 2),
+                                   "solcast_today_kwh": round(raw_today, 2),
+                                   "solcast_tomorrow_kwh": round(raw_tomorrow, 2),
+                                   "accuracy": self.forecast_provider.accuracy()})
 
     # ------------------------------------------------------------------
     # HEAT PUMP THERMAL MODEL (GridWarm — see core/thermal.py's
@@ -5985,6 +5993,7 @@ class GridLock(hass.Hass):
             all_circuits.append(HEATPUMP_POWER_ENTITY)
         self.load_provider.circuit_power_entities = all_circuits
         self.load_provider.sample(now)
+        self.forecast_provider.sample(now, self._read_live_kw(self.ent_pv_power_entities))
         self.publish_circuits(labeled_circuits, now)
         self._update_savings(now)
         self.publish_solar_forecast(now)
