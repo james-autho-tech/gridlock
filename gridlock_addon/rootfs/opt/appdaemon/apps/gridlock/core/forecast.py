@@ -74,7 +74,7 @@ class SolcastForecastProvider(ForecastProvider):
     against it.
 
     Solcast's median can sit well above a real roof's output for weeks
-    (winter shading at low sun, a mis-entered site) — one install
+    (winter shading at low sun, a mis-entered site); one install
     generated ~65% of forecast across eight straight days, and planning
     the overnight top-up on the raw figure left the battery flat by the
     evening peak. sample() compares live PV against the forecast Solcast
@@ -83,7 +83,7 @@ class SolcastForecastProvider(ForecastProvider):
     gaps can't skew the ratio. Learned per UTC hour (shading depends on
     sun position), shrunk toward the overall ratio where an hour has
     little data. Capped at 1.0: a good run never inflates the forecast
-    past Solcast's own figure — under-forecasting costs a little cheap
+    past Solcast's own figure. Under-forecasting costs a little cheap
     import, over-forecasting costs peak import."""
 
     WINDOW_DAYS = 14

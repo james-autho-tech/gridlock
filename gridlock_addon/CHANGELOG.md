@@ -4,7 +4,7 @@
 
 ### Solar forecast accuracy
 - Solcast's forecast is now scaled by how the array has actually performed against it: live PV vs the forecast given at the start of each day, learned per hour of day over the last 14 days
-- Only ever scales down (capped at 1.0) — over-forecasting meant a too-small overnight top-up and a flat battery at the evening peak
+- Only ever scales down (capped at 1.0): over-forecasting meant a too-small overnight top-up and a flat battery at the evening peak
 - Solar Forecast sensor shows the raw Solcast figures and the learned factors alongside the corrected forecast
 
 ### Fix
