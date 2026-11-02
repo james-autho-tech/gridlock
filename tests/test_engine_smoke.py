@@ -709,6 +709,56 @@ def test_the_tank_is_heated_once_a_night_to_53(engine):
     assert d["committed"] is False
 
 
+def test_a_warm_tank_still_gets_its_night_fill(engine):
+    g, _ = engine
+    _seed_house(g)
+    _seed_tank(g)
+    from datetime import timedelta
+    with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
+        json.dump({"hot_water": {"legionella_enabled": False, "ready_by_times": ["19:30@45"]}}, f)
+    g.states["number.loft_heatpump_controller_set_dhw_tank_temperature_t5s"]["state"] = "45.0"
+    # Barely used: a learned profile that says the tank "can cover" tomorrow.
+    g.thermal_learning_state.setdefault("Hot water", {})["dhw_profile"] = [50.0] * 48
+    g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "52.0"
+    now = g.get_now()
+    t23 = now.astimezone().replace(hour=23, minute=0, second=0, microsecond=0).astimezone(now.tzinfo)
+    g.build_slots = lambda now_: _peak_and_night_slots(g, now_.replace(minute=0, second=0, microsecond=0))
+    d = None
+    for m in range(0, 390, 30):
+        g._publish_thermal_forecast(t23 + timedelta(minutes=m))
+        d = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]["dhw"]
+        if d["committed"]:
+            break
+    assert d["committed"] is True
+    # Lifted past the unit's 2 C start hysteresis, so a 52 C tank really runs.
+    assert d["daily_target"] == 55.0
+    sp = [kw["value"] for svc, kw in g.calls if svc == "number/set_value"
+          and kw["target"]["entity_id"].endswith("set_dhw_tank_temperature_t5s")]
+    assert sp and sp[-1] == 55.0
+    # Climbing mid-run doesn't chase the setpoint any higher.
+    g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "54.0"
+    g._publish_thermal_forecast(t23 + timedelta(minutes=m + 10))
+    d = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]["dhw"]
+    assert d["daily_target"] == 55.0
+
+
+def test_a_full_tank_skips_the_night_fill(engine):
+    g, _ = engine
+    _seed_house(g)
+    _seed_tank(g)
+    from datetime import timedelta
+    with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
+        json.dump({"hot_water": {"legionella_enabled": False}}, f)
+    g.states["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "53.0"
+    now = g.get_now()
+    t23 = now.astimezone().replace(hour=23, minute=0, second=0, microsecond=0).astimezone(now.tzinfo)
+    g.build_slots = lambda now_: _peak_and_night_slots(g, now_.replace(minute=0, second=0, microsecond=0))
+    for m in range(0, 390, 30):
+        g._publish_thermal_forecast(t23 + timedelta(minutes=m))
+        d = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]["dhw"]
+        assert d["committed"] is False
+
+
 def test_compressor_minimum_output_is_learned_from_steady_low_speed_running(engine):
     g, _ = engine
     _seed_house(g)

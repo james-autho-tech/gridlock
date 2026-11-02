@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.69.2 - 2026-11-02
+
+### Fix
+- Hot water: the nightly fill now runs every night the tank is short of the night target, not only once it falls 2 °C below it — a warm evening tank no longer skips the night and goes cold by the next one
+- Nightly fill no longer skipped on a "tank can cover tomorrow" usage estimate
+- Setpoint for a nearly-full tank's fill is lifted past the unit's start hysteresis (capped at 55 °C) so the unit actually starts
+
 ## 3.69.1 - 2026-10-27
 
 ### Fix

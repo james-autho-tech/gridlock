@@ -3932,15 +3932,26 @@ class GridLock(hass.Hass):
         # the next ready-by is what the window is racing (the cheapest slot
         # before it gets chosen), when it's below the low threshold, on a
         # legionella night, or when a configured forced-run timer is up.
+        night_run = False
         if night_only:
-            # The night's one fill: always to night_target, whenever the
-            # tank is below the point the unit would start at for it.
+            # The night's one fill: every night, to night_target, whenever the
+            # tank is short of it at all -- not only once it's fallen below the
+            # unit's own start point, or a warm evening tank skips the night
+            # and is cold by the next one. The setpoint is lifted past the
+            # unit's start hysteresis from the tank's temperature when the run
+            # began, so the unit actually starts for a nearly-full tank.
+            night_t = d.get("night_target", 53.0)
             if not top_up:
-                daily_target = d.get("night_target", 53.0)
+                start_t = (committed or {}).get("start_temp", tank_temp)
+                daily_target = night_t
+                if start_t is not None:
+                    daily_target = min(max(night_t, d.get("max_daily_setpoint", 55.0)),
+                                       max(night_t, round(start_t + hyst + 1.0)))
             night_done = bool(window) and not top_up and learn.get("dhw_night_done") == core_dhw.night_key(
                 (self._slot_floor(now) + timedelta(minutes=SLOT_MIN * window[0])).astimezone())
+            night_run = not top_up and bool(window) and mask[window[0]]
             needed = top_up or lg_due or (not night_done and (
-                low or tank_temp is None or tank_temp < daily_target - hyst))
+                low or tank_temp is None or tank_temp < night_t - d.get("hysteresis_off", 0.5)))
         else:
             needed = low or lg_due or deadline <= run_slots or by is not None
         skipped = False
@@ -3948,7 +3959,9 @@ class GridLock(hass.Hass):
         # it -- when its window ends the cycle stops (below), full stop.
         if not committed and window and window[0] == 0 and needed and not lg.get("phase"):
             horizon = max(run_slots, deadline)
-            if profile and core_dhw.tank_can_cover(
+            # The night's fill never skips on "warm enough": it's what
+            # tomorrow's water comes from.
+            if profile and not night_run and core_dhw.tank_can_cover(
                     tank_temp, setpoint, hyst, zone["params"].thermal_mass_wh_per_c,
                     sum(expected[:horizon]), zone["params"].heat_loss_watts, horizon * slot_hours):
                 # Warm enough for everything the house is expected to draw
@@ -3957,7 +3970,8 @@ class GridLock(hass.Hass):
                 skipped = True
             else:
                 committed = {"start": now.isoformat(),
-                             "end": (now + timedelta(minutes=SLOT_MIN * run_slots)).isoformat()}
+                             "end": (now + timedelta(minutes=SLOT_MIN * run_slots)).isoformat(),
+                             "start_temp": tank_temp}
                 if top_up:
                     committed["top_up"] = True
                 elif night_only and mask[0]:
