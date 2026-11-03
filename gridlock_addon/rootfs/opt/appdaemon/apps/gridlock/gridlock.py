@@ -1328,7 +1328,13 @@ class GridLock(hass.Hass):
                 result = core_optimizer.solve(slots, soc0, temp_cfg, today_date=now.date())
                 if result.infeasible:
                     raise ValueError("LP reported infeasible")
-                comparison[opt_mode.value] = round(result.grid_cost, 2)
+                # Settled to the starting battery level (same as the tariff
+                # comparison), so a profile can't look cheaper just by
+                # leaving the battery emptier at the end of the day.
+                used_kwh = (soc0 - (result.trace[-1] if result.trace else soc0)) / 100.0 * self.cfg.battery_kwh
+                paid = [sl["imp"] for sl in slots if sl["imp"] > 0.005]
+                refill = (min(paid) if paid else self.default_import) / max(self.cfg.efficiency, 0.5)
+                comparison[opt_mode.value] = round(result.grid_cost + used_kwh * refill, 2)
             except Exception as exc:  # noqa: BLE001 — one mode failing shouldn't break the tick
                 self.log(f"Profile comparison failed for {opt_mode.value!r}: {exc!r}", level="WARNING")
         today_iso = now.date().isoformat()
@@ -3292,7 +3298,7 @@ class GridLock(hass.Hass):
                                                         if slots else None)})
         return html
 
-    def publish_compare(self, slots, soc0, live_cost, now):
+    def publish_compare(self, slots, soc0, live_cost, now, live_end_pct=None):
         # is_live distinguishes "we actually queried this tariff's real
         # rates" (Current, Agile) from "a fixed rate + time windows typed
         # into apps.yaml as an approximation of this tariff's published
@@ -3317,7 +3323,24 @@ class GridLock(hass.Hass):
         live_exp = self.get_float_state(self.ent_export_rate, self.default_export)
         live_standing = self.get_float_state(self.ent_daily_standing_charge, None)
         assumed_standing = live_standing or 0.0
-        rows = [("Current (live rates)", live_cost + assumed_standing * horizon_hours / 24.0, True,
+
+        def settled(grid_cost, end_pct, imp):
+            """Grid cost plus refilling the battery to where it started, at
+            that tariff's own cheapest rate in the window. Without this a
+            row could run down charge bought on your current tariff and
+            look nearly free (an Agile row over a 22h window came out at
+            59p/day on 35p-61p rates)."""
+            used_kwh = (soc0 - end_pct) / 100.0 * self.cfg.battery_kwh
+            paid = [r for r in imp if r > 0.005]
+            price = (min(paid) if paid else self.default_import) / max(self.cfg.efficiency, 0.5)
+            return grid_cost + used_kwh * price
+
+        def end_pct(result):
+            return result.trace[-1] if result.trace else soc0
+
+        live_end = soc0 if live_end_pct is None else live_end_pct
+        rows = [("Current (live rates)",
+                 settled(live_cost, live_end, [s["imp"] for s in slots]) + assumed_standing * horizon_hours / 24.0, True,
                   {"import_desc": f"{round(live_imp * 100, 1)}p right now",
                    "export_p": round(live_exp * 100, 1),
                    "standing_p": round(live_standing * 100, 1) if live_standing is not None else None},
@@ -3357,7 +3380,7 @@ class GridLock(hass.Hass):
             standing_assumed = standing is None
             if standing_assumed:
                 standing = assumed_standing
-            c = result.grid_cost + float(standing) * horizon_hours / 24.0
+            c = settled(result.grid_cost, end_pct(result), imp) + float(standing) * horizon_hours / 24.0
             default_p = round(float(t.get("import_default", self.default_import)) * 100, 1)
             windows_desc = "; ".join(
                 f"{round(float(w['rate']) * 100, 1)}p off-peak {w['start']}–{w['end']}"
@@ -3428,7 +3451,7 @@ class GridLock(hass.Hass):
                             ev_cost = ev_avg_rate * ev_total_kwh
                             ev_desc = f" · EV {ev_total_kwh:.1f}kWh @ {round(ev_avg_rate * 100, 1)}p (best window)"
                     rows.append((f"Octopus Agile (import, next {hours:.0f}h)",
-                                 result.grid_cost + standing + ev_cost, True,
+                                 settled(result.grid_cost, end_pct(result), agile_imp) + standing + ev_cost, True,
                                  {"import_desc": f"{round(lo, 1)}p–{round(hi, 1)}p live half-hourly{ev_desc}",
                                   "export_p": round(agile_slots[0]["exp"] * 100, 1),
                                   "standing_p": round(self.agile_standing_gbp * 100, 1)},
@@ -3458,7 +3481,7 @@ class GridLock(hass.Hass):
                 continue
             standing = prod["standing_gbp"] * horizon_hours / 24.0
             lo, hi = min(edf_imp) * 100, max(edf_imp) * 100
-            rows.append((f"EDF GoElectric ({term}, live)", result.grid_cost + standing, True,
+            rows.append((f"EDF GoElectric ({term}, live)", settled(result.grid_cost, end_pct(result), edf_imp) + standing, True,
                          {"import_desc": f"{round(lo, 1)}p–{round(hi, 1)}p live (off-peak/day)",
                           "export_p": round(self.edf_export_rate * 100, 1),
                           "standing_p": round(prod["standing_gbp"] * 100, 1)},
@@ -3474,7 +3497,8 @@ class GridLock(hass.Hass):
             if result.infeasible:
                 self.log(f"{name} comparison reported infeasible - skipping it this tick.", level="WARNING")
                 continue
-            rows.append((f"{name} (live)", result.grid_cost + prod["standing_gbp"] * horizon_hours / 24.0, True,
+            rows.append((f"{name} (live)", settled(result.grid_cost, end_pct(result), oct_imp)
+                         + prod["standing_gbp"] * horizon_hours / 24.0, True,
                          {"import_desc": f"{core_octopus.describe(prod['windows'])} live",
                           "export_p": round(slots[0]["exp"] * 100, 1) if slots else None,
                           "standing_p": round(prod["standing_gbp"] * 100, 1)},
@@ -6387,7 +6411,8 @@ class GridLock(hass.Hass):
             live_label = None
 
         plan_html = self.publish_plan(slots, trace, cost_trace, grid_cost, soc0, now, live_label)
-        self.publish_compare(self.build_slots(now), soc0, grid_cost, now)
+        self.publish_compare(self.build_slots(now), soc0, grid_cost, now,
+                             live_end_pct=trace[-1] if trace else soc0)
         self.plan = slots
 
         target = next((trace[i] for i, s in enumerate(slots)

@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.72.2 - 2026-11-03
+
+### Fix
+- Tariff and risk profile comparisons now settle the battery back to its starting level at each option's own cheapest rate; rows could look nearly free by running down charge bought on your current tariff (Agile showed 59p/day on 35p to 61p rates)
+
 ## 3.72.1 - 2026-11-03
 
 ### Fix
