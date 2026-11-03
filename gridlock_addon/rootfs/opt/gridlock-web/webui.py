@@ -2,13 +2,17 @@
 """Minimal Ingress web UI for GridLock — a live status page served
 straight out of HA state."""
 
+import glob
 import http.server
 import json
 import os
+import re
 import socketserver
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 
 # Same container as GridLock's own AppDaemon app -- reuse its date
 # parser directly instead of duplicating the UK/ISO parsing logic here,
@@ -182,7 +186,57 @@ def autho_solar_status(sensor):
             "site": attrs.get("site") or None, "sites": attrs.get("sites") or [], "error": attrs.get("error"),
             "plan_source": attrs.get("plan_source"), "last_fetch": attrs.get("last_fetch"),
             "queued": attrs.get("queued"), "upcoming": attrs.get("upcoming") or {},
-            "history": attrs.get("history") or [], "summary": attrs.get("summary") or {}}
+            "history": attrs.get("history") or [], "summary": attrs.get("summary") or {},
+            "chart_days": autho_solar_day_list() if has_key else []}
+
+
+def load_autho_solar_state():
+    """The engine's saved Autho Solar state (readings, evening snapshots,
+    scored days), or {} if it isn't there yet."""
+    paths = glob.glob(os.path.join(ENGINE_DIR, "*__autho_solar_state.json"))
+    if not paths:
+        return {}
+    try:
+        with open(max(paths, key=os.path.getmtime)) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def autho_solar_day(date):
+    """One day half-hour by half-hour for the Solar tab's chart: a scored
+    day from the engine's kept detail, or today so far (last night's
+    snapshot against the readings in up to now)."""
+    state = load_autho_solar_state()
+    detail = (state.get("detail") or {}).get(date)
+    partial = False
+    if not isinstance(detail, dict):
+        snap = (state.get("snapshots") or {}).get(date)
+        acts = (state.get("actuals") or {}).get(date) or {}
+        if not isinstance(snap, dict):
+            return None
+        partial = True
+        keep = sorted(k for k in set(acts) | {k for fc in snap.values() for k in fc}
+                      if acts.get(k, 0) > 0.005 or any(fc.get(k, 0) > 0.005 for fc in snap.values()))
+        detail = {"actual": {k: acts[k] for k in keep if k in acts}}
+        for source, fc in snap.items():
+            detail[source] = {k: fc[k] for k in keep if k in fc}
+    slots = sorted({k for series in detail.values() if isinstance(series, dict) for k in series})
+    rows = [{"t": k, **{name: series[k] for name, series in detail.items() if isinstance(series, dict) and k in series}}
+            for k in slots]
+    return {"date": date, "partial": partial, "slots": rows}
+
+
+def autho_solar_day_list():
+    """Days the chart can show, newest first: today (if last night's
+    forecasts were recorded) and every day kept half-hour by half-hour."""
+    state = load_autho_solar_state()
+    days = set((state.get("detail") or {}).keys())
+    today = datetime.now(timezone.utc).date().isoformat()
+    if today in (state.get("snapshots") or {}):
+        days.add(today)
+    return sorted(days, reverse=True)
 
 
 def ha_get_all_states():
@@ -2213,28 +2267,109 @@ function renderAuthoSolar(a) {
   const sm = a.summary || {};
   const tiles = AUTHO_SOURCES.map(([k, l]) => {
     const r = sm[k];
+    const slotPct = r && r.median_slot_error_pct != null ? `${r.median_slot_error_pct.toFixed(0)}%` : '-';
     return `<div class="gl-tile"><div class="lbl">${l}</div>
-      <div class="val num">${r && r.median_abs_error_pct != null ? r.median_abs_error_pct.toFixed(0) + '%' : '-'}</div>
-      <div class="gl-sub" style="margin:2px 0 0">typical day error${r ? `, closest on ${r.closest_days || 0} of ${r.days} days` : ''}${r && r.mean_slot_mae_kwh != null ? `, half-hours off by ${r.mean_slot_mae_kwh.toFixed(2)} kWh` : ''}</div></div>`;
+      <div class="val num">${r && r.median_abs_error_pct != null ? r.median_abs_error_pct.toFixed(0) + '%' : '-'} <span style="font-size:13px;color:var(--dim);font-weight:500">day</span>
+        <span style="font-size:20px">${slotPct}</span> <span style="font-size:13px;color:var(--dim);font-weight:500">half-hours</span></div>
+      <div class="gl-sub" style="margin:2px 0 0">typical miss on the day total and half-hour by half-hour${r ? `; closest on ${Math.round(r.closest_days || 0)} of ${Math.round(r.days)} days` : ''}${r && r.mean_slot_mae_kwh != null ? `; about ${r.mean_slot_mae_kwh.toFixed(2)} kWh per daylight half-hour` : ''}</div></div>`;
   }).join('');
-  const range = sm.autho_range ? `<div class="gl-sub">Actual inside Autho Solar's range on ${sm.autho_range.inside} of ${sm.autho_range.days} days.</div>` : '';
+  const rs = sm.autho_range_slots;
+  const range = sm.autho_range ? `<div class="gl-sub">Actual inside Autho Solar's range on ${Math.round(sm.autho_range.inside)} of ${Math.round(sm.autho_range.days)} days${rs && rs.of ? `, and in ${Math.round(rs.inside)} of ${Math.round(rs.of)} daylight half-hours (${(rs.inside / rs.of * 100).toFixed(0)}%)` : ''}.</div>` : '';
   const hist = (a.history || []).slice().reverse();
   const cell = (r, k) => {
     const x = r[k];
     if (!x) return '<td><span style="color:var(--dim)">-</span></td>';
     const errs = AUTHO_SOURCES.map(([s]) => r[s] && r[s].error_pct != null ? Math.abs(r[s].error_pct) : Infinity);
     const best = x.error_pct != null && Math.abs(x.error_pct) === Math.min(...errs);
-    return `<td style="${best ? 'color:var(--green);font-weight:700' : ''}">${x.kwh.toFixed(1)} <span style="color:var(--dim)">(${x.error_pct == null ? '-' : (x.error_pct > 0 ? '+' : '') + x.error_pct.toFixed(0) + '%'})</span></td>`;
+    return `<td style="${best ? 'color:var(--green);font-weight:700' : ''}">${x.kwh.toFixed(1)} <span style="color:var(--dim)">(${x.error_pct == null ? '-' : (x.error_pct > 0 ? '+' : '') + x.error_pct.toFixed(0) + '%'})</span>${x.slot_error_pct != null ? `<div style="font-size:11px;color:var(--dim);font-weight:400">half-hours ${x.slot_error_pct.toFixed(0)}% out</div>` : ''}</td>`;
   };
   const table = hist.length ? `<div style="overflow-x:auto"><table class="gl-plan"><tr><th>Day</th><th>Actual</th>${AUTHO_SOURCES.map(([, l]) => `<th>${l}</th>`).join('')}</tr>
     ${hist.map((r) => `<tr><td>${esc(dayName(r.date))}</td><td><b>${r.actual_kwh.toFixed(1)}</b></td>${AUTHO_SOURCES.map(([k]) => cell(r, k)).join('')}</tr>`).join('')}</table></div>`
-    : '<div class="gl-sub">The first scored day appears the morning after tomorrow: tonight at 21:00 GridLock records tomorrow\'s forecasts, and they are scored once tomorrow has happened.</div>';
+    : '<div class="gl-sub">The first scored day appears the morning after tomorrow: tonight at 21:00 GridLock records tomorrow\'s forecasts, and they are scored once tomorrow has happened. Today\'s chart below fills in as the day goes.</div>';
   return `${settings}
   <div class="gl-wrap"><div class="gl-h">Next few days</div>
     <div class="gl-sub">Solar generation forecast by each source.</div>${upcoming}</div>
   <div class="gl-wrap"><div class="gl-h">Scoreboard</div>
     <div class="gl-sub">Each forecast as it stood the evening before, against what the panels actually made. Green is the closest that day.</div>
-    <div class="gl-grid" style="margin-bottom:10px">${tiles}</div>${range}${table}</div>`;
+    <div class="gl-grid" style="margin-bottom:10px">${tiles}</div>${range}${table}</div>
+  ${authoDayBlock(a, inp, dayName)}`;
+}
+// ---- Solar tab: one day, half-hour by half-hour ----
+const authoDayCache = {};   // date -> { data, at }
+let authoDaySel = null, authoDayLoading = null;
+const AUTHO_LINES = [['solcast_raw', 'Solcast', 'var(--dim)', '5,4'], ['solcast_corrected', 'Solcast, corrected', 'var(--cyan)', ''], ['autho_p50', 'Autho Solar', 'var(--green)', '']];
+function authoDayBlock(a, inp, dayName) {
+  const days = a.chart_days || [];
+  const head = '<div class="gl-h">Half-hour by half-hour</div>';
+  if (!days.length) return `<div class="gl-wrap">${head}<div class="gl-sub">Starts tomorrow: tonight at 21:00 GridLock records tomorrow's forecasts, and from then on each half-hour is drawn against what the panels made.</div></div>`;
+  const today = new Date().toISOString().slice(0, 10);
+  if (!authoDaySel || !days.includes(authoDaySel)) authoDaySel = days[0];
+  const c = authoDayCache[authoDaySel];
+  if (!c || (authoDaySel === today && Date.now() - c.at > 5 * 60e3)) loadAuthoDay(authoDaySel);
+  const sel = `<select id="gl-autho-day-sel" onchange="pickAuthoDay(this.value)" style="${inp}">${days.map((d) => `<option value="${esc(d)}" ${d === authoDaySel ? 'selected' : ''}>${d === today ? 'Today so far' : esc(dayName(d))}</option>`).join('')}</select>`;
+  return `<div class="gl-wrap">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">${head}${sel}</div>
+    <div class="gl-sub">Each forecast as it stood the evening before, against what the panels made in every half-hour. A forecast can get the day total right and still put the sun in the wrong hours, which is what decides when to charge.</div>
+    <div id="gl-autho-day-body">${c ? authoDayChart(c.data) : '<div class="gl-sub">Loading</div>'}</div></div>`;
+}
+async function loadAuthoDay(date) {
+  if (authoDayLoading === date) return;
+  authoDayLoading = date;
+  try {
+    const r = await fetch(`api/autho-solar/day?date=${encodeURIComponent(date)}`);
+    authoDayCache[date] = { data: r.ok ? await r.json() : null, at: Date.now() };
+  } catch (e) { /* keep whatever was there */ }
+  authoDayLoading = null;
+  const el = document.getElementById('gl-autho-day-body');
+  if (el && authoDaySel === date && authoDayCache[date]) el.innerHTML = authoDayChart(authoDayCache[date].data);
+}
+function pickAuthoDay(date) {
+  authoDaySel = date;
+  document.querySelectorAll('#gl-autho-day-sel').forEach((el) => { el.value = date; });
+  const el = document.getElementById('gl-autho-day-body');
+  const c = authoDayCache[date];
+  if (el) el.innerHTML = c ? authoDayChart(c.data) : '<div class="gl-sub">Loading</div>';
+  if (!c) loadAuthoDay(date);
+}
+function authoDayChart(day) {
+  const S = (day && day.slots) || [];
+  if (!S.length) return '<div class="gl-sub">No half-hours recorded for this day.</div>';
+  const n = S.length, H = 170, colW = VB_W / n;
+  const vals = S.flatMap((s) => ['actual', 'solcast_raw', 'solcast_corrected', 'autho_p50', 'autho_p90'].map((k) => s[k]).filter((v) => v != null));
+  const hi = Math.max(0.1, ...vals) * 1.1;
+  const y = yScale(0, hi, H);
+  const cx = (i) => ((i + 0.5) * colW).toFixed(1);
+  const bars = S.map((s, i) => s.actual == null ? '' : `<rect x="${(i * colW + 1).toFixed(1)}" y="${y(s.actual).toFixed(1)}" width="${Math.max(1, colW - 2).toFixed(1)}" height="${(y(0) - y(s.actual)).toFixed(1)}" fill="var(--amber)" opacity="0.45"/>`).join('');
+  const banded = S.map((s, i) => [s, i]).filter(([s]) => s.autho_p10 != null && s.autho_p90 != null);
+  const band = banded.length > 1 ? `<polygon points="${banded.map(([s, i]) => `${cx(i)},${y(s.autho_p90).toFixed(1)}`).concat(banded.slice().reverse().map(([s, i]) => `${cx(i)},${y(s.autho_p10).toFixed(1)}`)).join(' ')}" fill="var(--green)" opacity="0.13"/>` : '';
+  const line = ([k, , colour, dash]) => {
+    let d = '', pen = false;
+    S.forEach((s, i) => { if (s[k] == null) { pen = false; return; } d += `${pen ? 'L' : 'M'}${cx(i)},${y(s[k]).toFixed(1)}`; pen = true; });
+    return d ? `<path d="${d}" fill="none" stroke="${colour}" stroke-width="2" ${dash ? `stroke-dasharray="${dash}"` : ''} vector-effect="non-scaling-stroke" stroke-linejoin="round"/>` : '';
+  };
+  const f2 = (v) => v == null ? '-' : Number(v).toFixed(2);
+  const hits = S.map((s, i) => `<rect x="${(i * colW).toFixed(1)}" y="0" width="${colW.toFixed(1)}" height="${H}" fill="transparent"><title>${esc(hhmm(s.t))}: actual ${f2(s.actual)} kWh${AUTHO_LINES.map(([k, l]) => s[k] != null ? `\n${l} ${f2(s[k])}` : '').join('')}${s.autho_p10 != null ? `\nAutho Solar range ${f2(s.autho_p10)} to ${f2(s.autho_p90)}` : ''}</title></rect>`).join('');
+  // The day so far: only half-hours that have a reading count.
+  const done = S.filter((s) => s.actual != null);
+  const act = done.reduce((t, s) => t + s.actual, 0);
+  const score = ([k, l, colour]) => {
+    const have = done.filter((s) => s[k] != null);
+    if (!have.length || act <= 0.2) return '';
+    const fc = have.reduce((t, s) => t + s[k], 0);
+    const miss = have.reduce((t, s) => t + Math.abs(s[k] - s.actual), 0);
+    const dayErr = (fc - act) / act * 100;
+    return `<span style="white-space:nowrap"><span class="gl-legend-dot" style="background:${colour}"></span>${l} ${fc.toFixed(1)} kWh (day ${dayErr > 0 ? '+' : ''}${dayErr.toFixed(0)}%, half-hours ${(miss / act * 100).toFixed(0)}% out)</span>`;
+  };
+  const inRange = done.filter((s) => s.autho_p10 != null && s.autho_p90 != null && (s.actual > 0.005 || s.autho_p90 > 0.005));
+  const inside = inRange.filter((s) => s.actual >= s.autho_p10 - 0.01 && s.actual <= s.autho_p90 + 0.01).length;
+  const legend = `<div class="gl-combo-legend" style="margin:8px 0 4px">
+      <span style="white-space:nowrap"><span class="gl-legend-dot" style="background:var(--amber);opacity:.6"></span>Actual${day.partial ? ' so far' : ''} ${act.toFixed(1)} kWh</span>
+      ${AUTHO_LINES.map(score).join('')}
+      ${band ? `<span style="white-space:nowrap"><span class="gl-legend-dot" style="background:var(--green);opacity:.3"></span>Autho Solar range${inRange.length ? ` (${inside} of ${inRange.length} half-hours inside)` : ''}</span>` : ''}
+    </div>`;
+  const xRow = barAxisLabels(n, Math.max(1, Math.round(n / 6)), (i) => hhmm(S[i].t));
+  return legend + chartFrame(bars + band + AUTHO_LINES.map(line).join('') + hits, H, niceTicks(0, hi).map((t) => ({ ...t, label: `${t.label}` })), null, xRow)
+    + '<div class="gl-sub" style="margin-top:4px">kWh per half-hour. Hover a half-hour for every figure.</div>';
 }
 async function saveAuthoSolar(clear) {
   if (authoBusy) return;
@@ -3498,6 +3633,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(200, json.dumps(build_status()).encode(), "application/json")
         elif path.endswith("/api/gridwarm-entities"):
             self._handle_gridwarm_entities()
+        elif path.endswith("/api/autho-solar/day"):
+            query = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+            date = (query.get("date") or [""])[0]
+            day = autho_solar_day(date) if re.fullmatch(r"\d{4}-\d{2}-\d{2}", date) else None
+            if day is None:
+                self._send(404, json.dumps({"error": "no data for that day"}).encode(), "application/json")
+            else:
+                self._send(200, json.dumps(day).encode(), "application/json")
         else:
             self._send(404, b"not found", "text/plain")
 

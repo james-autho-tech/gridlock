@@ -21,6 +21,9 @@ PLAN_CASES = ("p50", "p10")          # median, or the pessimistic model
 STALE_AFTER = timedelta(hours=3)
 SNAPSHOT_HOUR_UTC = 21               # matches Autho Solar's own day-ahead scoring
 HISTORY_DAYS = 120
+DETAIL_DAYS = 14                     # scored days kept half-hour by half-hour for the day chart
+DAYLIGHT_KWH = 0.005                 # a half-hour counts as daylight above this (forecast or actual)
+RANGE_SLACK_KWH = 0.01               # rounding allowance when checking a half-hour against the range
 SLOT = timedelta(minutes=30)
 
 # Forecast sources scored each day, in display order.
@@ -105,7 +108,7 @@ def slot_key(dt):
 # ---- state: half-hour readings, nightly snapshots, daily scores ----------------
 
 def empty_state():
-    return {"accum": None, "queue": [], "actuals": {}, "snapshots": {}, "history": []}
+    return {"accum": None, "queue": [], "actuals": {}, "snapshots": {}, "history": [], "detail": {}}
 
 
 def clean_state(raw):
@@ -114,7 +117,7 @@ def clean_state(raw):
         for k in ("queue", "history"):
             if isinstance(raw.get(k), list):
                 s[k] = raw[k]
-        for k in ("actuals", "snapshots"):
+        for k in ("actuals", "snapshots", "detail"):
             if isinstance(raw.get(k), dict):
                 s[k] = raw[k]
         if isinstance(raw.get("accum"), dict):
@@ -175,21 +178,44 @@ def take_snapshot(state, now, curves):
 
 def score_day(snapshot, actuals):
     """One day's result: actual kWh, and per source its forecast kWh, the
-    day error % and the mean half-hourly error (kWh) over daylight slots."""
+    day error %, and two half-hour by half-hour figures over daylight slots:
+    the mean miss in kWh, and all the misses added up as a % of the day's
+    generation (catches a forecast with the right total in the wrong hours).
+    For Autho Solar, also how many daylight half-hours landed inside its range."""
     act_total = sum(actuals.values())
     row = {"actual_kwh": round(act_total, 2), "halfhours": len(actuals)}
     for source in SOURCES:
         fc = snapshot.get(source)
         if not fc:
             continue
-        slots = [k for k in actuals if fc.get(k, 0) > 0.005 or actuals[k] > 0.005]
+        slots = [k for k in actuals if fc.get(k, 0) > DAYLIGHT_KWH or actuals[k] > DAYLIGHT_KWH]
         fc_total = sum(fc.get(k, 0.0) for k in actuals)
+        miss = sum(abs(fc.get(k, 0.0) - actuals[k]) for k in slots)
         row[source] = {
             "kwh": round(fc_total, 2),
             "error_pct": round((fc_total - act_total) / act_total * 100, 1) if act_total > 0.2 else None,
-            "slot_mae_kwh": round(sum(abs(fc.get(k, 0.0) - actuals[k]) for k in slots) / len(slots), 3) if slots else None,
+            "slot_mae_kwh": round(miss / len(slots), 3) if slots else None,
+            "slot_error_pct": round(miss / act_total * 100, 1) if act_total > 0.2 and slots else None,
         }
+    lo, hi = snapshot.get("autho_p10"), snapshot.get("autho_p90")
+    if lo and hi:
+        slots = [k for k in actuals if hi.get(k, 0) > DAYLIGHT_KWH or actuals[k] > DAYLIGHT_KWH]
+        inside = sum(1 for k in slots if lo.get(k, 0.0) - RANGE_SLACK_KWH <= actuals[k] <= hi.get(k, 0.0) + RANGE_SLACK_KWH)
+        row["autho_range_slots"] = {"inside": inside, "of": len(slots)}
     return row
+
+
+def day_detail(snapshot, actuals):
+    """A day half-hour by half-hour, daylight only, for the dashboard chart:
+    {"actual": {slot: kWh}, source: {slot: kWh}, ...}."""
+    snapshot = snapshot or {}
+    slots = sorted(set(actuals or {}) | {k for fc in snapshot.values() for k in fc})
+    keep = [k for k in slots if (actuals or {}).get(k, 0) > DAYLIGHT_KWH
+            or any(fc.get(k, 0) > DAYLIGHT_KWH for fc in snapshot.values())]
+    out = {"actual": {k: actuals[k] for k in keep if k in (actuals or {})}}
+    for source, fc in snapshot.items():
+        out[source] = {k: fc[k] for k in keep if k in fc}
+    return out
 
 
 def roll_days(state, now):
@@ -203,9 +229,13 @@ def roll_days(state, now):
         if snap and acts and len(acts) >= 40:
             state["history"] = [h for h in state["history"] if h.get("date") != day]
             state["history"].append({"date": day, **score_day(snap, acts)})
+            state.setdefault("detail", {})[day] = day_detail(snap, acts)
         state["snapshots"].pop(day, None)
         state["actuals"].pop(day, None)
     state["history"] = sorted(state["history"], key=lambda h: h["date"])[-HISTORY_DAYS:]
+    detail = state.setdefault("detail", {})
+    for day in sorted(detail)[:-DETAIL_DAYS]:
+        detail.pop(day, None)
 
 
 def summarise(history):
@@ -216,23 +246,30 @@ def summarise(history):
     main = ("solcast_raw", "solcast_corrected", "autho_p50")
     wins = {s: 0 for s in main}
     for h in history:
-        errs = {s: abs(h[s]["error_pct"]) for s in main if h.get(s) and h[s].get("error_pct") is not None}
+        # Closest day total; a tie goes to the better half-hour by half-hour.
+        errs = {s: (abs(h[s]["error_pct"]), h[s].get("slot_error_pct") or 0.0)
+                for s in main if h.get(s) and h[s].get("error_pct") is not None}
         if len(errs) >= 2:
             wins[min(errs, key=errs.get)] += 1
     for source in SOURCES:
         rows = [h[source] for h in history if h.get(source)]
         pcts = sorted(abs(r["error_pct"]) for r in rows if r.get("error_pct") is not None)
         maes = [r["slot_mae_kwh"] for r in rows if r.get("slot_mae_kwh") is not None]
+        slot_pcts = sorted(r["slot_error_pct"] for r in rows if r.get("slot_error_pct") is not None)
         if not rows:
             continue
         out[source] = {
             "days": len(rows),
             "median_abs_error_pct": round(pcts[len(pcts) // 2], 1) if pcts else None,
             "mean_slot_mae_kwh": round(sum(maes) / len(maes), 3) if maes else None,
+            "median_slot_error_pct": round(slot_pcts[len(slot_pcts) // 2], 1) if slot_pcts else None,
             "closest_days": wins.get(source),
         }
     inside = [h for h in history if h.get("autho_p10") and h.get("autho_p90")]
     if inside:
         hits = sum(1 for h in inside if h["autho_p10"]["kwh"] <= h["actual_kwh"] <= h["autho_p90"]["kwh"])
         out["autho_range"] = {"days": len(inside), "inside": hits}
+    ranged = [h["autho_range_slots"] for h in history if h.get("autho_range_slots")]
+    if ranged:
+        out["autho_range_slots"] = {"inside": sum(r["inside"] for r in ranged), "of": sum(r["of"] for r in ranged)}
     return out

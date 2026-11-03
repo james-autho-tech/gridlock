@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.73.0 - 2026-11-03
+
+### Solar tab
+- Scored half-hour by half-hour, not just on the day total: each forecast's half-hour misses added up as a % of the day, shown on the scoreboard tiles and per day in the table
+- Autho Solar's range is checked every daylight half-hour, as well as on the day total
+- New "Half-hour by half-hour" chart: any of the last 14 scored days, or today so far, with every forecast against actual generation and Autho Solar's range; hover a half-hour for every figure
+- "Closest" ties on the day total go to the forecast with the better half-hours
+
 ## 3.72.3 - 2026-11-03
 
 ### Fix
