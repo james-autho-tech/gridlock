@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.71.0 - 2026-11-03
+
+### Autho Solar (new Solar tab)
+- Optional second solar forecast, on once an Autho Solar API key is saved on the Solar tab
+- Sends each completed half-hour of PV generation to Autho Solar, which learns the roof from it; readings queue on disk while it's unreachable
+- Every evening at 21:00 records tomorrow's forecast from Solcast, Solcast corrected and Autho Solar, then scores each against actual generation (day error, half-hour error, closest forecast, days inside Autho Solar's range)
+- Compare only by default: the battery plan keeps using Solcast
+- Use for planning: plans with Autho Solar's median or pessimistic forecast, Solcast fills gaps and takes over if Autho Solar is missing or more than 3 hours stale
+
 ## 3.70.0 - 2026-11-02
 
 ### Solar forecast accuracy

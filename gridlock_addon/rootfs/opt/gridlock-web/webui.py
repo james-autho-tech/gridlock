@@ -149,6 +149,42 @@ def axle_status(sensor):
             "error": attrs.get("error"), "last_poll": attrs.get("last_poll")}
 
 
+AUTHO_SOLAR_SETTINGS_PATH = os.path.join(ENGINE_DIR, "autho_solar_settings.json")
+
+
+def load_autho_solar_settings():
+    try:
+        with open(AUTHO_SOLAR_SETTINGS_PATH) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_autho_solar_settings(settings):
+    with open(AUTHO_SOLAR_SETTINGS_PATH, "w") as f:
+        json.dump(settings, f)
+    try:
+        os.chmod(AUTHO_SOLAR_SETTINGS_PATH, 0o600)  # holds an API key
+    except OSError:
+        pass
+
+
+def autho_solar_status(sensor):
+    """The Solar tab's data: the engine's sensor.gridlock_autho_solar, plus
+    the saved settings (never the key itself, only whether one is saved)."""
+    attrs = sensor.get("attributes", {}) or {}
+    saved = load_autho_solar_settings()
+    has_key = bool(str(saved.get("api_key") or "").strip())
+    return {"has_key": has_key, "state": sensor.get("state") or ("Comparing" if has_key else "Off"),
+            "mode": saved.get("mode") or ("compare" if has_key else "off"),
+            "plan_case": saved.get("plan_case") or "p50", "site_id": saved.get("site_id"),
+            "site": attrs.get("site") or None, "sites": attrs.get("sites") or [], "error": attrs.get("error"),
+            "plan_source": attrs.get("plan_source"), "last_fetch": attrs.get("last_fetch"),
+            "queued": attrs.get("queued"), "upcoming": attrs.get("upcoming") or {},
+            "history": attrs.get("history") or [], "summary": attrs.get("summary") or {}}
+
+
 def ha_get_all_states():
     """One bulk call instead of one HTTP round-trip per entity —
     build_status() looks up 20+ entities per request; fetching them
@@ -372,6 +408,7 @@ def build_status():
         "compare_results": compare.get("attributes", {}).get("results") or [],
         "ev_schedule": compare.get("attributes", {}).get("ev_schedule") or {},
         "axle": axle_status(get("sensor.gridlock_axle") or {}),
+        "autho_solar": autho_solar_status(get("sensor.gridlock_autho_solar") or {}),
         "weather": find_weather_entity(states),
         "mode_active": status_attrs.get("battery_risk_profile") or "balanced",
         "mode_override": (get("input_select.gridlock_mode_override") or {}).get("state", "auto"),
@@ -872,6 +909,7 @@ PAGE = r"""<!doctype html>
     <button class="gl-nav-btn" data-tab="overview">Overview</button>
     <button class="gl-nav-btn" data-tab="plan">Plan</button>
     <button class="gl-nav-btn" data-tab="forecast">Forecast</button>
+    <button class="gl-nav-btn" data-tab="solar">Solar</button>
     <button class="gl-nav-btn" data-tab="billing">Billing</button>
     <button class="gl-nav-btn" data-tab="circuits" id="gl-nav-circuits" style="display:none">Circuits</button>
     <button class="gl-nav-btn" data-tab="gridwarm" id="gl-nav-gridwarm" style="display:none">GridWarm</button>
@@ -2126,6 +2164,97 @@ async function setEvAssist(on) {
   } catch (e) { window.alert('Failed to save — network error.'); }
   refresh();
 }
+let authoBusy = false;
+const AUTHO_SOURCES = [['solcast_raw', 'Solcast'], ['solcast_corrected', 'Solcast, corrected'], ['autho_p50', 'Autho Solar']];
+function renderAuthoSolar(a) {
+  a = a || {};
+  const inp = 'background:#0b1220;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:6px 8px;font-family:inherit';
+  const t = (iso) => iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+  let status;
+  if (!a.has_key) status = '<span style="color:var(--dim)">Off.</span> Add an Autho Solar API key to start comparing.';
+  else if (a.error) status = `<span style="color:var(--amber)">${esc(a.error)}</span>. GridLock carries on with Solcast.`;
+  else if (a.plan_source && a.plan_source !== 'solcast') status = `<span style="color:var(--green)">Planning with Autho Solar</span> (${a.plan_source === 'autho_p10' ? 'pessimistic' : 'median'} forecast)${a.site ? ` for <b>${esc(a.site.name)}</b>` : ''}. Solcast takes over if it goes stale.`;
+  else if (a.mode === 'plan') status = '<span style="color:var(--amber)">Set to plan with Autho Solar, but its forecast is missing or stale</span>, so the plan is using Solcast.';
+  else status = `<span style="color:var(--green)">Comparing</span>${a.site ? ` for <b>${esc(a.site.name)}</b>` : ''}. The battery plan uses Solcast.`;
+  if (a.has_key && a.last_fetch) status += ` <span style="color:var(--dim)">Last update ${esc(t(a.last_fetch))}${a.queued ? `, ${a.queued} readings waiting to send` : ''}.</span>`;
+  const siteSel = (a.sites || []).length > 1
+    ? `<div><div class="lbl" style="font-size:10px">Site</div><select id="gl-autho-site" style="${inp}">${a.sites.map((s) => `<option value="${esc(s.id)}" ${a.site && a.site.id === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></div>` : '';
+  const settings = `<div class="gl-wrap">
+    <div class="gl-h">Autho Solar</div>
+    <div class="gl-sub">A second solar forecast that learns your roof from your real generation. GridLock sends it each half-hour of PV output, fetches its forecast, and every evening records tomorrow's forecast from each source so they can be scored against what your panels actually made. Create the key in Autho Solar under your account menu, API keys (read and write).</div>
+    <div class="gl-sub" style="margin-bottom:10px">${status}</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:end">
+      <div><div class="lbl" style="font-size:10px">API key</div><input id="gl-autho-key" type="password" autocomplete="off" placeholder="${a.has_key ? 'saved, paste a new one to replace' : 'paste your Autho Solar key'}" style="${inp};width:260px"></div>
+      <div><div class="lbl" style="font-size:10px">Mode</div><select id="gl-autho-mode" style="${inp}">
+        <option value="compare" ${a.mode !== 'plan' ? 'selected' : ''}>Compare only</option>
+        <option value="plan" ${a.mode === 'plan' ? 'selected' : ''}>Use for planning</option></select></div>
+      <div><div class="lbl" style="font-size:10px">Plan with</div><select id="gl-autho-case" style="${inp}">
+        <option value="p50" ${a.plan_case !== 'p10' ? 'selected' : ''}>Median forecast</option>
+        <option value="p10" ${a.plan_case === 'p10' ? 'selected' : ''}>Pessimistic forecast</option></select></div>
+      ${siteSel}
+      <button class="gl-btn-sm" style="padding:7px 14px" onclick="saveAuthoSolar(false)">Save</button>
+      ${a.has_key ? '<button class="gl-btn-sm" style="padding:7px 14px" onclick="saveAuthoSolar(true)">Remove key</button>' : ''}
+    </div>
+  </div>`;
+  if (!a.has_key) return settings;
+
+  // Upcoming days, every source side by side.
+  const up = a.upcoming || {};
+  const days = [...new Set(Object.values(up).flatMap((v) => Object.keys(v || {})))].sort().slice(0, 3);
+  const n = (v) => v == null ? '<span style="color:var(--dim)">-</span>' : Number(v).toFixed(1);
+  const dayName = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+  const upcoming = days.length ? `<table class="gl-plan"><tr><th>Day</th>${AUTHO_SOURCES.map(([, l]) => `<th>${l}</th>`).join('')}<th>Autho Solar range</th></tr>
+    ${days.map((d) => `<tr><td>${esc(dayName(d))}</td>${AUTHO_SOURCES.map(([k]) => `<td>${n((up[k] || {})[d])} kWh</td>`).join('')}
+      <td>${n((up.autho_p10 || {})[d])} to ${n((up.autho_p90 || {})[d])} kWh</td></tr>`).join('')}</table>` : '<div class="gl-sub">No forecasts yet.</div>';
+
+  // Scoreboard.
+  const sm = a.summary || {};
+  const tiles = AUTHO_SOURCES.map(([k, l]) => {
+    const r = sm[k];
+    return `<div class="gl-tile"><div class="lbl">${l}</div>
+      <div class="val num">${r && r.median_abs_error_pct != null ? r.median_abs_error_pct.toFixed(0) + '%' : '-'}</div>
+      <div class="gl-sub" style="margin:2px 0 0">typical day error${r ? `, closest on ${r.closest_days || 0} of ${r.days} days` : ''}${r && r.mean_slot_mae_kwh != null ? `, half-hours off by ${r.mean_slot_mae_kwh.toFixed(2)} kWh` : ''}</div></div>`;
+  }).join('');
+  const range = sm.autho_range ? `<div class="gl-sub">Actual inside Autho Solar's range on ${sm.autho_range.inside} of ${sm.autho_range.days} days.</div>` : '';
+  const hist = (a.history || []).slice().reverse();
+  const cell = (r, k) => {
+    const x = r[k];
+    if (!x) return '<td><span style="color:var(--dim)">-</span></td>';
+    const errs = AUTHO_SOURCES.map(([s]) => r[s] && r[s].error_pct != null ? Math.abs(r[s].error_pct) : Infinity);
+    const best = x.error_pct != null && Math.abs(x.error_pct) === Math.min(...errs);
+    return `<td style="${best ? 'color:var(--green);font-weight:700' : ''}">${x.kwh.toFixed(1)} <span style="color:var(--dim)">(${x.error_pct == null ? '-' : (x.error_pct > 0 ? '+' : '') + x.error_pct.toFixed(0) + '%'})</span></td>`;
+  };
+  const table = hist.length ? `<div style="overflow-x:auto"><table class="gl-plan"><tr><th>Day</th><th>Actual</th>${AUTHO_SOURCES.map(([, l]) => `<th>${l}</th>`).join('')}</tr>
+    ${hist.map((r) => `<tr><td>${esc(dayName(r.date))}</td><td><b>${r.actual_kwh.toFixed(1)}</b></td>${AUTHO_SOURCES.map(([k]) => cell(r, k)).join('')}</tr>`).join('')}</table></div>`
+    : '<div class="gl-sub">The first scored day appears the morning after tomorrow: tonight at 21:00 GridLock records tomorrow\'s forecasts, and they are scored once tomorrow has happened.</div>';
+  return `${settings}
+  <div class="gl-wrap"><div class="gl-h">Next few days</div>
+    <div class="gl-sub">Solar generation forecast by each source.</div>${upcoming}</div>
+  <div class="gl-wrap"><div class="gl-h">Scoreboard</div>
+    <div class="gl-sub">Each forecast as it stood the evening before, against what the panels actually made. Green is the closest that day.</div>
+    <div class="gl-grid" style="margin-bottom:10px">${tiles}</div>${range}${table}</div>`;
+}
+async function saveAuthoSolar(clear) {
+  if (authoBusy) return;
+  if (clear && !window.confirm('Remove the Autho Solar key? GridLock stops comparing and plans with Solcast only.')) return;
+  const site = document.getElementById('gl-autho-site');
+  authoBusy = true;
+  try {
+    const resp = await fetch('api/autho-solar', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(clear ? { clear_key: true } : {
+        api_key: document.getElementById('gl-autho-key').value,
+        mode: document.getElementById('gl-autho-mode').value,
+        plan_case: document.getElementById('gl-autho-case').value,
+        ...(site ? { site_id: site.value } : {}),
+      }),
+    });
+    const result = await resp.json();
+    if (!resp.ok) window.alert(result.error || 'Failed to save.');
+    else refresh();
+  } catch (e) { window.alert('Failed to save: network error.'); }
+  authoBusy = false;
+}
 let axleBusy = false;
 function renderAxle(ax) {
   ax = ax || {};
@@ -3249,6 +3378,9 @@ async function refresh() {
         ${renderSavingSessions(d.saving_joined, d.saving_available)}
       </div>`}
     </div>
+    <div class="tab-page" data-tab="solar">
+      ${renderAuthoSolar(d.autho_solar)}
+    </div>
     <div class="tab-page" data-tab="billing">
       <div class="gl-wrap">
         <div class="gl-h">Daily cost history</div>
@@ -3397,6 +3529,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_ev_assist()
         elif path.endswith("/api/axle"):
             self._handle_axle()
+        elif path.endswith("/api/autho-solar"):
+            self._handle_autho_solar()
         else:
             self._send(404, b"not found", "text/plain")
 
@@ -3775,6 +3909,33 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(200, json.dumps({"ok": True, "has_key": bool(settings.get("api_key"))}).encode(),
                        "application/json")
         except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
+            self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
+
+    def _handle_autho_solar(self):
+        """Save the Solar tab's settings: a new key replaces the old one, a
+        blank key keeps it, clear_key removes it (which turns it off)."""
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+            settings = load_autho_solar_settings()
+            key = body.get("api_key")
+            if body.get("clear_key"):
+                settings.pop("api_key", None)
+            elif isinstance(key, str) and key.strip():
+                key = key.strip()
+                if key.lower().startswith("bearer "):
+                    key = key[7:].strip()
+                settings["api_key"] = key
+            if body.get("mode") in ("compare", "plan"):
+                settings["mode"] = body["mode"]
+            if body.get("plan_case") in ("p50", "p10"):
+                settings["plan_case"] = body["plan_case"]
+            if isinstance(body.get("site_id"), str):
+                settings["site_id"] = body["site_id"].strip() or None
+            save_autho_solar_settings(settings)
+            self._send(200, json.dumps({"ok": True, "has_key": bool(settings.get("api_key"))}).encode(),
+                       "application/json")
+        except Exception as exc:  # noqa: BLE001 - surface it to the caller, don't crash the server
             self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
 
     def _send(self, code, body, ctype):

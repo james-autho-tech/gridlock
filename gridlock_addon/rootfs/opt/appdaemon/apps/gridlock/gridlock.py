@@ -35,11 +35,13 @@ from core.ev_schedule import find_cheapest_window
 from core import ev_charge_assist as core_ev_charge_assist
 from core import tariff_backtest as core_tariff_backtest
 from core import axle as core_axle
+from core import autho_solar as core_autho
 from core import ev_model as core_ev_model
 
 STATE_FILES = ("load_profile.json", "savings_state.json", "savings_history.json",
                "cost_tracking_state.json", "decision_log.json",
-               "circuit_state.json", "circuit_history.json", "solar_accuracy.json")
+               "circuit_state.json", "circuit_history.json", "solar_accuracy.json",
+               "autho_solar_state.json")
 
 # publish_plan()'s per-slot row shape — a single source of truth for both
 # the row length it builds and the "columns" name list it publishes
@@ -748,6 +750,15 @@ class GridLock(hass.Hass):
         self._axle_rate = core_axle.DEFAULT_RATE_GBP
         self._axle_error = None
         self._axle_last_poll = None
+        # Autho Solar: second solar forecast, compared with Solcast (and
+        # optionally planned with). Off until a key is saved on the Solar tab.
+        self._autho_state = core_autho.clean_state(self._load_json("autho_solar_state.json", {}))
+        self._autho_cfg = core_autho.clean_settings(self._load_dashboard_json("autho_solar_settings.json", {}))
+        self._autho_forecast = {}
+        self._autho_issued = self._autho_fetched = self._autho_error = None
+        self._autho_site = None
+        self._autho_sites = []
+        self._autho_last_sample = None
 
         self.compare_tariffs = a.get("compare_tariffs", [])
 
@@ -960,6 +971,9 @@ class GridLock(hass.Hass):
         # Every 10 min, as Axle's own HA sensor does; a no-op without a key.
         self.run_every(self.poll_axle, "now+15", 600)
         self._axle_mtime_seen = None
+        # Autho Solar forecast + sending readings: every 15 min, no-op without a key.
+        self.run_every(self.poll_autho_solar, "now+20", 900)
+        self._autho_mtime_seen = None
         self.run_every(self.tick, "now", 300)
         # A setting changed on the dashboard (target, hot water...) re-plans
         # the heat pump within 30 s instead of waiting for the next tick.
@@ -2067,6 +2081,144 @@ class GridLock(hass.Hass):
             "events": core_axle.to_json(self._axle_events),
             "error": self._axle_error, "last_poll": self._axle_last_poll})
 
+    # ------------------------------------------------------------------
+    # AUTHO SOLAR (see core/autho_solar.py)
+    # ------------------------------------------------------------------
+    def _autho_request(self, method, path, body=None):
+        cfg = self._autho_cfg
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(f"{cfg['url']}{path}", data=data, method=method, headers={
+            "Authorization": f"Bearer {cfg['api_key']}", "Accept": "application/json",
+            "Content-Type": "application/json", "User-Agent": "GridLock/3"})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            raw = resp.read()
+        return json.loads(raw) if raw.strip() else None
+
+    def poll_autho_solar(self, kwargs):
+        """Find the site, send queued half-hours, fetch the forecast."""
+        self._autho_cfg = cfg = core_autho.clean_settings(self._load_dashboard_json("autho_solar_settings.json", {}))
+        now = self.get_now()
+        if cfg["mode"] == "off":
+            self._autho_error = None
+            self._autho_forecast, self._autho_site = {}, None
+            self.publish_autho_status(now)
+            return
+        try:
+            self._autho_sites = [{"id": s.get("id"), "name": s.get("name")}
+                                 for s in (self._autho_request("GET", "/api/sites") or {}).get("sites", [])]
+            self._autho_site = core_autho.pick_site(self._autho_sites, cfg["site_id"])
+            if not self._autho_site:
+                raise ValueError("No site on this Autho Solar account yet")
+            site_id = self._autho_site["id"]
+            queue = self._autho_state["queue"]
+            while queue:
+                batch = queue[:500]
+                try:
+                    self._autho_request("POST", f"/api/sites/{site_id}/actuals", {"readings": batch})
+                except urllib.error.HTTPError as exc:
+                    if exc.code != 400:
+                        raise
+                    # The service refused the batch's contents (not a network or
+                    # key problem): drop it rather than retrying it forever.
+                    self.log(f"Autho Solar refused {len(batch)} readings: {exc.read()[:200]!r}", level="WARNING")
+                del queue[:len(batch)]
+                self._save_json("autho_solar_state.json", self._autho_state)
+            body = self._autho_request("GET", f"/api/sites/{site_id}/forecast?hours=96")
+            self._autho_forecast, self._autho_issued = core_autho.parse_forecast(body)
+            self._autho_fetched = now
+            self._autho_error = None
+        except urllib.error.HTTPError as exc:
+            self._autho_error = ("Autho Solar rejected the API key" if exc.code in (401, 403)
+                                 else f"Autho Solar returned HTTP {exc.code}")
+            self.log(f"Autho Solar poll failed: {self._autho_error}", level="WARNING")
+        except ValueError as exc:
+            self._autho_error = str(exc)
+        except Exception as exc:  # noqa: BLE001 - network is best-effort; Solcast carries on
+            self._autho_error = "Couldn't reach Autho Solar"
+            self.log(f"Autho Solar poll failed: {exc!r}", level="WARNING")
+        self.publish_autho_status(now)
+
+    def _autho_usable(self, now):
+        return bool(self._autho_forecast) and core_autho.is_fresh(self._autho_issued, self._autho_fetched, now)
+
+    def _planning_source(self, now):
+        if self._autho_cfg["mode"] == "plan" and self._autho_usable(now):
+            return "autho_" + self._autho_cfg["plan_case"]
+        return "solcast"
+
+    def _planning_pv_curve(self, now):
+        """The PV forecast the battery plan uses: Solcast (with its learned
+        correction), or Autho Solar in plan mode while its forecast is fresh."""
+        solcast = self.forecast_provider.pv_curve()
+        if self._planning_source(now) == "solcast":
+            return solcast
+        return core_autho.planning_curve(self._autho_forecast, self._autho_cfg["plan_case"], solcast)
+
+    def _autho_tick(self, now, pv_kw):
+        """Every tick: this half-hour's generation, the evening snapshot of
+        tomorrow's forecasts, and scoring finished days."""
+        if self._autho_cfg["mode"] == "off":
+            self._autho_last_sample = None
+            return
+        last, self._autho_last_sample = self._autho_last_sample, now
+        dt_h = (now - last).total_seconds() / 3600.0 if last else 0.0
+        state = self._autho_state
+        changed = core_autho.add_sample(state, now, pv_kw, dt_h)
+        curves = {"solcast_raw": self.forecast_provider.raw_curve(),
+                  "solcast_corrected": self.forecast_provider.pv_curve()}
+        if self._autho_usable(now):
+            for case in ("p50", "p10", "p90"):
+                curves[f"autho_{case}"] = {t: v[case] for t, v in self._autho_forecast.items()}
+        changed |= core_autho.take_snapshot(state, now, curves)
+        before = len(state["history"])
+        core_autho.roll_days(state, now)
+        if changed or len(state["history"]) != before:
+            self._save_json("autho_solar_state.json", state)
+            self.publish_autho_status(now)
+
+    def publish_autho_status(self, now):
+        """sensor.gridlock_autho_solar for the Solar tab -- never the key."""
+        cfg = self._autho_cfg
+        if cfg["mode"] == "off":
+            state = "Off"
+        elif self._autho_error:
+            state = "Error"
+        else:
+            state = "Planning" if self._planning_source(now) != "solcast" else "Comparing"
+
+        def day_totals(curve):
+            out = {}
+            for t, v in curve.items():
+                d = t.astimezone(timezone.utc).date().isoformat()
+                out[d] = out.get(d, 0.0) + v
+            return {d: round(v, 2) for d, v in sorted(out.items())[:3]}
+
+        upcoming = {"solcast_raw": day_totals(self.forecast_provider.raw_curve()),
+                    "solcast_corrected": day_totals(self.forecast_provider.pv_curve())}
+        if self._autho_forecast:
+            for case in ("p50", "p10", "p90"):
+                upcoming[f"autho_{case}"] = day_totals({t: v[case] for t, v in self._autho_forecast.items()})
+        hist = self._autho_state["history"]
+
+        def drop_none(v):
+            # A None nested in state attributes has broken the whole dict before.
+            if isinstance(v, dict):
+                return {k: drop_none(x) for k, x in v.items() if x is not None}
+            if isinstance(v, list):
+                return [drop_none(x) for x in v if x is not None]
+            return v
+
+        self.set_state("sensor.gridlock_autho_solar", state=state, attributes={
+            "friendly_name": "GridLock Autho Solar", "icon": "mdi:solar-power-variant-outline",
+            "mode": cfg["mode"], "plan_case": cfg["plan_case"], "url": cfg["url"],
+            "site": drop_none(self._autho_site or {}), "sites": drop_none(self._autho_sites),
+            "error": self._autho_error, "plan_source": self._planning_source(now),
+            "last_fetch": self._autho_fetched.isoformat() if self._autho_fetched else None,
+            "issued_at": self._autho_issued.isoformat() if self._autho_issued else None,
+            "queued": len(self._autho_state["queue"]),
+            "upcoming": upcoming, "history": drop_none(hist[-60:]),
+            "summary": drop_none(core_autho.summarise(hist))})
+
     def _agile_slot_key(self, dt):
         dt = dt.astimezone(timezone.utc)
         minute = 30 if dt.minute >= 30 else 0
@@ -2686,7 +2838,7 @@ class GridLock(hass.Hass):
             import_windows=provider.import_windows(),
             export_windows=provider.export_windows(),
             dispatch_windows=dispatch,
-            pv_curve=self.forecast_provider.pv_curve(),
+            pv_curve=self._planning_pv_curve(now),
             load_kwh_fn=self.load_provider.load_kwh,
             cheap_rate=self.cheap_rate,
             live_import_rate=live_imp, live_export_rate=live_exp,
@@ -3260,7 +3412,7 @@ class GridLock(hass.Hass):
                                                     "on_agile": self._is_on_agile_import()}})
 
     def publish_solar_forecast(self, now):
-        curve = self.forecast_provider.pv_curve()
+        curve = self._planning_pv_curve(now)
         horizon_end = now + timedelta(minutes=SLOT_MIN * HORIZON_SLOTS)
         fc = sorted(({"x": t.isoformat(), "y": round(kwh, 3)}
                      for t, kwh in curve.items() if now <= t < horizon_end),
@@ -3282,7 +3434,8 @@ class GridLock(hass.Hass):
                                    "tomorrow_kwh": round(tomorrow_kwh, 2),
                                    "solcast_today_kwh": round(raw_today, 2),
                                    "solcast_tomorrow_kwh": round(raw_tomorrow, 2),
-                                   "accuracy": self.forecast_provider.accuracy()})
+                                   "accuracy": self.forecast_provider.accuracy(),
+                                   "source": self._planning_source(now)})
 
     # ------------------------------------------------------------------
     # HEAT PUMP THERMAL MODEL (GridWarm — see core/thermal.py's
@@ -4806,6 +4959,15 @@ class GridLock(hass.Hass):
             axle_mtime = os.path.getmtime(self._dashboard_path("axle_settings.json"))
         except OSError:
             axle_mtime = 0.0
+        try:
+            autho_mtime = os.path.getmtime(self._dashboard_path("autho_solar_settings.json"))
+        except OSError:
+            autho_mtime = 0.0
+        if autho_mtime != getattr(self, "_autho_mtime_seen", None):
+            first = getattr(self, "_autho_mtime_seen", None) is None
+            self._autho_mtime_seen = autho_mtime
+            if not first:
+                self.poll_autho_solar({})
         if axle_mtime != getattr(self, "_axle_mtime_seen", None):
             # Key added, changed or removed: act on it now, not in 10 min.
             first = getattr(self, "_axle_mtime_seen", None) is None
@@ -5993,7 +6155,9 @@ class GridLock(hass.Hass):
             all_circuits.append(HEATPUMP_POWER_ENTITY)
         self.load_provider.circuit_power_entities = all_circuits
         self.load_provider.sample(now)
-        self.forecast_provider.sample(now, self._read_live_kw(self.ent_pv_power_entities))
+        pv_live_kw = self._read_live_kw(self.ent_pv_power_entities)
+        self.forecast_provider.sample(now, pv_live_kw)
+        self._autho_tick(now, pv_live_kw)
         self.publish_circuits(labeled_circuits, now)
         self._update_savings(now)
         self.publish_solar_forecast(now)
