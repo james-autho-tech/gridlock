@@ -962,27 +962,31 @@ class GridLock(hass.Hass):
                      "not found", level="WARNING")
 
         if self.ssen_postcode:
-            self.run_every(self.poll_ssen, "now", 300)
+            self.run_every(self.poll_ssen, "now+3", 300)
 
         if self.agile_region:
-            self.run_every(self.poll_agile_rates, "now", 3600)
-            self.run_every(self.poll_edf_goelec_rates, "now", 3600)
+            self.run_every(self.poll_agile_rates, "now+5", 3600)
+            self.run_every(self.poll_edf_goelec_rates, "now+8", 3600)
             self.run_every(self.poll_octopus_compare_rates, "now+30", 3600)
 
         if self.ent_edf_flextras_registered:
-            self.run_every(self._auto_enroll_edf_flextras, "now", 3600)
+            self.run_every(self._auto_enroll_edf_flextras, "now+12", 3600)
 
         if self.gridwarm_diagnostic_static_entities or self.gridwarm_diagnostic_prefix:
-            self.run_every(self.poll_heatpump_diagnostics, "now", 1800)
+            self.run_every(self.poll_heatpump_diagnostics, "now+20", 1800)
 
-        self.run_every(self.poll_carbon_intensity, "now", 1800)
+        self.run_every(self.poll_carbon_intensity, "now+2", 1800)
         # Every 10 min, as Axle's own HA sensor does; a no-op without a key.
         self.run_every(self.poll_axle, "now+15", 600)
         self._axle_mtime_seen = None
         # Autho Solar forecast + sending readings: every 15 min, no-op without a key.
         self.run_every(self.poll_autho_solar, "now+20", 900)
         self._autho_mtime_seen = None
-        self.run_every(self.tick, "now", 300)
+        # Explicit offsets, not "now": this AppDaemon fires a "now" start one
+        # full interval later, which left the first plan 5 minutes out and
+        # the hourly price polls an hour out after every restart. The first
+        # plan waits for the price polls above.
+        self.run_every(self.tick, "now+45", 300)
         # A setting changed on the dashboard (target, hot water...) re-plans
         # the heat pump within 30 s instead of waiting for the next tick.
         self._dash_mtime_seen = None

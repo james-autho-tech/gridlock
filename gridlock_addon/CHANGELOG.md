@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.72.1 - 2026-11-03
+
+### Fix
+- After a restart the first plan ran 5 minutes late and the Agile, EDF GoElectric, SSEN and carbon polls an interval late (up to an hour), so the tariff comparison lost its EDF and Agile rows for the first hour; they now start within a minute, with the first plan after the price polls
+
 ## 3.72.0 - 2026-11-03
 
 ### Tariff comparison
