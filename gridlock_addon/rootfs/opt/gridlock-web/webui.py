@@ -677,11 +677,31 @@ PAGE = r"""<!doctype html>
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--ink);
          font-family:system-ui,sans-serif; }
-  .gl-nav { display:flex; gap:4px; padding:12px 20px; background:var(--panel);
+  /* ---- layout: section menu on the left, page on the right ---- */
+  .gl-shell { display:flex; min-height:100vh; }
+  .gl-side { width:196px; flex:0 0 196px; background:var(--panel); border-right:1px solid var(--line);
+             position:sticky; top:0; height:100vh; overflow-y:auto; padding:14px 10px 24px;
+             display:flex; flex-direction:column; gap:2px; z-index:30; }
+  .gl-brand { font-weight:800; letter-spacing:.5px; font-size:15px; color:var(--ink); padding:4px 12px 12px; }
+  .gl-side-h { font-size:10.5px; font-weight:700; letter-spacing:1.6px; text-transform:uppercase;
+               color:var(--dim); opacity:.75; padding:14px 12px 4px; }
+  .gl-main { flex:1; min-width:0; }
+  .gl-nav { display:flex; gap:4px; padding:10px 20px; background:var(--panel);
             border-bottom:1px solid var(--line); position:sticky; top:0; z-index:10; }
-  .gl-nav-btn { background:none; border:none; color:var(--dim); font-size:13px;
-                font-weight:600; letter-spacing:.4px; padding:8px 16px; border-radius:8px;
+  .gl-menu-btn { display:none; align-items:center; gap:8px; background:none; border:1px solid var(--line);
+                 color:var(--ink); border-radius:8px; padding:6px 10px; font:inherit; font-size:13px;
+                 font-weight:600; cursor:pointer; }
+  .gl-scrim { display:none; }
+  .gl-nav-btn { background:none; border:none; color:var(--dim); font-size:13px; text-align:left; width:100%;
+                font-weight:600; letter-spacing:.3px; padding:8px 12px; border-radius:8px;
                 cursor:pointer; transition:color .15s, background .15s; font-family:inherit; }
+  @media (max-width:900px) {
+    .gl-side { position:fixed; left:0; top:0; bottom:0; transform:translateX(-100%);
+               transition:transform .2s ease; box-shadow:0 0 40px rgba(0,0,0,.5); }
+    .gl-shell.side-open .gl-side { transform:none; }
+    .gl-shell.side-open .gl-scrim { display:block; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:25; }
+    .gl-menu-btn { display:inline-flex; }
+  }
   .gl-nav-btn:hover { color:var(--ink); background:rgba(255,255,255,.05); }
   .gl-nav-btn.active { color:var(--cyan); background:rgba(56,189,248,.12); }
   .tab-page { padding:20px; }
@@ -794,7 +814,6 @@ PAGE = r"""<!doctype html>
 
   /* ---- header: mode segmented control + weather widget ---- */
   .gl-nav { flex-wrap:wrap; justify-content:space-between; row-gap:8px; }
-  .gl-nav-tabs { display:flex; gap:4px; flex-wrap:wrap; }
   .gl-nav-right { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
   .gl-segmented { display:flex; background:#0b1220; border:1px solid var(--line);
                   border-radius:6px; padding:3px; gap:2px; }
@@ -987,24 +1006,38 @@ PAGE = r"""<!doctype html>
 </style>
 </head>
 <body>
+<div class="gl-shell">
+<aside class="gl-side" id="gl-side" aria-label="Sections">
+  <div class="gl-brand">GridLock</div>
+  <button class="gl-nav-btn" data-tab="overview">Overview</button>
+  <div class="gl-side-h">Energy</div>
+  <button class="gl-nav-btn" data-tab="plan">Plan</button>
+  <button class="gl-nav-btn" data-tab="forecast">Forecast</button>
+  <button class="gl-nav-btn" data-tab="solar">Solar</button>
+  <div class="gl-side-h">Home</div>
+  <button class="gl-nav-btn" data-tab="gridwarm" id="gl-nav-gridwarm" style="display:none">GridWarm</button>
+  <button class="gl-nav-btn" data-tab="flex">Flex loads</button>
+  <button class="gl-nav-btn" data-tab="circuits" id="gl-nav-circuits" style="display:none">Circuits</button>
+  <div class="gl-side-h">Money</div>
+  <button class="gl-nav-btn" data-tab="billing">Billing</button>
+  <button class="gl-nav-btn" data-tab="tariffs">Tariffs</button>
+  <div class="gl-side-h">System</div>
+  <button class="gl-nav-btn" data-tab="warranty">Warranty</button>
+  <button class="gl-nav-btn" data-tab="entities">Entities</button>
+  <button class="gl-nav-btn" data-tab="log">Log</button>
+</aside>
+<div class="gl-scrim" onclick="toggleSide(false)"></div>
+<div class="gl-main">
 <nav class="gl-nav">
-  <div class="gl-nav-tabs">
-    <button class="gl-nav-btn" data-tab="overview">Overview</button>
-    <button class="gl-nav-btn" data-tab="plan">Plan</button>
-    <button class="gl-nav-btn" data-tab="forecast">Forecast</button>
-    <button class="gl-nav-btn" data-tab="solar">Solar</button>
-    <button class="gl-nav-btn" data-tab="flex">Flex loads</button>
-    <button class="gl-nav-btn" data-tab="billing">Billing</button>
-    <button class="gl-nav-btn" data-tab="circuits" id="gl-nav-circuits" style="display:none">Circuits</button>
-    <button class="gl-nav-btn" data-tab="gridwarm" id="gl-nav-gridwarm" style="display:none">GridWarm</button>
-    <button class="gl-nav-btn" data-tab="warranty">Warranty</button>
-    <button class="gl-nav-btn" data-tab="tariffs">Tariffs</button>
-    <button class="gl-nav-btn" data-tab="entities">Entities</button>
-    <button class="gl-nav-btn" data-tab="log">Log</button>
-  </div>
+  <button class="gl-menu-btn" onclick="toggleSide()" aria-label="Menu" aria-controls="gl-side">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+    <span id="gl-nav-title">Overview</span>
+  </button>
   <div class="gl-nav-right" id="gl-nav-right"></div>
 </nav>
 <div id="app">Loading…</div>
+</div>
+</div>
 <script>
 let currentTab = 'overview';
 let latestPlanTable = { columns: [], rows: [] };
@@ -1048,8 +1081,17 @@ function downloadPlanCsv() {
   a.remove();
   URL.revokeObjectURL(url);
 }
+function toggleSide(open) {
+  const shell = document.querySelector('.gl-shell');
+  if (shell) shell.classList.toggle('side-open', open === undefined ? !shell.classList.contains('side-open') : open);
+}
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') toggleSide(false); });
 function selectTab(tab) {
   currentTab = tab;
+  const btn = document.querySelector(`.gl-nav-btn[data-tab="${tab}"]`);
+  const title = document.getElementById('gl-nav-title');
+  if (btn && title) title.textContent = btn.textContent;
+  toggleSide(false);
   document.querySelectorAll('.gl-nav-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   document.querySelectorAll('.tab-page').forEach(p => p.style.display = (p.dataset.tab === tab) ? '' : 'none');
   if (tab === 'gridwarm') loadGridwarmEntities();

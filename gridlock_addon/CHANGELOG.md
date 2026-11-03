@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.74.1 - 2026-11-03
+
+### Dashboard
+- Side menu replaces the single row of 12 tabs: Overview, then Energy (Plan, Forecast, Solar), Home (GridWarm, Flex loads, Circuits), Money (Billing, Tariffs) and System (Warranty, Entities, Log)
+- On narrow screens it folds into a menu button showing the current page
+
 ## 3.74.0 - 2026-11-03
 
 ### Flex loads (new tab)
