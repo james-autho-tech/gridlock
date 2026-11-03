@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.72.3 - 2026-11-03
+
+### Fix
+- Autho Solar: a restart part-way through a half-hour no longer drops that half-hour's generation reading
+
 ## 3.72.2 - 2026-11-03
 
 ### Fix

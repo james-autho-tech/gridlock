@@ -2185,9 +2185,18 @@ class GridLock(hass.Hass):
         if self._autho_cfg["mode"] == "off":
             self._autho_last_sample = None
             return
-        last, self._autho_last_sample = self._autho_last_sample, now
-        dt_h = (now - last).total_seconds() / 3600.0 if last else 0.0
         state = self._autho_state
+        # The last sample time lives in the saved state too, so a restart
+        # mid half-hour carries on counting it rather than starting over
+        # (add_sample ignores gaps longer than 10 minutes).
+        if self._autho_last_sample is None and state.get("last_sample"):
+            try:
+                self._autho_last_sample = datetime.fromisoformat(state["last_sample"])
+            except (TypeError, ValueError):
+                pass
+        last, self._autho_last_sample = self._autho_last_sample, now
+        state["last_sample"] = now.isoformat()
+        dt_h = (now - last).total_seconds() / 3600.0 if last else 0.0
         changed = core_autho.add_sample(state, now, pv_kw, dt_h)
         curves = {"solcast_raw": self.forecast_provider.raw_curve(),
                   "solcast_corrected": self.forecast_provider.pv_curve()}
@@ -2197,8 +2206,8 @@ class GridLock(hass.Hass):
         changed |= core_autho.take_snapshot(state, now, curves)
         before = len(state["history"])
         core_autho.roll_days(state, now)
+        self._save_json("autho_solar_state.json", state)  # every tick: keeps the running half-hour
         if changed or len(state["history"]) != before:
-            self._save_json("autho_solar_state.json", state)
             self.publish_autho_status(now)
 
     def publish_autho_status(self, now):

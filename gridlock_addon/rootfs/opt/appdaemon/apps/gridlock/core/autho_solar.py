@@ -119,6 +119,8 @@ def clean_state(raw):
                 s[k] = raw[k]
         if isinstance(raw.get("accum"), dict):
             s["accum"] = raw["accum"]
+        if isinstance(raw.get("last_sample"), str):
+            s["last_sample"] = raw["last_sample"]
     return s
 
 
