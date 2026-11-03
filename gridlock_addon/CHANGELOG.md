@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.72.0 - 2026-11-03
+
+### Tariff comparison
+- Intelligent Octopus Go, Octopus Go, Cosy Octopus and Flexible Octopus now use real published prices and standing charges for your region, fetched hourly from Octopus (both single-rate and four-rate EV tariffs); they replace the hand-typed rows of the same name
+- Every row includes a standing charge, so rows compare like for like: Current uses your real one, hand-typed rows without one assume yours and say so
+- Hand-typed rows are labelled "your figures"; the hand-typed EDF GoElectric row is dropped while the live EDF rows are available
+
+### Fix
+- Risk profile comparison totals now cover the last 28 days shown, and leave out days before 21 October 2026 whose plans used a load forecast about 3x too high
+- Solar tab no longer shows "1e-09 readings waiting" when nothing is queued
+
 ## 3.71.1 - 2026-11-03
 
 ### Fix

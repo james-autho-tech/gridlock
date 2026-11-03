@@ -398,6 +398,7 @@ def build_status():
         "plan_accuracy": savings.get("attributes", {}).get("plan_accuracy"),
         "profile_comparison_history": savings.get("attributes", {}).get("profile_comparison_history") or [],
         "profile_comparison_totals": savings.get("attributes", {}).get("profile_comparison_totals") or {},
+        "profile_comparison_days": savings.get("attributes", {}).get("profile_comparison_days"),
         "tariff_backtest_totals": savings.get("attributes", {}).get("tariff_backtest_totals") or {},
         "tariff_backtest_days": savings.get("attributes", {}).get("tariff_backtest_days") or {},
         "carbon_now": as_float(carbon, None),
@@ -2176,7 +2177,8 @@ function renderAuthoSolar(a) {
   else if (a.plan_source && a.plan_source !== 'solcast') status = `<span style="color:var(--green)">Planning with Autho Solar</span> (${a.plan_source === 'autho_p10' ? 'pessimistic' : 'median'} forecast)${a.site ? ` for <b>${esc(a.site.name)}</b>` : ''}. Solcast takes over if it goes stale.`;
   else if (a.mode === 'plan') status = '<span style="color:var(--amber)">Set to plan with Autho Solar, but its forecast is missing or stale</span>, so the plan is using Solcast.';
   else status = `<span style="color:var(--green)">Comparing</span>${a.site ? ` for <b>${esc(a.site.name)}</b>` : ''}. The battery plan uses Solcast.`;
-  if (a.has_key && a.last_fetch) status += ` <span style="color:var(--dim)">Last update ${esc(t(a.last_fetch))}${a.queued ? `, ${a.queued} readings waiting to send` : ''}.</span>`;
+  const queued = Math.round(Number(a.queued) || 0);
+  if (a.has_key && a.last_fetch) status += ` <span style="color:var(--dim)">Last update ${esc(t(a.last_fetch))}${queued ? `, ${queued} readings waiting to send` : ''}.</span>`;
   const siteSel = (a.sites || []).length > 1
     ? `<div><div class="lbl" style="font-size:10px">Site</div><select id="gl-autho-site" style="${inp}">${a.sites.map((s) => `<option value="${esc(s.id)}" ${a.site && a.site.id === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></div>` : '';
   const settings = `<div class="gl-wrap">
@@ -2473,7 +2475,7 @@ function renderTariffCompare(results, activeTariffName) {
     const rateParts = [];
     if (r.import_desc) rateParts.push(r.import_desc);
     if (r.export_p != null) rateParts.push(`${r.export_p}p export`);
-    rateParts.push(r.standing_p != null ? `${r.standing_p}p/day standing` : 'standing not configured');
+    rateParts.push(r.standing_p != null ? `${r.standing_p}p/day standing${r.standing_assumed ? ' (assumed same as yours)' : ''}` : 'standing not configured');
     return `<div class="gl-tariff-row${isBest ? ' is-best' : ''}${isActive ? ' is-active' : ''}">
       <div class="gl-name-col">
         <span class="gl-name">${esc(r.name)}${r.is_live === false ? ' <span style="color:var(--dim);font-weight:400;font-size:11px">(est.)</span>' : ''}${isBest ? ' 🏆' : ''}${info ? ` <span style="color:var(--dim);cursor:help" title="${esc(info)}">ⓘ</span>` : ''}</span>
@@ -3335,7 +3337,7 @@ async function refresh() {
       </div>
       <div class="gl-wrap">
         <div class="gl-h">Risk profile comparison</div>
-        <div class="gl-sub">What each risk profile's own morning plan predicted, summed across every day recorded — not a real-outcome backtest (that would need running all three profiles continuously), but a genuine forecast-vs-forecast comparison building up over time.</div>
+        <div class="gl-sub">What each risk profile's own morning plan predicted the day would cost, added up over the last ${d.profile_comparison_days ? Math.round(d.profile_comparison_days) + ' days' : '28 days'}. These are the plans' own forecasts, not what actually happened: only the profile you run gets a real outcome. Days before 21 October 2026 are left out (their plans used a load forecast about 3 times too high).</div>
         ${renderProfileComparison(d.profile_comparison_totals, d.mode_active)}
       </div>
       <div class="gl-wrap">

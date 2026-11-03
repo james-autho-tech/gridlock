@@ -14,6 +14,7 @@ VERSION = os.environ.get("GL_VERSION") or "dev"
 
 import appdaemon.plugins.hass.hassapi as hass
 from datetime import datetime, timedelta, timezone, time as dtime
+from zoneinfo import ZoneInfo
 
 from core.config import (Mode as OptMode, SiteConfig, RISK_PROFILES,
                           EXPORT_DEGRADATION_OVERRIDES, SLOT_MIN, HORIZON_SLOTS)
@@ -36,7 +37,11 @@ from core import ev_charge_assist as core_ev_charge_assist
 from core import tariff_backtest as core_tariff_backtest
 from core import axle as core_axle
 from core import autho_solar as core_autho
+from core import octopus_compare as core_octopus
 from core import ev_model as core_ev_model
+
+# First day the risk-profile comparison is trusted (see _publish savings).
+PROFILE_COMPARISON_VALID_FROM = "2026-10-21"
 
 STATE_FILES = ("load_profile.json", "savings_state.json", "savings_history.json",
                "cost_tracking_state.json", "decision_log.json",
@@ -782,6 +787,8 @@ class GridLock(hass.Hass):
         # (e.g. "18m") since more than one can be live with genuinely
         # different real rates at once.
         self.edf_goelec_products = {}
+        # Live Octopus tariffs for the comparison: {display name: {windows, standing_gbp, code}}
+        self.octopus_compare_products = {}
         # A real switch to EDF moves export to EDF's own rate too, not
         # Octopus Agile Outgoing's — unlike the Agile import-only
         # comparison above (same Octopus account, export untouched),
@@ -960,6 +967,7 @@ class GridLock(hass.Hass):
         if self.agile_region:
             self.run_every(self.poll_agile_rates, "now", 3600)
             self.run_every(self.poll_edf_goelec_rates, "now", 3600)
+            self.run_every(self.poll_octopus_compare_rates, "now+30", 3600)
 
         if self.ent_edf_flextras_registered:
             self.run_every(self._auto_enroll_edf_flextras, "now", 3600)
@@ -1402,12 +1410,18 @@ class GridLock(hass.Hass):
             ((d, v["profile_comparison"]) for d, v in self.savings_history.items()
              if "profile_comparison" in v),
             key=lambda p: p[0])
+        # Plans from before 3.66.1 read W load sensors as kW (house load
+        # forecast ~3x too high), so those days' plan costs are meaningless
+        # and are left out. Totals cover the same last 28 days the
+        # dashboard lists, not every day ever recorded.
+        profile_days = [(d, pc) for d, pc in profile_days if d >= PROFILE_COMPARISON_VALID_FROM][-28:]
         profile_totals = {}
         for _, pc in profile_days:
             for name, val in pc.items():
                 profile_totals[name] = profile_totals.get(name, 0.0) + val
         profile_totals = {k: round(v, 2) for k, v in profile_totals.items()}
-        profile_history = [{"date": d, **pc} for d, pc in profile_days[-28:]]
+        profile_history = [{"date": d, **pc} for d, pc in profile_days]
+        profile_days_counted = len(profile_days)
 
         # Real 30-day tariff backtest — each tariff's own rate structure
         # applied to what you actually used/exported each day (see
@@ -1521,6 +1535,7 @@ class GridLock(hass.Hass):
                                    "plan_accuracy": accuracy,
                                    "profile_comparison_history": profile_history,
                                    "profile_comparison_totals": profile_totals,
+                                   "profile_comparison_days": profile_days_counted,
                                    "bill_reconciliation_history": bill_recon_history,
                                    "bill_breakdown": bill_breakdown,
                                    "bill_month_to_date": bill_month_to_date,
@@ -2427,6 +2442,57 @@ class GridLock(hass.Hass):
                 products[label] = {"windows": windows, "standing_gbp": standing_gbp, "launched": launched}
         self.edf_goelec_products = products
 
+    def _octopus_get(self, url):
+        req = urllib.request.Request(url, headers={"User-Agent": "GridLock/3"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.load(resp)
+
+    def poll_octopus_compare_rates(self, kwargs):
+        """Real prices for the Octopus tariffs in the comparison (see
+        core/octopus_compare.py), replacing hand-typed figures."""
+        now = self.get_now()
+        api = core_octopus.API
+        try:
+            products = self._octopus_get(f"{api}/products/?is_variable=true&is_business=false&page_size=200")["results"]
+        except Exception as exc:  # noqa: BLE001 - network is best-effort
+            self.log(f"Octopus product list fetch failed: {exc!r}", level="WARNING")
+            return
+        try:
+            tz = ZoneInfo(self.get_timezone())
+        except Exception:  # noqa: BLE001
+            tz = ZoneInfo("Europe/London")
+        found = {}
+        period_from = (now - timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
+        period_to = (now + timedelta(days=3)).strftime("%Y-%m-%dT00:00:00Z")
+        for name in core_octopus.FAMILIES:
+            product = core_octopus.pick_product(products, name, now)
+            if not product:
+                continue
+            try:
+                detail = self._octopus_get(f"{api}/products/{product['code']}/")
+                kind, tariff = core_octopus.region_tariff(detail, self.agile_region)
+                if not tariff:
+                    continue
+                if kind == "single":
+                    recs = self._octopus_get(core_octopus.link(tariff, "standard_unit_rates")
+                                             + f"?period_from={period_from}&period_to={period_to}")["results"]
+                    windows = core_octopus.windows_from_records(recs)
+                else:
+                    windows = core_octopus.windows_from_clock(
+                        core_octopus.night_window(detail.get("description")),
+                        tariff["day_unit_rate_inc_vat"] / 100.0, tariff["night_unit_rate_inc_vat"] / 100.0,
+                        now.astimezone(tz).date(), 3, tz)
+                standing = core_octopus.standing_gbp(
+                    self._octopus_get(core_octopus.link(tariff, "standing_charges")
+                                      + f"?period_from={period_from}")["results"])
+            except Exception as exc:  # noqa: BLE001 - one tariff failing shouldn't drop the rest
+                self.log(f"Octopus {name} rates fetch failed: {exc!r}", level="WARNING")
+                continue
+            if windows and standing is not None:
+                found[name] = {"windows": windows, "standing_gbp": standing, "code": product["code"]}
+        if found:
+            self.octopus_compare_products = found
+
     def poll_carbon_intensity(self, kwargs):
         try:
             now_iso = self.get_now().astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
@@ -3236,25 +3302,33 @@ class GridLock(hass.Hass):
         # own comments) is scaled to it so a 2-day standing charge isn't
         # compared against a 1-day one.
         #
-        # "Current" deliberately does NOT add its own live standing charge
-        # here even though a real sensor for it exists (self.
-        # ent_daily_standing_charge) — `standing` on every compare_tariffs
-        # entry defaults to 0.0 unless the user's actually typed in that
-        # tariff's real published figure, so adding a real number only to
-        # Current would bias every unconfigured row (almost certainly all
-        # of them) in its favour by that exact amount, for no reason tied
-        # to the tariffs themselves. Comparison stays unit-rate-only unless
-        # standing is explicitly configured on the entries you care about.
+        # Every row carries a standing charge so the ranking is like for
+        # like: Current its real one (ent_daily_standing_charge), live rows
+        # their published one, and a hand-typed row without a `standing`
+        # figure is assumed to match yours (and says so). Comparing unit
+        # rates only made the live rows, which include theirs, look about
+        # 50p/day worse than the same tariff's "Current" row.
         horizon_hours = len(slots) * SLOT_MIN / 60.0
         live_imp = self.get_float_state(self.ent_import_rate, self.default_import)
         live_exp = self.get_float_state(self.ent_export_rate, self.default_export)
         live_standing = self.get_float_state(self.ent_daily_standing_charge, None)
-        rows = [("Current (live rates)", live_cost, True,
+        assumed_standing = live_standing or 0.0
+        rows = [("Current (live rates)", live_cost + assumed_standing * horizon_hours / 24.0, True,
                   {"import_desc": f"{round(live_imp * 100, 1)}p right now",
                    "export_p": round(live_exp * 100, 1),
                    "standing_p": round(live_standing * 100, 1) if live_standing is not None else None},
                   horizon_hours)]
+        def replaced_by_live(name):
+            n = (name or "").strip().lower()
+            if any(n == fam.lower() for fam in self.octopus_compare_products):
+                return True
+            if n.startswith("flexible") and "Flexible Octopus" in self.octopus_compare_products:
+                return True
+            return n.startswith("edf goelectric") and bool(self.edf_goelec_products)
+
         for t in self.compare_tariffs:
+            if replaced_by_live(t.get("name")):
+                continue  # real published prices below replace the typed-in figures
             imp, exp = [], []
             for s in slots:
                 r = float(t.get("import_default", self.default_import))
@@ -3276,16 +3350,21 @@ class GridLock(hass.Hass):
                          "reported infeasible — skipping it this tick.", level="WARNING")
                 continue
             standing = t.get("standing")
-            c = result.grid_cost + float(standing or 0.0) * horizon_hours / 24.0
+            standing_assumed = standing is None
+            if standing_assumed:
+                standing = assumed_standing
+            c = result.grid_cost + float(standing) * horizon_hours / 24.0
             default_p = round(float(t.get("import_default", self.default_import)) * 100, 1)
             windows_desc = "; ".join(
                 f"{round(float(w['rate']) * 100, 1)}p off-peak {w['start']}–{w['end']}"
                 for w in t.get("import", []))
             import_desc = f"{windows_desc} / {default_p}p otherwise" if windows_desc else f"{default_p}p"
-            rows.append((t.get("name", "tariff"), c, False,
+            rows.append((f"{t.get('name', 'tariff')} (your figures)", c, False,
                          {"import_desc": import_desc,
                           "export_p": round(float(t.get("export", 0.0)) * 100, 1),
-                          "standing_p": round(standing * 100, 1) if standing is not None else None},
+                          "standing_p": round(float(standing) * 100, 1),
+                          # only sent when true: HA stores False/0 attributes as 1e-09
+                          **({"standing_assumed": True} if standing_assumed else {})},
                          horizon_hours))
 
         # Agile import only (per the user's own ask — export stays as
@@ -3378,6 +3457,22 @@ class GridLock(hass.Hass):
             rows.append((f"EDF GoElectric ({term}, live)", result.grid_cost + standing, True,
                          {"import_desc": f"{round(lo, 1)}p–{round(hi, 1)}p live (off-peak/day)",
                           "export_p": round(self.edf_export_rate * 100, 1),
+                          "standing_p": round(prod["standing_gbp"] * 100, 1)},
+                         horizon_hours))
+
+        # Live Octopus tariffs (poll_octopus_compare_rates): real prices for
+        # your region. Export stays as now, same as the Agile row: an
+        # Octopus import switch doesn't change who buys your export.
+        for name, prod in self.octopus_compare_products.items():
+            oct_imp = [core_slots.rate_at(prod["windows"], s["start"], self.default_import) for s in slots]
+            cp = [dict(s, charge=0.0, export=0.0, imp=oct_imp[i]) for i, s in enumerate(slots)]
+            result = core_optimizer.solve(cp, soc0, self.cfg, today_date=now.date())
+            if result.infeasible:
+                self.log(f"{name} comparison reported infeasible - skipping it this tick.", level="WARNING")
+                continue
+            rows.append((f"{name} (live)", result.grid_cost + prod["standing_gbp"] * horizon_hours / 24.0, True,
+                         {"import_desc": f"{core_octopus.describe(prod['windows'])} live",
+                          "export_p": round(slots[0]["exp"] * 100, 1) if slots else None,
                           "standing_p": round(prod["standing_gbp"] * 100, 1)},
                          horizon_hours))
 
