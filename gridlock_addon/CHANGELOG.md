@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.71.1 - 2026-11-03
+
+### Fix
+- Engine failed to start on 3.71.0 when no Autho Solar state file existed yet
+
 ## 3.71.0 - 2026-11-03
 
 ### Autho Solar (new Solar tab)

@@ -111,9 +111,14 @@ def empty_state():
 def clean_state(raw):
     s = empty_state()
     if isinstance(raw, dict):
-        for k in s:
-            if isinstance(raw.get(k), type(s[k])) or (k == "accum" and isinstance(raw.get(k), dict)):
+        for k in ("queue", "history"):
+            if isinstance(raw.get(k), list):
                 s[k] = raw[k]
+        for k in ("actuals", "snapshots"):
+            if isinstance(raw.get(k), dict):
+                s[k] = raw[k]
+        if isinstance(raw.get("accum"), dict):
+            s["accum"] = raw["accum"]
     return s
 
 
