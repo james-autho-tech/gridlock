@@ -40,7 +40,7 @@ def battery_energy_cost_p(slots, cost_trace, cheap_rate_gbp, efficiency, degrada
 def effective_prices_p(slots, cost_trace, battery_cost_p):
     """Marginal p/kWh of extra load in each slot of the plan. slots carry
     imp/exp in £/kWh and the plan's export kWh; cost_trace carries
-    grid_in / charge_in / battery_kwh per slot (core/optimizer.py)."""
+    grid_in / charge_in / battery_kwh / pv_to_grid per slot (core/optimizer.py)."""
     n = min(len(slots), len(cost_trace))
     imp = [slots[i]["imp"] * 100.0 for i in range(n)]
     exp = [slots[i]["exp"] * 100.0 for i in range(n)]
@@ -48,6 +48,7 @@ def effective_prices_p(slots, cost_trace, battery_cost_p):
     charge = [cost_trace[i].get("charge_in", 0.0) or 0.0 for i in range(n)]
     batt = [cost_trace[i].get("battery_kwh", 0.0) or 0.0 for i in range(n)]
     export_kwh = [slots[i].get("export", 0.0) or 0.0 for i in range(n)]
+    pv_export = [cost_trace[i].get("pv_to_grid", 0.0) or 0.0 for i in range(n)]
     # For each slot, the rate of the first later slot that imports for
     # load before the battery is next charged -- that's where an extra
     # kWh taken from the battery now actually gets paid for.
@@ -65,6 +66,8 @@ def effective_prices_p(slots, cost_trace, battery_cost_p):
             price = imp[i]                      # importing anyway: extra load imports more
         elif export_kwh[i] > EPS_KWH:
             price = max(exp[i], battery_cost_p if batt[i] > EPS_KWH else 0.0)
+        elif pv_export[i] > EPS_KWH:
+            price = exp[i]                      # spare solar being exported: extra load gives up that export
         elif batt[i] > EPS_KWH:
             later = next_import[i]
             price = max(battery_cost_p, later) if later is not None else battery_cost_p

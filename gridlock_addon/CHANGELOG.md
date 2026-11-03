@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.74.0 - 2026-11-03
+
+### Flex loads (new tab)
+- Smart-plug appliances that need so many hours a day but don't mind when (dehumidifier, heated airer): pick the plug and its power sensor, set hours a day
+- GridLock runs each in the half-hours where an extra kWh costs least: cheap night rate, battery energy it already has, or spare solar it would export
+- Runs kept to a minimum length (default 1 hour) so compressors aren't cycled; optional allowed hours
+- Hours counted noon to noon, so a whole cheap night is one day's choice
+- Never runs during Storm Watch, a power cut or an Axle event
+- Switching a plug by hand pauses GridLock's control of it until midnight (Resume button on the tab)
+- Alert if a plug is on but drawing under 5 W for 30 minutes (tank full, or room already dry)
+- Planned running fed into the battery plan; the plug's power is learned on its own, not as house load
+
+### Pricing
+- Slots exporting spare solar now price an extra kWh at the export rate given up (was the battery's charge cost); affects GridWarm's battery pricing on sunny days
+
 ## 3.73.0 - 2026-11-03
 
 ### Solar tab

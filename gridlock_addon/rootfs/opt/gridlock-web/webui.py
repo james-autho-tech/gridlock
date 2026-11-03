@@ -21,6 +21,7 @@ sys.path.insert(0, "/opt/appdaemon/apps/gridlock")
 from core.warranty import parse_install_date  # noqa: E402 — needs the path insert above first
 from core.space_heating import merge_settings as merge_space_heating_settings  # noqa: E402
 from core.space_heating import diff_from_defaults as space_heating_diff  # noqa: E402
+from core import flex_loads as core_flex  # noqa: E402
 
 SUPERVISOR_TOKEN = os.environ["SUPERVISOR_TOKEN"]
 PORT = 8099
@@ -188,6 +189,32 @@ def autho_solar_status(sensor):
             "queued": attrs.get("queued"), "upcoming": attrs.get("upcoming") or {},
             "history": attrs.get("history") or [], "summary": attrs.get("summary") or {},
             "chart_days": autho_solar_day_list() if has_key else []}
+
+
+FLEX_SETTINGS_PATH = os.path.join(ENGINE_DIR, "flex_loads_settings.json")
+
+
+def load_flex_settings():
+    try:
+        with open(FLEX_SETTINGS_PATH) as f:
+            return core_flex.clean_settings(json.load(f))
+    except (OSError, ValueError):
+        return core_flex.clean_settings({})
+
+
+def save_flex_settings(settings):
+    cleaned = core_flex.clean_settings(settings)
+    tmp = FLEX_SETTINGS_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(cleaned, f, indent=2)
+    os.replace(tmp, FLEX_SETTINGS_PATH)
+    return cleaned
+
+
+def flex_status(sensor):
+    """The Flex loads tab: saved settings plus the engine's live view."""
+    attrs = sensor.get("attributes", {}) or {}
+    return {"settings": load_flex_settings(), "loads": attrs.get("loads") or []}
 
 
 def load_autho_solar_state():
@@ -464,6 +491,7 @@ def build_status():
         "ev_schedule": compare.get("attributes", {}).get("ev_schedule") or {},
         "axle": axle_status(get("sensor.gridlock_axle") or {}),
         "autho_solar": autho_solar_status(get("sensor.gridlock_autho_solar") or {}),
+        "flex_loads": flex_status(get("sensor.gridlock_flex_loads") or {}),
         "weather": find_weather_entity(states),
         "mode_active": status_attrs.get("battery_risk_profile") or "balanced",
         "mode_override": (get("input_select.gridlock_mode_override") or {}).get("state", "auto"),
@@ -965,6 +993,7 @@ PAGE = r"""<!doctype html>
     <button class="gl-nav-btn" data-tab="plan">Plan</button>
     <button class="gl-nav-btn" data-tab="forecast">Forecast</button>
     <button class="gl-nav-btn" data-tab="solar">Solar</button>
+    <button class="gl-nav-btn" data-tab="flex">Flex loads</button>
     <button class="gl-nav-btn" data-tab="billing">Billing</button>
     <button class="gl-nav-btn" data-tab="circuits" id="gl-nav-circuits" style="display:none">Circuits</button>
     <button class="gl-nav-btn" data-tab="gridwarm" id="gl-nav-gridwarm" style="display:none">GridWarm</button>
@@ -1024,6 +1053,7 @@ function selectTab(tab) {
   document.querySelectorAll('.gl-nav-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   document.querySelectorAll('.tab-page').forEach(p => p.style.display = (p.dataset.tab === tab) ? '' : 'none');
   if (tab === 'gridwarm') loadGridwarmEntities();
+  if (tab === 'flex') loadFlexEntities();
 }
 document.querySelectorAll('.gl-nav-btn').forEach(b => b.addEventListener('click', () => selectTab(b.dataset.tab)));
 function dotColor(state) {
@@ -2392,6 +2422,164 @@ async function saveAuthoSolar(clear) {
   } catch (e) { window.alert('Failed to save: network error.'); }
   authoBusy = false;
 }
+// ---- Flex loads tab: plugs run in the cheapest half-hours ----
+// refresh() rebuilds the page every 30 s; unsaved edits live in flexDraft.
+let flexDraft = null, flexEnts = null, flexBusy = false, flexLast = null;
+const FLEX_BLOCKS = [30, 60, 90, 120, 180, 240];
+async function loadFlexEntities() {
+  if (flexEnts) return;
+  try {
+    const r = await fetch('api/flex-entities');
+    if (r.ok) { flexEnts = await r.json(); if (currentTab === 'flex') rerenderFlex(); }
+  } catch (e) { /* the form still works with typed ids */ }
+}
+function rerenderFlex() {
+  const page = document.querySelector('.tab-page[data-tab="flex"]');
+  if (page && flexLast) page.innerHTML = renderFlexLoads(flexLast);
+}
+function flexEdit(i, key, el) {
+  if (!flexDraft || !flexDraft[i]) return;
+  flexDraft[i][key] = el.type === 'checkbox' ? el.checked : el.value;
+}
+function flexWindowEdit(i, part, el) {
+  const d = flexDraft[i];
+  const [a, b] = (d.window || '').split('-');
+  const start = part === 'start' ? el.value : (a || '');
+  const end = part === 'end' ? el.value : (b || '');
+  d.window = start && end ? `${start}-${end}` : '';
+  if (!start && !end) d.window = '';
+  d._ws = start; d._we = end;
+}
+function flexAdd() {
+  flexDraft = flexDraft || [];
+  flexDraft.push({ id: '', name: flexDraft.length ? 'New load' : 'Dehumidifier', enabled: true, switch: '', power: '', hours_per_day: 6, min_block_min: 60, window: '', rated_w: 300 });
+  rerenderFlex();
+}
+function flexRemove(i) {
+  if (!window.confirm(`Remove ${flexDraft[i].name || 'this load'}? GridLock stops switching its plug (it's switched off if GridLock had it on).`)) return;
+  flexDraft.splice(i, 1);
+  rerenderFlex();
+}
+function flexDiscard() { flexDraft = null; rerenderFlex(); }
+async function flexSave() {
+  if (flexBusy || !flexDraft) return;
+  for (const d of flexDraft) {
+    if ((d._ws && !d._we) || (!d._ws && d._we)) { window.alert(`${d.name}: give both a start and an end for the allowed hours, or neither.`); return; }
+  }
+  flexBusy = true;
+  try {
+    const loads = flexDraft.map(({ _ws, _we, ...d }) => ({ ...d, hours_per_day: Number(d.hours_per_day), min_block_min: Number(d.min_block_min), rated_w: Number(d.rated_w) }));
+    const r = await fetch('api/flex-loads', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ loads }) });
+    const out = await r.json();
+    if (!r.ok) window.alert(out.error || 'Failed to save.');
+    else { flexDraft = null; refresh(); }
+  } catch (e) { window.alert('Failed to save: network error.'); }
+  flexBusy = false;
+}
+async function flexResume(id) {
+  try {
+    await fetch('api/flex-loads/resume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+    setTimeout(refresh, 1500);
+  } catch (e) { window.alert('Failed: network error.'); }
+}
+function flexPicker(i, key, group, value, placeholder) {
+  const inp = 'background:#0b1220;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:6px 8px;font-family:inherit';
+  const ids = (flexEnts && flexEnts[group]) || [];
+  const names = (flexEnts && flexEnts.names) || {};
+  if (!ids.length) return `<input value="${esc(value || '')}" placeholder="${esc(placeholder)}" oninput="flexEdit(${i}, '${key}', this)" style="${inp};width:260px">`;
+  const opts = (value && !ids.includes(value) ? [value] : []).concat(ids);
+  return `<select onchange="flexEdit(${i}, '${key}', this)" style="${inp};max-width:300px"><option value="">Pick one</option>${opts.map((e) => `<option value="${esc(e)}" ${e === value ? 'selected' : ''}>${esc(names[e] && names[e] !== e ? `${names[e]} (${e})` : e)}</option>`).join('')}</select>`;
+}
+function flexChart(row) {
+  const S = (row.chart || []).filter((c) => c.p != null);
+  if (!S.length) return '';
+  const n = S.length, H = 110, colW = VB_W / n;
+  const vals = S.map((c) => Number(c.p));
+  const lo = Math.min(0, ...vals), hi = Math.max(1, ...vals) * 1.1;
+  const y = yScale(lo, hi, H);
+  const bars = S.map((c, i) => {
+    const on = c.on === 'yes';
+    const top = y(Math.max(0, c.p)), base = y(Math.min(0, c.p));
+    return `<rect x="${(i * colW + 1).toFixed(1)}" y="${Math.min(top, base).toFixed(1)}" width="${Math.max(1, colW - 2).toFixed(1)}" height="${Math.max(1, Math.abs(base - top)).toFixed(1)}" fill="${on ? 'var(--green)' : 'var(--cyan)'}" opacity="${on ? 0.9 : 0.3}"><title>${esc(hhmm(c.t))}: ${Number(c.p).toFixed(1)}p per extra kWh${on ? ', planned to run' : ''}</title></rect>`;
+  }).join('');
+  const xRow = barAxisLabels(n, Math.max(1, Math.round(n / 6)), (i) => hhmm(S[i].t));
+  return `<div class="gl-combo-legend" style="margin:8px 0 4px">
+      <span><span class="gl-legend-dot" style="background:var(--green)"></span>Planned to run</span>
+      <span><span class="gl-legend-dot" style="background:var(--cyan);opacity:.5"></span>Cost of an extra kWh, until noon (p)</span></div>
+    ${chartFrame(bars, H, niceTicks(lo, hi).map((t) => ({ ...t, label: `${t.label}p` })), null, xRow)}`;
+}
+function renderFlexLoads(f) {
+  f = f || { settings: { loads: [] }, loads: [] };
+  flexLast = f;
+  const saved = (f.settings && f.settings.loads) || [];
+  if (!flexDraft) flexDraft = saved.map((l) => ({ ...l }));
+  const inp = 'background:#0b1220;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:6px 8px;font-family:inherit';
+  const views = {};
+  (f.loads || []).forEach((r) => { views[r.id] = r; });
+  const hrs = (h) => { const v = Number(h) || 0; const hh = Math.floor(v + 1e-6), mm = Math.round((v - hh) * 60); return mm ? `${hh}h ${mm}m` : `${hh}h`; };
+  const colour = { 'Running': 'var(--green)', 'Waiting': 'var(--cyan)', 'Done for today': 'var(--dim)', 'Paused (manual)': 'var(--amber)' };
+
+  const cards = saved.map((l) => {
+    const r = views[l.id];
+    if (!r) return `<div class="gl-wrap"><div class="gl-h">${esc(l.name)}</div><div class="gl-sub">Saved. GridLock picks it up within 30 seconds.</div></div>`;
+    const st = r.status || '-';
+    const next = r.next_run ? ` Next run ${esc(hhmm(r.next_run))}.` : '';
+    const idle = r.idle === 'yes' ? `<div class="gl-sub" style="color:var(--amber)">The plug is on but it's drawing next to nothing: the tank may be full, or the room is already dry.</div>` : '';
+    const short = r.short_h ? `<div class="gl-sub" style="color:var(--amber)">Only room for ${esc(hrs(Number(l.hours_per_day) - Number(r.done_h) - Number(r.short_h)))} more before noon inside the allowed hours.</div>` : '';
+    return `<div class="gl-wrap">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+        <div class="gl-h">${esc(r.name)}</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span style="color:${colour[st] || 'var(--amber)'};font-weight:700">${esc(st)}</span>
+          ${st === 'Paused (manual)' ? `<button class="gl-btn-sm" onclick="flexResume('${esc(l.id)}')">Resume</button>` : ''}
+        </div>
+      </div>
+      ${st === 'Paused (manual)' ? '<div class="gl-sub">You switched the plug yourself, so GridLock is leaving it alone until midnight.</div>' : ''}
+      <div class="gl-grid" style="margin:8px 0">
+        <div class="gl-tile"><div class="lbl">Run since noon</div><div class="val num">${hrs(r.done_h)}</div><div class="gl-sub" style="margin:2px 0 0">of ${hrs(l.hours_per_day)}${Number(r.left_h) > 0 ? `, ${hrs(r.left_h)} to go` : ''}</div></div>
+        <div class="gl-tile"><div class="lbl">Used since noon</div><div class="val num">${Number(r.kwh_today || 0).toFixed(2)} kWh</div><div class="gl-sub" style="margin:2px 0 0">${r.avg_w ? `typically ${Math.round(r.avg_w)} W when running` : 'learning its running power'}</div></div>
+        <div class="gl-tile"><div class="lbl">Now</div><div class="val num">${r.power_w != null ? Math.round(r.power_w) + ' W' : '-'}</div><div class="gl-sub" style="margin:2px 0 0">plug ${esc(r.switch_state || '-')}${r.now_price_p != null ? `, ${Number(r.now_price_p).toFixed(1)}p/kWh` : ''}.${next}</div></div>
+      </div>
+      ${idle}${short}${flexChart(r)}
+    </div>`;
+  }).join('');
+
+  const blocks = (v) => FLEX_BLOCKS.map((b) => `<option value="${b}" ${Number(v) === b ? 'selected' : ''}>${b < 60 ? b + ' min' : (b / 60) + (b === 60 ? ' hour' : ' hours')}</option>`).join('');
+  const form = flexDraft.map((d, i) => {
+    const [ws, we] = d._ws !== undefined || d._we !== undefined ? [d._ws || '', d._we || ''] : (d.window ? d.window.split('-') : ['', '']);
+    return `<div style="border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px">
+      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:end">
+        <div><div class="lbl" style="font-size:10px">Name</div><input value="${esc(d.name || '')}" maxlength="40" oninput="flexEdit(${i}, 'name', this)" style="${inp};width:160px"></div>
+        <div><div class="lbl" style="font-size:10px">Plug (switch)</div>${flexPicker(i, 'switch', 'switch', d.switch, 'switch.dehumidifier')}</div>
+        <div><div class="lbl" style="font-size:10px">Power sensor</div>${flexPicker(i, 'power', 'power', d.power, 'sensor.dehumidifier_power')}</div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:end;margin-top:10px">
+        <div><div class="lbl" style="font-size:10px">Hours a day (noon to noon)</div><input type="number" min="0.5" max="24" step="0.5" value="${esc(String(d.hours_per_day))}" oninput="flexEdit(${i}, 'hours_per_day', this)" style="${inp};width:80px"></div>
+        <div><div class="lbl" style="font-size:10px">Shortest run</div><select onchange="flexEdit(${i}, 'min_block_min', this)" style="${inp}">${blocks(d.min_block_min)}</select></div>
+        <div><div class="lbl" style="font-size:10px">Only between (optional)</div><input type="time" value="${esc(ws || '')}" onchange="flexWindowEdit(${i}, 'start', this)" style="${inp}"> and <input type="time" value="${esc(we || '')}" onchange="flexWindowEdit(${i}, 'end', this)" style="${inp}"></div>
+        <div><div class="lbl" style="font-size:10px">Power when running (W)</div><input type="number" min="10" max="3500" step="10" value="${esc(String(d.rated_w))}" oninput="flexEdit(${i}, 'rated_w', this)" style="${inp};width:90px"></div>
+        <label style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="checkbox" ${d.enabled ? 'checked' : ''} onchange="flexEdit(${i}, 'enabled', this)"> GridLock controls it</label>
+        <button class="gl-btn-sm" onclick="flexRemove(${i})">Remove</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  return `<div class="gl-wrap">
+    <div class="gl-h">Flex loads</div>
+    <div class="gl-sub">Appliances on a smart plug that need so many hours a day but don't mind when, like a dehumidifier or a heated airer. GridLock runs each one in the half-hours where an extra kWh costs least: overnight cheap rate, battery energy it already has, or spare solar it would otherwise export. Runs are kept at least the shortest-run length so a compressor isn't cycled, and nothing runs during Storm Watch, a power cut or an Axle event. Switch a plug by hand and GridLock leaves it alone until midnight. The hours a day count from noon to noon, so a whole cheap night is one day's choice.</div>
+  </div>
+  ${cards}
+  <div class="gl-wrap">
+    <div class="gl-h">Settings</div>
+    ${form || '<div class="gl-sub">No loads yet. Add one once its plug is paired with Home Assistant.</div>'}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+      <button class="gl-btn-sm" style="padding:7px 14px" onclick="flexAdd()">Add load</button>
+      <button class="gl-btn-sm" style="padding:7px 14px" onclick="flexSave()">Save</button>
+      <button class="gl-btn-sm" style="padding:7px 14px" onclick="flexDiscard()">Discard changes</button>
+    </div>
+    <div class="gl-sub" style="margin-top:8px">"Power when running" is only a starting guess for the battery plan; GridLock learns the real figure from the power sensor.</div>
+  </div>`;
+}
 let axleBusy = false;
 function renderAxle(ax) {
   ax = ax || {};
@@ -3518,6 +3706,9 @@ async function refresh() {
     <div class="tab-page" data-tab="solar">
       ${renderAuthoSolar(d.autho_solar)}
     </div>
+    <div class="tab-page" data-tab="flex">
+      ${renderFlexLoads(d.flex_loads)}
+    </div>
     <div class="tab-page" data-tab="billing">
       <div class="gl-wrap">
         <div class="gl-h">Daily cost history</div>
@@ -3633,6 +3824,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(200, json.dumps(build_status()).encode(), "application/json")
         elif path.endswith("/api/gridwarm-entities"):
             self._handle_gridwarm_entities()
+        elif path.endswith("/api/flex-entities"):
+            self._handle_flex_entities()
         elif path.endswith("/api/autho-solar/day"):
             query = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
             date = (query.get("date") or [""])[0]
@@ -3674,6 +3867,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_ev_assist()
         elif path.endswith("/api/axle"):
             self._handle_axle()
+        elif path.endswith("/api/flex-loads/resume"):
+            self._handle_flex_loads(resume=True)
+        elif path.endswith("/api/flex-loads"):
+            self._handle_flex_loads()
         elif path.endswith("/api/autho-solar"):
             self._handle_autho_solar()
         else:
@@ -3842,6 +4039,57 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(200, json.dumps({"ok": True, "hot_water": merged["hot_water"]}).encode(),
                        "application/json")
         except Exception as exc:  # noqa: BLE001 — surface it to the caller, don't crash the server
+            self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
+
+    def _handle_flex_entities(self):
+        """Switches, and power sensors, for the Flex loads pickers."""
+        try:
+            states = ha_get_all_states()
+            ids = sorted(states)
+
+            def is_power(st):
+                a = st.get("attributes") or {}
+                return a.get("device_class") == "power" or a.get("unit_of_measurement") in ("W", "kW")
+            out = {"switch": [e for e in ids if e.split(".")[0] in ("switch", "input_boolean")],
+                   "power": [e for e in ids if e.startswith("sensor.") and is_power(states[e])],
+                   "names": {e: ((states[e].get("attributes") or {}).get("friendly_name") or e) for e in ids
+                             if e.split(".")[0] in ("switch", "input_boolean", "sensor")}}
+            self._send(200, json.dumps(out).encode(), "application/json")
+        except Exception as exc:  # noqa: BLE001 - surface it to the caller, don't crash the server
+            self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
+
+    def _handle_flex_loads(self, resume=False):
+        """Save the Flex loads tab (the full list of loads), or lift a
+        manual pause (resume)."""
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+            settings = load_flex_settings()
+            if resume:
+                lid = str(body.get("id") or "")
+                if lid not in {l["id"] for l in settings["loads"]}:
+                    self._send(400, json.dumps({"error": "unknown load"}).encode(), "application/json")
+                    return
+                settings["resume"][lid] = datetime.now(timezone.utc).isoformat()
+            else:
+                loads = body.get("loads")
+                if not isinstance(loads, list) or len(loads) > core_flex.MAX_LOADS:
+                    self._send(400, json.dumps({"error": f"up to {core_flex.MAX_LOADS} loads"}).encode(), "application/json")
+                    return
+                used = set()
+                for item in loads:
+                    if isinstance(item, dict):
+                        if not item.get("id"):
+                            item["id"] = os.urandom(4).hex()
+                        sw = str(item.get("switch") or "")
+                        if sw and sw in used:
+                            self._send(400, json.dumps({"error": f"{sw} is picked for two loads"}).encode(), "application/json")
+                            return
+                        used.add(sw)
+                settings["loads"] = loads
+            saved = save_flex_settings(settings)
+            self._send(200, json.dumps({"ok": True, "settings": saved}).encode(), "application/json")
+        except Exception as exc:  # noqa: BLE001 - surface it to the caller, don't crash the server
             self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
 
     def _handle_gridwarm_entities(self):

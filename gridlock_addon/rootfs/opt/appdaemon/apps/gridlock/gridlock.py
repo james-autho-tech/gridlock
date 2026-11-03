@@ -39,6 +39,7 @@ from core import axle as core_axle
 from core import autho_solar as core_autho
 from core import octopus_compare as core_octopus
 from core import ev_model as core_ev_model
+from core import flex_loads as core_flex
 
 # First day the risk-profile comparison is trusted (see _publish savings).
 PROFILE_COMPARISON_VALID_FROM = "2026-10-21"
@@ -46,7 +47,7 @@ PROFILE_COMPARISON_VALID_FROM = "2026-10-21"
 STATE_FILES = ("load_profile.json", "savings_state.json", "savings_history.json",
                "cost_tracking_state.json", "decision_log.json",
                "circuit_state.json", "circuit_history.json", "solar_accuracy.json",
-               "autho_solar_state.json")
+               "autho_solar_state.json", "flex_loads_state.json")
 
 # publish_plan()'s per-slot row shape — a single source of truth for both
 # the row length it builds and the "columns" name list it publishes
@@ -758,6 +759,12 @@ class GridLock(hass.Hass):
         # Autho Solar: second solar forecast, compared with Solcast (and
         # optionally planned with). Off until a key is saved on the Solar tab.
         self._autho_state = core_autho.clean_state(self._load_json("autho_solar_state.json", {}))
+        # Flexible loads (dashboard Flex loads tab): plugs run in the cheapest half-hours.
+        self._flex_state = core_flex.clean_state(self._load_json("flex_loads_state.json", {}))
+        self._flex_settings_cache = (None, {"loads": [], "resume": {}})
+        self._flex_listeners = {}
+        self._flex_last_run = None
+        self._flex_view = {}
         self._autho_cfg = core_autho.clean_settings(self._load_dashboard_json("autho_solar_settings.json", {}))
         self._autho_forecast = {}
         self._autho_issued = self._autho_fetched = self._autho_error = None
@@ -5082,6 +5089,228 @@ class GridLock(hass.Hass):
         return (live is not None
                 and str(live).strip().lower() == str(zone["heating_entity_state"]).strip().lower())
 
+    # ------------------------------------------------------------------
+    # FLEXIBLE LOADS (core/flex_loads.py): appliances on smart plugs that
+    # need so many hours a day, run in the cheapest half-hours.
+    # ------------------------------------------------------------------
+    def _flex_settings(self):
+        """The dashboard's flex_loads_settings.json, cleaned, cached on mtime."""
+        try:
+            mtime = os.path.getmtime(self._dashboard_path("flex_loads_settings.json"))
+        except OSError:
+            mtime = 0.0
+        if self._flex_settings_cache[0] != mtime:
+            raw = self._load_dashboard_json("flex_loads_settings.json", {}) if mtime else {}
+            self._flex_settings_cache = (mtime, core_flex.clean_settings(raw))
+        return self._flex_settings_cache[1]
+
+    def _local_tz(self):
+        try:
+            return ZoneInfo(self.get_timezone())
+        except Exception:  # noqa: BLE001
+            return ZoneInfo("Europe/London")
+
+    def _flex_prices(self):
+        """{slot start: p/kWh of extra load} from the last battery plan, or
+        None before the first solve."""
+        plan = self._last_plan
+        if not plan:
+            return None
+        settings = self._ui_zone_cache[2] if self._ui_zone_cache else None
+        wear_gbp = float((settings or {}).get("battery_wear_p_per_kwh", 3.0)) / 100.0
+        batt_cost_p = core_effective_price.battery_energy_cost_p(
+            plan["slots"], plan["cost_trace"], self.cheap_rate, getattr(self.cfg, "efficiency", 0.9), wear_gbp)
+        eff = core_effective_price.effective_prices_p(plan["slots"], plan["cost_trace"], batt_cost_p)
+        return {plan["slots"][i]["start"]: (eff[i], bool(plan["slots"][i].get("axle"))) for i in range(len(eff))}
+
+    def _flex_watch(self, entity):
+        if entity and entity not in self._flex_listeners:
+            self._flex_listeners[entity] = self.listen_state(self._on_flex_switch_changed, entity)
+
+    def _on_flex_switch_changed(self, entity, attribute, old, new, kwargs):
+        """Someone switched a flexible load's plug by hand (it doesn't match
+        what GridLock last sent): leave it alone until midnight."""
+        if old not in ("on", "off") or new not in ("on", "off"):
+            return
+        for load in self._flex_settings()["loads"]:
+            if load["switch"] != entity or not load["enabled"]:
+                continue
+            st = self._flex_state.get(load["id"])
+            if st is None or st.get("last_cmd") == new or st.get("manual"):
+                continue
+            st["manual"] = self.get_now().isoformat()
+            st["run_started"] = None
+            self.log(f"Flex loads: {load['name']} switched {new} by hand; paused until midnight")
+            self._save_json("flex_loads_state.json", self._flex_state)
+            self._publish_flex_status()
+
+    def _flex_switch(self, load, st, on, now, reason):
+        st["last_cmd"] = "on" if on else "off"      # before the call: the state change must read as ours
+        if on and not st.get("run_started"):
+            st["run_started"] = now.isoformat()
+        if not on:
+            st["run_started"] = None
+        self.call_service(f"{load['switch'].split('.')[0]}/turn_{'on' if on else 'off'}",
+                          target={"entity_id": load["switch"]})
+        self.log(f"Flex loads: {load['name']} {'on' if on else 'off'} ({reason})")
+
+    def _plan_flex_loads(self, now):
+        settings = self._flex_settings()
+        tz = self._local_tz()
+        local_now = now.astimezone(tz)
+        today = core_flex.day_key(local_now)          # noon to noon
+        dt_min = (now - self._flex_last_run).total_seconds() / 60.0 if self._flex_last_run else 0.0
+        self._flex_last_run = now
+        prices = self._flex_prices()
+        slot0 = now.replace(minute=(now.minute // 30) * 30, second=0, microsecond=0)
+        day_end = core_flex.next_day_start(local_now)
+        starts = []
+        t = slot0
+        while t.astimezone(tz) < day_end:
+            starts.append(t)
+            t += timedelta(minutes=30)
+        storm = self.storm_active()
+        islanded = self.grid_connection_off()
+        axle_now = core_axle.event_at(self._axle_events, now)
+        blocked_now = ("Storm Watch" if storm else "power cut" if islanded else "Axle event" if axle_now else None)
+
+        new_state, view = {}, {}
+        planned_by_power = {}
+        for load in settings["loads"]:
+            lid = load["id"]
+            st = core_flex.roll_day(self._flex_state.get(lid) or core_flex.empty_day(today), today)
+            new_state[lid] = st
+            sw = load["switch"]
+            sw_state = self.get_state(sw) if sw and self.entity_exists(sw) else None
+            is_on = sw_state == "on"
+            power_w = None
+            if load["power"] and self.entity_exists(load["power"]):
+                try:
+                    power_w = float(self.get_state(load["power"]))
+                except (TypeError, ValueError):
+                    power_w = None
+            core_flex.add_sample(st, is_on, power_w, dt_min)
+            resume_at = settings["resume"].get(lid)
+            if st.get("manual") and ((resume_at and resume_at > st["manual"])
+                                     or core_flex.manual_expired(st["manual"], local_now)):
+                st["manual"] = None
+            need = core_flex.slots_needed(load["hours_per_day"], st["on_min"])
+            row = {"id": lid, "name": load["name"], "enabled": "yes" if load["enabled"] else "no",
+                   "switch": sw, "power": load["power"], "switch_state": sw_state or "missing",
+                   "power_w": round(power_w, 1) if power_w is not None else None,
+                   "hours_per_day": load["hours_per_day"], "done_h": round(st["on_min"] / 60.0, 2),
+                   "left_h": round(max(0.0, load["hours_per_day"] - st["on_min"] / 60.0), 2),
+                   "kwh_today": round(st["kwh"], 3), "avg_w": round(st["avg_w"], 0) if st.get("avg_w") else None,
+                   "chart": [], "next_run": None}
+            if sw:
+                self._flex_watch(sw)
+
+            if not load["enabled"] or not sw or sw_state is None or sw_state in ("unavailable", "unknown"):
+                if not load["enabled"] and is_on and st.get("last_cmd") == "on":
+                    self._flex_switch(load, st, False, now, "turned off on the dashboard")
+                row["status"] = ("Off" if not load["enabled"] else "No plug picked" if not sw
+                                 else "Plug unavailable")
+                view[lid] = row
+                continue
+            if st.get("manual"):
+                row["status"] = "Paused (manual)"
+                view[lid] = row
+                continue
+
+            # Price and allowed half-hours to midnight.
+            m = load["min_block_min"] // 30
+            plist, allowed = [], []
+            for t in starts:
+                p, axle = prices.get(t, (None, False)) if prices else (None, False)
+                plist.append(p if p is not None else 999.0)
+                allowed.append(p is not None and not axle and core_flex.in_window(load["window"], t.astimezone(tz)))
+            if blocked_now and allowed:
+                allowed[0] = False
+            chosen = set(core_flex.pick_slots(plist, allowed, need, m, core_flex.run_slots_so_far(st, now)))
+            want_on = 0 in chosen and need > 0 and not blocked_now
+            row["chart"] = [{"t": t.isoformat(), "p": round(plist[i], 2) if plist[i] < 999 else None,
+                             "on": "yes" if i in chosen else "no"} for i, t in enumerate(starts)]
+            later = sorted(i for i in chosen if i > 0)
+            row["next_run"] = starts[later[0]].isoformat() if later else None
+            if want_on and plist[0] < 999:
+                row["now_price_p"] = round(plist[0], 2)
+
+            if want_on and not is_on:
+                self._flex_switch(load, st, True, now, f"cheapest half-hours, {plist[0]:.1f}p/kWh")
+                is_on = True
+            elif not want_on and is_on:
+                self._flex_switch(load, st, False, now, blocked_now or ("done for today" if need == 0 else "waiting for a cheaper half-hour"))
+                is_on = False
+            elif want_on and st.get("last_cmd") != "on":
+                st["last_cmd"], st["run_started"] = "on", st.get("run_started") or now.isoformat()
+
+            # On but drawing next to nothing: tank full, or its own humidistat is satisfied.
+            idle = is_on and power_w is not None and power_w < core_flex.IDLE_W
+            if idle:
+                st["idle_since"] = st.get("idle_since") or now.isoformat()
+                idle_min = (now - datetime.fromisoformat(st["idle_since"])).total_seconds() / 60.0
+                if idle_min >= core_flex.IDLE_ALERT_MIN:
+                    row["idle"] = "yes"
+                    if st.get("idle_notified") != today:
+                        st["idle_notified"] = today
+                        self._notify(f"GridLock: {load['name']} isn't running",
+                                     f"Its plug has been on for {idle_min:.0f} minutes but it's drawing under "
+                                     f"{core_flex.IDLE_W:.0f} W. The tank may be full, or the room is already dry.")
+            else:
+                st["idle_since"] = None
+
+            if need == 0:
+                row["status"] = "Done for today"
+            elif is_on:
+                row["status"] = "Running"
+            elif blocked_now:
+                row["status"] = f"Held off ({blocked_now})"
+            elif prices is None:
+                row["status"] = "Waiting for the first battery plan"
+            elif not chosen:
+                row["status"] = "No allowed half-hours left today"
+            else:
+                row["status"] = "Waiting"
+            if need > 0 and prices is not None and len(chosen) < need:
+                row["short_h"] = round((need - len(chosen)) / 2.0, 1)
+
+            if load["power"]:
+                kw = (st.get("avg_w") or load["rated_w"]) / 1000.0
+                planned = planned_by_power.setdefault(load["power"], {})
+                for i in chosen:
+                    key = self.load_provider.slot_key(starts[i])
+                    planned[key] = planned.get(key, 0.0) + kw * 0.5
+            view[lid] = row
+
+        # Planned load for the battery plan; drop plugs no longer in use.
+        for ent in list(getattr(self, "_flex_planned_entities", set())):
+            if ent not in planned_by_power:
+                self.load_provider.planned_circuit_kwh.pop(ent, None)
+        for ent, planned in planned_by_power.items():
+            self.load_provider.planned_circuit_kwh[ent] = planned
+        self._flex_planned_entities = set(planned_by_power)
+
+        self._flex_state, self._flex_view = new_state, view
+        self._save_json("flex_loads_state.json", self._flex_state)
+        self._publish_flex_status()
+
+    def _publish_flex_status(self):
+        def drop_none(v):
+            if isinstance(v, dict):
+                return {k: drop_none(x) for k, x in v.items() if x is not None}
+            if isinstance(v, list):
+                return [drop_none(x) for x in v if x is not None]
+            return v
+        loads = [self._flex_view[k] for k in self._flex_view]
+        for row in loads:
+            st = self._flex_state.get(row["id"]) or {}
+            if st.get("manual") and row.get("status") != "Paused (manual)":
+                row["status"] = "Paused (manual)"
+        running = sum(1 for r in loads if r.get("status") == "Running")
+        self.set_state("sensor.gridlock_flex_loads", state=str(running) if loads else "none", attributes={
+            "friendly_name": "GridLock Flex loads", "icon": "mdi:power-plug-outline",
+            "loads": drop_none(loads)})
+
     def _watch_dashboard_settings(self, kwargs):
         """Re-plan within 30 s of a change the user just made -- the
         dashboard's settings file, or the setpoint of a thermostat a zone
@@ -5100,6 +5329,18 @@ class GridLock(hass.Hass):
             self._autho_mtime_seen = autho_mtime
             if not first:
                 self.poll_autho_solar({})
+        try:
+            flex_mtime = os.path.getmtime(self._dashboard_path("flex_loads_settings.json"))
+        except OSError:
+            flex_mtime = 0.0
+        if flex_mtime != getattr(self, "_flex_mtime_seen", None):
+            first = getattr(self, "_flex_mtime_seen", None) is None
+            self._flex_mtime_seen = flex_mtime
+            if not first:
+                try:
+                    self._plan_flex_loads(self.get_now())
+                except Exception as exc:  # noqa: BLE001 - the regular tick still runs
+                    self.log(f"Flex loads: re-plan after a settings change failed: {exc!r}", level="WARNING")
         if axle_mtime != getattr(self, "_axle_mtime_seen", None):
             # Key added, changed or removed: act on it now, not in 10 min.
             first = getattr(self, "_axle_mtime_seen", None) is None
@@ -6285,6 +6526,11 @@ class GridLock(hass.Hass):
             all_circuits = [c for c in all_circuits if c != self.ent_ev_power]
         if self.entity_exists(HEATPUMP_POWER_ENTITY) and HEATPUMP_POWER_ENTITY not in all_circuits:
             all_circuits.append(HEATPUMP_POWER_ENTITY)
+        # Flexible loads' plugs: learned and planned on their own, never as
+        # general house load.
+        for load in self._flex_settings()["loads"]:
+            if load["power"] and load["power"] not in all_circuits and self.entity_exists(load["power"]):
+                all_circuits.append(load["power"])
         self.load_provider.circuit_power_entities = all_circuits
         self.load_provider.sample(now)
         pv_live_kw = self._read_live_kw(self.ent_pv_power_entities)
@@ -6296,6 +6542,10 @@ class GridLock(hass.Hass):
         self.publish_storm_status()
         self.publish_grid_connection_status()
         self._publish_thermal_forecast(now)
+        try:
+            self._plan_flex_loads(now)
+        except Exception as exc:  # noqa: BLE001 - never take the battery plan down with it
+            self.log(f"Flex loads: planning failed: {exc!r}", level="WARNING")
 
         slots = self.build_slots(now)
         result = self._solve_plan(slots, soc0, now)

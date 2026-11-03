@@ -141,7 +141,7 @@ SOLVER_TIME_LIMIT_SEC = 15
 class PlanResult:
     slots: list           # input slots, with "charge"/"export" filled in
     trace: list            # SoC % after each slot
-    cost_trace: list         # [{"delta","total","grid_in","charge_in"}, ...]
+    cost_trace: list         # [{"delta","total","grid_in","charge_in","battery_kwh","pv_to_grid",...}, ...]
     grid_cost: float          # real import/export £ only (no degradation)
     total_cost: float          # objective value incl. degradation weighting
     infeasible: bool = False
@@ -679,6 +679,9 @@ def _solve_lp(slots, soc0_kwh, cfg, *, export_cap_override=None):
         cost_trace.append({"delta": round(delta, 4), "total": round(grid_cost_total, 4),
                             "grid_in": round(grid_in, 3), "charge_in": round(s["charge"], 3),
                             "battery_kwh": round(battery_kwh, 3),
+                            # Solar sent straight to the grid: an extra kWh
+                            # of load in this slot costs that export.
+                            "pv_to_grid": round(_val(pv_to_grid[i]), 3),
                             "reserve_shortfall_kwh": round(reserve_shortfall_kwh, 4),
                             "session_reward_gbp": round(session_reward_gbp, 4)})
 
