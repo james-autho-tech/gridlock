@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.74.2 - 2026-11-04
+
+### GridWarm
+- Outdoor forecast picked up as soon as the weather entity loads after an HA restart (was held flat for up to an hour)
+
+### Suppliers
+- Checked against EDF Energy (UK) 21.0.1 (new `edfenergy_uk` domain): entity ids, rates, dispatches and free-electricity windows unchanged, nothing needed
+
 ## 3.74.1 - 2026-11-03
 
 ### Dashboard

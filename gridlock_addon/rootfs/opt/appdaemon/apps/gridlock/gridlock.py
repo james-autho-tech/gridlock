@@ -4732,6 +4732,10 @@ class GridLock(hass.Hass):
             if isinstance(raw, list) and raw:
                 points, used = raw, ent
                 break
+            # Not loaded yet (HA still starting): try again next tick rather
+            # than parking it for the hour a genuinely broken one gets.
+            if self.get_state(ent) in (None, "unavailable", "unknown"):
+                continue
             warned_at = self._thermal_forecast_warned.get(ent)
             if warned_at is not None and (now - warned_at).total_seconds() < 3600:
                 continue
