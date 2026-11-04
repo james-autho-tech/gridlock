@@ -78,6 +78,10 @@ PLAN_TABLE_COLS = ["slot", "import_p", "export_p", "pv_kwh", "load_kwh",
 # confirmed as a real gap, not a hypothetical one, before it shipped.
 KRAKEN_FORK_DOMAINS = ("octopus_energy", "edf_energy")
 
+# Bump to run the PV energy counter backfill (_pv_counter_backfill) again.
+PV_COUNTER_BACKFILL = 1
+PV_COUNTER_BACKFILL_DAYS = 11
+
 
 def _kraken_prefixes(entity_domain, suffix_after_prefix=""):
     """e.g. _kraken_prefixes("sensor", "electricity_") ->
@@ -450,6 +454,14 @@ class GridLock(hass.Hass):
         self._load_circuit_state()
 
         self.ent_pv_power_entities = a.get("pv_power_entities") or self.registry.find_pv_power()
+        # PV energy today (kWh counter): measures generation properly in weak
+        # light, where the live power reading often shows 0. Used for the
+        # half-hours sent to Autho Solar and Solcast's learned correction;
+        # the power reading stands in only when there's no counter.
+        self.ent_pv_energy = (a.get("pv_energy_entity")
+                              or self.overrides.get("pv_energy_entity_override")
+                              or self.registry.find_pv_energy())
+        self._pv_counter_last = None
         self.ent_grid_power = (a.get("grid_power_entity")
                                or self.overrides.get("grid_power_entity_override")
                                or self.registry.find_power("grid"))
@@ -986,6 +998,9 @@ class GridLock(hass.Hass):
         # Every 10 min, as Axle's own HA sensor does; a no-op without a key.
         self.run_every(self.poll_axle, "now+15", 600)
         self._axle_mtime_seen = None
+        # Once, before the first Autho Solar poll sends them: half-hours rebuilt
+        # from the PV energy counter's history (a no-op once done).
+        self.run_in(self._pv_counter_backfill, 10)
         # Autho Solar forecast + sending readings: every 15 min, no-op without a key.
         self.run_every(self.poll_autho_solar, "now+20", 900)
         self._autho_mtime_seen = None
@@ -2155,6 +2170,13 @@ class GridLock(hass.Hass):
                     self.log(f"Autho Solar refused {len(batch)} readings: {exc.read()[:200]!r}", level="WARNING")
                 del queue[:len(batch)]
                 self._save_json("autho_solar_state.json", self._autho_state)
+            if self._autho_state.get("relearn"):
+                # Readings were re-sent (PV counter backfill): Autho Solar keeps
+                # what it first learned from each until told to start again.
+                self._autho_request("POST", f"/api/sites/{site_id}/reset-learning")
+                self._autho_state.pop("relearn", None)
+                self._save_json("autho_solar_state.json", self._autho_state)
+                self.log("Autho Solar re-learned the roof from the re-sent readings")
             body = self._autho_request("GET", f"/api/sites/{site_id}/forecast?hours=96")
             self._autho_forecast, self._autho_issued = core_autho.parse_forecast(body)
             self._autho_fetched = now
@@ -2186,7 +2208,69 @@ class GridLock(hass.Hass):
             return solcast
         return core_autho.planning_curve(self._autho_forecast, self._autho_cfg["plan_case"], solcast)
 
-    def _autho_tick(self, now, pv_kw):
+    def _read_pv_counter(self):
+        """PV energy today in kWh, or None if there's no counter right now."""
+        v = self.get_float_state(self.ent_pv_energy, None) if self.ent_pv_energy else None
+        if v is None or v < 0:
+            return None
+        unit = str(self.get_state(self.ent_pv_energy, attribute="unit_of_measurement") or "kWh").strip().lower()
+        return v / 1000.0 if unit == "wh" else v
+
+    def _pv_counter_step(self, now, counter):
+        """kWh the counter says was made since the last tick (None on the
+        first reading, after a gap, or with no counter)."""
+        last, self._pv_counter_last = self._pv_counter_last, None
+        if counter is None:
+            return None
+        if last is None or not (timedelta(0) < now - last[0] <= core_autho.METER_MAX_GAP):
+            self._pv_counter_last = (now, counter)
+            return None
+        kwh, base = core_autho.counter_step(last[1], counter, now, self._local_tz())
+        self._pv_counter_last = (now, base)
+        return kwh
+
+    def _pv_counter_backfill(self, kwargs):
+        """Once: rebuild the half-hours Autho Solar learned from, and Solcast's
+        learned correction, from the PV energy counter's history (they were
+        counted from the live power reading, which misses weak light)."""
+        state = self._autho_state
+        if not self.ent_pv_energy or state.get("meter_backfill") == PV_COUNTER_BACKFILL:
+            return
+        now = self.get_now()
+        start = now - timedelta(days=PV_COUNTER_BACKFILL_DAYS)
+        try:
+            hist = self.get_history(entity_id=self.ent_pv_energy, start_time=start, end_time=now,
+                                    no_attributes=True) or []
+        except Exception as exc:  # noqa: BLE001 - retried at the next start
+            self.log(f"PV counter backfill: history fetch failed ({exc!r})", level="WARNING")
+            return
+        unit = str(self.get_state(self.ent_pv_energy, attribute="unit_of_measurement") or "kWh").strip().lower()
+        points = []
+        for s in (hist[0] if hist else []):
+            try:
+                t = s["last_changed"]
+                t = t if hasattr(t, "isoformat") else datetime.fromisoformat(str(t))
+                v = float(s["state"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            points.append((t, v / 1000.0 if unit == "wh" else v))
+        if len(points) < 10:
+            self.log("PV counter backfill: not enough history yet", level="WARNING")
+            return
+        series = core_autho.counter_series(points, self._local_tz(), until=now)
+        sent = 0
+        if self._autho_cfg["mode"] != "off":
+            sent = core_autho.backfill_from_counter(state, series, points[0][0], now)
+            state["relearn"] = True
+        first_hour = points[0][0].astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        hours = core_autho.energy_by_period(series, first_hour, now.astimezone(timezone.utc), timedelta(hours=1))
+        changed = self.forecast_provider.replace_actuals(hours)
+        state["meter_backfill"] = PV_COUNTER_BACKFILL
+        self._save_json("autho_solar_state.json", state)
+        self.log(f"PV counter backfill from {self.ent_pv_energy}: {sent} half-hours re-sent to Autho Solar, "
+                 f"{changed} hours of Solcast correction rebuilt")
+
+    def _autho_tick(self, now, pv_kw, pv_counter=None):
         """Every tick: this half-hour's generation, the evening snapshot of
         tomorrow's forecasts, and scoring finished days."""
         if self._autho_cfg["mode"] == "off":
@@ -2204,7 +2288,13 @@ class GridLock(hass.Hass):
         last, self._autho_last_sample = self._autho_last_sample, now
         state["last_sample"] = now.isoformat()
         dt_h = (now - last).total_seconds() / 3600.0 if last else 0.0
-        changed = core_autho.add_sample(state, now, pv_kw, dt_h)
+        if pv_counter is not None:
+            # The counter's half-hours; drop any power-reading half-hour in
+            # progress so it can't be sent later over the counter's figure.
+            state["accum"] = None
+            changed = core_autho.add_meter_reading(state, now, pv_counter, self._local_tz())
+        else:
+            changed = core_autho.add_sample(state, now, pv_kw, dt_h)
         curves = {"solcast_raw": self.forecast_provider.raw_curve(),
                   "solcast_corrected": self.forecast_provider.pv_curve()}
         if self._autho_usable(now):
@@ -6538,8 +6628,9 @@ class GridLock(hass.Hass):
         self.load_provider.circuit_power_entities = all_circuits
         self.load_provider.sample(now)
         pv_live_kw = self._read_live_kw(self.ent_pv_power_entities)
-        self.forecast_provider.sample(now, pv_live_kw)
-        self._autho_tick(now, pv_live_kw)
+        pv_counter = self._read_pv_counter()
+        self.forecast_provider.sample(now, pv_live_kw, energy_kwh=self._pv_counter_step(now, pv_counter))
+        self._autho_tick(now, pv_live_kw, pv_counter)
         self.publish_circuits(labeled_circuits, now)
         self._update_savings(now)
         self.publish_solar_forecast(now)
@@ -6890,6 +6981,7 @@ class GridLock(hass.Hass):
                                    "daily_export_value_entity": self.ent_daily_export_value,
                                    "daily_standing_charge_entity": self.ent_daily_standing_charge,
                                    "pv_power_entities": self.ent_pv_power_entities,
+                                   "pv_energy_entity": self.ent_pv_energy,
                                    "grid_power_entity": self.ent_grid_power,
                                    "battery_power_entity": self.ent_battery_power,
                                    "load_power_entity": self.ent_load_power,

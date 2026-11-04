@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.75.0 - 2026-11-04
+
+### Solar
+- Generation now measured from the inverter's PV energy today counter, not the live PV power reading, which shows 0 in weak light (it missed up to half of a dull day)
+- Used for the half-hours sent to Autho Solar, the forecast scoring and Solcast's learned correction; the power reading stands in if there's no counter
+- One-off rebuild on update: the last 10 days re-sent to Autho Solar from Home Assistant's history, Autho Solar re-learns the roof, Solcast's correction rebuilt
+- Entities tab shows the counter in use; add-on option `pv_energy_entity_override` to pick another
+
+### Fixes
+- `grid_connection_status_entity_override` add-on option was never passed to the engine
+
 ## 3.74.2 - 2026-11-04
 
 ### GridWarm

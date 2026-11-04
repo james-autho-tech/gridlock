@@ -124,7 +124,19 @@ def clean_state(raw):
             s["accum"] = raw["accum"]
         if isinstance(raw.get("last_sample"), str):
             s["last_sample"] = raw["last_sample"]
+        if isinstance(raw.get("meter"), dict):
+            s["meter"] = raw["meter"]
+        for k in ("meter_backfill", "relearn"):
+            if raw.get(k) is not None:
+                s[k] = raw[k]
     return s
+
+
+def _record(state, slot, kwh):
+    """A finished half-hour: queued for Autho Solar, kept for the day's scoring."""
+    state["queue"].append({"period_start": slot, "kwh": kwh})
+    state["queue"] = state["queue"][-2000:]
+    state["actuals"].setdefault(slot[:10], {})[slot] = kwh
 
 
 def add_sample(state, now, pv_kw, dt_h):
@@ -138,10 +150,7 @@ def add_sample(state, now, pv_kw, dt_h):
         # Only report a half-hour we watched for most of its length.
         if acc.get("seen_h", 0.0) >= 0.4:
             kwh = round(acc["kwh"] * (0.5 / acc["seen_h"]) if acc["seen_h"] < 0.5 else acc["kwh"], 4)
-            state["queue"].append({"period_start": acc["slot"], "kwh": kwh})
-            state["queue"] = state["queue"][-2000:]
-            day = acc["slot"][:10]
-            state["actuals"].setdefault(day, {})[acc["slot"]] = kwh
+            _record(state, acc["slot"], kwh)
             finished = True
         acc = None
     if acc is None:
@@ -151,6 +160,130 @@ def add_sample(state, now, pv_kw, dt_h):
         acc["seen_h"] += dt_h
     state["accum"] = acc
     return finished
+
+
+# ---- PV energy counter ---------------------------------------------------------
+# The inverter's "PV energy today" counter measures generation properly in
+# weak light, where the live PV power reading often shows 0 while the panels
+# are still producing (on a dull day that's half the day's energy). Half-hours
+# come from the counter read at each :00 / :30, interpolated between ticks.
+
+METER_MAX_GAP = timedelta(minutes=10)    # live: readings further apart start afresh
+HISTORY_MAX_GAP = timedelta(minutes=30)  # backfill: a boundary bracketed wider than this, while the count moved, is unknown
+RESET_WINDOW_MIN = 45                    # a drop this close to local midnight is the daily reset
+ROUNDING_KWH = 0.005
+
+
+def counter_step(prev, cur, when, tz):
+    """kWh made between two readings of a daily counter, and the reading to
+    compare the next one with. A drop near local midnight is the daily
+    reset (count from zero); a drop at any other time is a glitch, so
+    nothing is counted and the old reading stays the baseline."""
+    if cur >= prev - ROUNDING_KWH:
+        return max(0.0, cur - prev), max(cur, prev)
+    local = when.astimezone(tz)
+    mins = local.hour * 60 + local.minute
+    if min(mins, 1440 - mins) <= RESET_WINDOW_MIN:
+        return max(0.0, cur), cur
+    return 0.0, prev
+
+
+def add_meter_reading(state, now, counter_kwh, tz):
+    """One tick's reading of the PV energy counter. When a :00 / :30 boundary
+    passes, the finished half-hour (if it was watched from its start) is
+    queued for Autho Solar and kept for scoring. Returns True if one was."""
+    if counter_kwh is None:
+        return False
+    now = now.astimezone(timezone.utc)
+    key = slot_key(now)
+    m = state.get("meter") if isinstance(state.get("meter"), dict) else {}
+    last_t = _iso(m.get("t")) if m.get("t") else None
+    try:
+        last_v, acc, slot, whole = float(m["v"]), float(m["acc"]), str(m["slot"]), bool(m["whole"])
+    except (KeyError, TypeError, ValueError):
+        last_t = None
+    if last_t is not None and now <= last_t:
+        return False
+    if last_t is None or now - last_t > METER_MAX_GAP:
+        # First reading, or a gap (restart, counter unavailable): count from
+        # here. This half-hour wasn't watched from its start, so it isn't sent.
+        state["meter"] = {"t": now.isoformat(), "v": counter_kwh, "acc": 0.0, "slot": key, "whole": False}
+        return False
+    kwh, base = counter_step(last_v, counter_kwh, now, tz)
+    finished = False
+    if key != slot:
+        boundary = slot_start(now)
+        frac = min(1.0, max(0.0, (boundary - last_t) / (now - last_t)))
+        if whole:
+            _record(state, slot, round(acc + kwh * frac, 4))
+            finished = True
+        acc, slot, whole = kwh * (1.0 - frac), key, True
+    else:
+        acc += kwh
+    state["meter"] = {"t": now.isoformat(), "v": base, "acc": acc, "slot": slot, "whole": whole}
+    return finished
+
+
+def counter_series(points, tz, until=None):
+    """[(datetime, reading)] from a daily counter's history -> [(datetime,
+    running kWh total)], with daily resets and glitches handled. `until`:
+    when the history was read up to (the last reading holds until then)."""
+    out, total, base = [], 0.0, None
+    for t, v in sorted(points, key=lambda p: p[0]):
+        if base is None:
+            base = v
+        else:
+            kwh, base = counter_step(base, v, t, tz)
+            total += kwh
+        out.append((t.astimezone(timezone.utc), total))
+    if out and until is not None and until.astimezone(timezone.utc) > out[-1][0]:
+        out.append((until.astimezone(timezone.utc), total))
+    return out
+
+
+def counter_at(series, t, max_gap=HISTORY_MAX_GAP):
+    """Running total at time t, interpolated between the readings either
+    side; None outside the history, or across a gap where the count moved
+    (Home Assistant was down, so when it moved isn't known). The series
+    should end with a point at the time the history was read up to."""
+    import bisect
+    if not series or t < series[0][0] or t > series[-1][0]:
+        return None
+    i = bisect.bisect_right([p[0] for p in series], t)
+    t1, c1 = series[i - 1]
+    if t1 == t or i == len(series):
+        return c1
+    t2, c2 = series[i]
+    if t2 - t1 > max_gap and c2 - c1 > 0.015:
+        return None
+    return c1 + (c2 - c1) * ((t - t1) / (t2 - t1))
+
+
+def energy_by_period(series, start, end, step):
+    """{period_start_utc: kWh} for every whole period of `step` between start
+    and end that the history covers."""
+    out = {}
+    t = start
+    while t + step <= end:
+        a, b = counter_at(series, t), counter_at(series, t + step)
+        if a is not None and b is not None:
+            out[t] = round(max(0.0, b - a), 4)
+        t += step
+    return out
+
+
+def backfill_from_counter(state, series, start, end):
+    """Rebuild every half-hour from start to end from the counter's history:
+    queued for Autho Solar (a re-sent half-hour replaces the old figure) and
+    today's (unscored) half-hours replaced for scoring. Returns how many."""
+    halves = energy_by_period(series, slot_start(start) + SLOT, slot_start(end), SLOT)
+    for t, kwh in sorted(halves.items()):
+        key = t.strftime("%Y-%m-%dT%H:%M:%SZ")
+        state["queue"].append({"period_start": key, "kwh": kwh})
+        if key[:10] in state["actuals"]:
+            state["actuals"][key[:10]][key] = kwh
+    state["queue"] = state["queue"][-2000:]
+    return len(halves)
 
 
 def take_snapshot(state, now, curves):

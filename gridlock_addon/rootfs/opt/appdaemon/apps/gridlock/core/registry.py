@@ -228,6 +228,29 @@ class HASensorRegistry:
                        f"{pool[0]}; set pv_power_entities explicitly if wrong.")
         return [pool[0]]
 
+    def find_pv_energy(self):
+        """The inverter's own "PV energy today" counter (kWh, resets daily).
+        A plant/total figure is preferred over a single inverter's; per-string
+        counters (pv1_, pv2_...) and template copies without an energy device
+        class are left out."""
+        import re
+        flat = self._flat()
+        candidates = []
+        for eid, obj in flat.items():
+            attrs = (obj or {}).get("attributes") or {}
+            if (eid.startswith("sensor.") and self._is_brand(eid) and "pv" in eid
+                    and ("daily" in eid or "today" in eid)
+                    and ("energy" in eid or "generation" in eid)
+                    and not re.search(r"pv\d", eid)
+                    and attrs.get("device_class") == "energy"
+                    and str(attrs.get("unit_of_measurement", "")).lower() in ("kwh", "wh")):
+                candidates.append(eid)
+        live = [eid for eid in candidates if self._is_live(flat.get(eid))]
+        pool = sorted(live or candidates)
+        plant = [eid for eid in pool if "plant" in eid or "total" in eid]
+        pool = plant or pool
+        return pool[0] if pool else None
+
     def find_temp(self, keyword, exclude=None):
         flat = self._flat()
         candidates = [eid for eid in flat

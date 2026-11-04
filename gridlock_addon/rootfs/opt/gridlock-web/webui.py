@@ -653,6 +653,7 @@ def _base_entities(status_attrs):
             "Daily export value": status_attrs.get("daily_export_value_entity"),
             "Daily standing charge": status_attrs.get("daily_standing_charge_entity"),
             "PV power": ", ".join(status_attrs.get("pv_power_entities") or []) or None,
+            "PV energy today": status_attrs.get("pv_energy_entity"),
             "Grid power": status_attrs.get("grid_power_entity"),
             "Battery power": status_attrs.get("battery_power_entity"),
             "Load power": status_attrs.get("load_power_entity"),
@@ -2751,7 +2752,7 @@ function renderPlanTable(table, opts) {
 // disappears just because it doesn't fit Battery/Inverter/Grid/EV/Weather.
 const ENTITY_CATEGORIES = [
   { name: 'Battery', icon: '🔋', labels: ['Battery SoC', 'Battery power', 'Battery temp', 'Battery SoH', 'Discharge cutoff (hardware)'] },
-  { name: 'Inverter', icon: '🧠', labels: ['Inverter temp', 'PV power'] },
+  { name: 'Inverter', icon: '🧠', labels: ['Inverter temp', 'PV power', 'PV energy today'] },
   { name: 'Grid', icon: '⚡', labels: ['Grid power', 'Import rate', 'Export rate', 'Daily import cost', 'Daily export value', 'Daily standing charge'] },
   { name: 'EV', icon: '🚗', labels: ['EV charging', 'EV power'], prefix: 'Vehicle: ' },
   { name: 'Weather & Alerts', icon: '🌩️', labels: ['Storm Watch', 'SSEN postcode'] },

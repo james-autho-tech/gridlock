@@ -145,8 +145,10 @@ class SolcastForecastProvider(ForecastProvider):
         hr = str(t.astimezone(timezone.utc).hour)
         return self._factors["hours"].get(hr, self._factors["overall"])
 
-    def sample(self, now, pv_kw):
-        """One tick of live PV (kW) against the day-start forecast."""
+    def sample(self, now, pv_kw, energy_kwh=None):
+        """One tick of live PV against the day-start forecast. energy_kwh:
+        what the PV energy counter says was made since the last tick (better
+        than pv_kw in weak light); pv_kw x time is used when there isn't one."""
         now_utc = now.astimezone(timezone.utc)
         day = now_utc.date().isoformat()
         if self.snapshot.get("day") != day:
@@ -159,7 +161,7 @@ class SolcastForecastProvider(ForecastProvider):
             self._factors = self._compute_factors()
             self._save()
         last, self._last_sample = self._last_sample, now_utc
-        if pv_kw is None or last is None:
+        if (pv_kw is None and energy_kwh is None) or last is None:
             return
         dt_h = (now_utc - last).total_seconds() / 3600.0
         if dt_h <= 0 or dt_h > self.MAX_SAMPLE_GAP_H:
@@ -169,13 +171,29 @@ class SolcastForecastProvider(ForecastProvider):
         if fc_slot is None:
             return
         fc_kwh = fc_slot / 0.5 * dt_h
-        act_kwh = max(0.0, pv_kw) * dt_h
+        act_kwh = max(0.0, energy_kwh) if energy_kwh is not None else max(0.0, pv_kw) * dt_h
         if fc_kwh <= 0 and act_kwh <= 0:
             return
         hour = self.stats.setdefault(day, {}).setdefault(str(now_utc.hour), [0.0, 0.0])
         hour[0] += fc_kwh
         hour[1] += act_kwh
         self._save()
+
+    def replace_actuals(self, hourly):
+        """Swap the learned actuals for better ones, {datetime_utc_hour: kWh}
+        (from the PV energy counter's history). Hours without a figure keep
+        theirs. Returns how many hours changed."""
+        changed = 0
+        for t, kwh in hourly.items():
+            t = t.astimezone(timezone.utc)
+            hour = self.stats.get(t.date().isoformat(), {}).get(str(t.hour))
+            if hour is not None:
+                hour[1] = kwh
+                changed += 1
+        if changed:
+            self._factors = self._compute_factors()
+            self._save()
+        return changed
 
     def pv_curve(self):
         return {t: kwh * self.factor_for(t) for t, kwh in self.raw_curve().items()}
