@@ -1584,7 +1584,7 @@ function renderHotWaterSettings(hw) {
         ${hwEntitySelect(hw, 'heating_entity', '"Heating hot water now" sensor', ['sensor', 'switch'])}
         ${txt('heating_entity_state', '…and the value that means heating', 'e.g. DHW')}
         ${num('control_safety_min_temp', 'Floor °C — force a run below this', 1, '20 = effectively off; the ready-by times and the daily guarantee do the work.')}
-        ${txt('ready_by_times', 'Ready by (time@°C, comma-separated)', 'e.g. 19:30@45 — at least 45°C by 19:30. GridWarm predicts the tank then and heats in the cheapest window before it, just hot enough. A time on its own means the unit\'s setpoint.')}
+        ${txt('ready_by_times', 'Ready by (time@°C, comma-separated)', 'e.g. 19:30@45 — at least 45°C by 19:30. GridWarm predicts the tank then and heats in the cheapest window before it, just hot enough. A time on its own means the unit\'s setpoint. Night only: the night run is sized for it, and a day the tank has been drawn down (10°C or more below the night fill) gets a top-up before it.')}
         <div><div class="lbl">Tank loses heat to</div><select class="gl-inp" onchange="hwSet('tank_ambient', this)">
           <option value="house" ${hw.tank_ambient === 'house' ? 'selected' : ''}>the house (indoors, airing cupboard)</option>
           <option value="outdoor" ${hw.tank_ambient === 'outdoor' ? 'selected' : ''}>the outdoors (loft, garage, outhouse)</option></select>

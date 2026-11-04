@@ -230,6 +230,10 @@ def tank_drop_c(tank_temp, hours, mass_wh_per_c, loss_watts, loss_degrees, ambie
 # "45 °C by 19:30" means 45 °C when the showers start.
 READY_BY_OWN_DRAW_SLOTS = 2
 
+# Night-only mode: a tank this far below the night target has been drawn on
+# since the fill, so a ready-by it's heading to miss gets a daytime top-up.
+READY_BY_DRAWN_C = 10.0
+
 # A tank below top_up_below this close to the night waits for it.
 NIGHT_WAIT_SLOTS = 12
 

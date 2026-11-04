@@ -4256,7 +4256,8 @@ class GridLock(hass.Hass):
                 label = next((str(e).split("@")[0] for e in (d.get("ready_by_times") or [])
                               if core_dhw.upcoming_ready_bys(local_now, [e], SLOT_MIN) == [(k, core_dhw.parse_ready_by(e)[2])]),
                              None)
-                ready_target = {"slots": k, "temp": want, "predicted": round(t_now - drop_k, 1), "label": label}
+                ready_target = {"slots": k, "temp": want, "predicted": round(t_now - drop_k, 1), "label": label,
+                                "heat_to": heat_to}
                 by = k
                 daily_target = min(max(base_sp, d.get("max_daily_setpoint", 55.0)),
                                    max(daily_target, round(heat_to)))
@@ -4279,6 +4280,7 @@ class GridLock(hass.Hass):
         low = tank_temp is not None and tank_temp < d.get("top_up_below", 25.0)
         night_only = bool(d.get("night_only"))
         top_up = False
+        top_up_to = None
         if night_only:
             # One run a night: only night (or free) slots are candidates, and
             # the ready-by times only size that run. A tank that's genuinely
@@ -4290,6 +4292,22 @@ class GridLock(hass.Hass):
             if low and (nn is None or nn[0] > core_dhw.NIGHT_WAIT_SLOTS):
                 top_up = True
                 deadline = run_slots + 4
+                window = core_dhw.cheapest_window(scores, run_slots, deadline)
+            elif (ready_target and tank_temp is not None
+                  and (nn is None or ready_target["slots"] <= nn[0])
+                  and tank_temp <= d.get("night_target", 53.0) - core_dhw.READY_BY_DRAWN_C):
+                # The day's check: the tank has been drawn down since the night
+                # fill and won't hold the ready-by temperature until then, so
+                # top it up before it in the cheapest slot -- only as far as
+                # the ready-by needs (plus enough over the tank for the unit's
+                # start hysteresis), the night run still does the full fill.
+                top_up = True
+                top_up_to = min(base_sp, max(round(ready_target["heat_to"] + 1.0), round(tank_temp + hyst + 1.0)))
+                need_min = ((top_up_to - tank_temp) * mass_r
+                            / max((zone["params"].heat_max_power or 3500.0) * d.get("quiet_output_factor", 1.0), 500.0)
+                            * 60.0 + 10.0)
+                run_slots = core_dhw.run_slots_needed(min(need_min, 240.0), SLOT_MIN)
+                deadline = ready_target["slots"]
                 window = core_dhw.cheapest_window(scores, run_slots, deadline)
             else:
                 # Free-electricity slots carry a token 1e-9 rate, not 0.
@@ -4351,7 +4369,7 @@ class GridLock(hass.Hass):
             horizon = max(run_slots, deadline)
             # The night's fill never skips on "warm enough": it's what
             # tomorrow's water comes from.
-            if profile and not night_run and core_dhw.tank_can_cover(
+            if profile and not night_run and not top_up and core_dhw.tank_can_cover(
                     tank_temp, setpoint, hyst, zone["params"].thermal_mass_wh_per_c,
                     sum(expected[:horizon]), zone["params"].heat_loss_watts, horizon * slot_hours):
                 # Warm enough for everything the house is expected to draw
@@ -4364,6 +4382,8 @@ class GridLock(hass.Hass):
                              "start_temp": tank_temp}
                 if top_up:
                     committed["top_up"] = True
+                    if top_up_to is not None:
+                        committed["to"] = top_up_to
                 elif night_only and mask[0]:
                     # Only the night's own run counts as the night's run; a
                     # free-electricity top-up by day doesn't cancel it (the
@@ -4372,7 +4392,9 @@ class GridLock(hass.Hass):
                         core_dhw.night_key(now.astimezone())
                 state["dhw_window"] = committed
         if committed and committed.get("top_up"):
-            daily_target = base_sp   # a daytime top-up goes to the normal setpoint, no further
+            # A daytime top-up goes to the normal setpoint, no further; the
+            # ready-by check's only as far as the ready-by needs.
+            daily_target = committed.get("to") or base_sp
         if committed:
             start_iso, end_iso = committed["start"], committed["end"]
         elif window:
@@ -4450,7 +4472,9 @@ class GridLock(hass.Hass):
             lg_changed = lg_changed or lg.get("phase") != phase
         lg_active = bool(lg.get("phase"))
         if not lg_active and setpoint_wanted is None:
-            if committed is not None and daily_target > base_sp + 0.5:
+            lower = (committed is not None and committed.get("to") is not None
+                     and daily_target < base_sp - 0.5)
+            if committed is not None and (daily_target > base_sp + 0.5 or lower):
                 keep["dhw_base_sp"] = base_sp
                 setpoint_wanted = daily_target
             elif committed is None and keep.get("dhw_base_sp"):

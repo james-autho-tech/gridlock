@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.76.0 - 2026-11-04
+
+### GridWarm hot water
+- Night-only mode now keeps its ready-by times: once the tank has been drawn down (10 °C or more below the night fill) and is heading under a ready-by temperature, it's topped up before then in the cheapest slot
+- The top-up heats only as far as the ready-by needs (unit setpoint lowered for the run, restored after); the night run still does the full fill
+- Previously ready-bys only sized the night run, so a morning shower that left the tank just above the 25 °C top-up point meant a cold evening
+
 ## 3.75.0 - 2026-11-04
 
 ### Solar
