@@ -40,6 +40,7 @@ from core import autho_solar as core_autho
 from core import octopus_compare as core_octopus
 from core import ev_model as core_ev_model
 from core import flex_loads as core_flex
+from core import flextras as core_flextras
 
 # First day the risk-profile comparison is trusted (see _publish savings).
 PROFILE_COMPARISON_VALID_FROM = "2026-10-21"
@@ -337,6 +338,11 @@ class GridLock(hass.Hass):
             prefix="button.edf_energy_", suffix="_flextras_register_power_perks")
         self.ent_edf_bonus_hours_button = self.registry.find(
             prefix="button.edf_energy_", suffix="_flextras_claim_bonus_hours")
+        # Unbooked free hours, the weekend days EDF is offering and what's
+        # booked already -- auto-booked (see _auto_book_edf_flextras).
+        self.ent_edf_flextras_hours = (a.get("edf_flextras_hours_entity") or self.registry.find(
+            prefix="sensor.edf_energy_", suffix="_flextras_hours_remaining"))
+        self._flextras_last_try = None   # (time, hours tried), so a refused booking isn't hammered
 
         # EDF's separate "Sunday Saver" perk — checked directly against
         # the integration's own source rather than guessed from its
@@ -1930,6 +1936,46 @@ class GridLock(hass.Hass):
                 self._log_decision("EDF Flextras bonus hours claimed", "Auto-claimed the one-off joining bonus")
         except Exception as exc:  # noqa: BLE001 — best-effort, retried next poll
             self.log(f"EDF Flextras auto-enrollment failed: {exc!r}", level="WARNING")
+        self._auto_book_edf_flextras()
+
+    def _auto_book_edf_flextras(self):
+        """Spend unbooked Flextras free hours: book them on the weekend days EDF
+        is offering (core/flextras.py picks which). Once booked they come
+        back as free windows on the free-session events entity and the plan
+        uses them. Off from the dashboard's EDF perks card."""
+        if not self.ent_edf_flextras_hours:
+            return
+        cfg = core_flextras.clean_settings(self._load_dashboard_json("edf_flextras_settings.json", {}))
+        if not cfg["auto_book"]:
+            return
+        try:
+            left = int(math.floor(float(self.get_state(self.ent_edf_flextras_hours)) + 1e-6))
+        except (TypeError, ValueError):
+            return
+        if left <= 0:
+            return
+        attrs = self.get_state(self.ent_edf_flextras_hours, attribute="all") or {}
+        attrs = attrs.get("attributes") or {}
+        hours = core_flextras.pick_hours(left, attrs.get("bookable_days"), attrs.get("booked_hours"),
+                                         cfg["start"])
+        if not hours:
+            return
+        now = self.get_now()
+        last = self._flextras_last_try
+        if last and last[1] == hours and now - last[0] < core_flextras.RETRY_AFTER:
+            return
+        self._flextras_last_try = (now, hours)
+        try:
+            self.call_service("edfenergy_uk/book_flextras_hours", hours=hours, mode="add")
+        except Exception as exc:  # noqa: BLE001 - older integration name, then give up till the retry
+            try:
+                self.call_service("edf_energy/book_flextras_hours", hours=hours, mode="add")
+            except Exception as exc2:  # noqa: BLE001
+                self.log(f"EDF Flextras booking failed: {exc!r} / {exc2!r}", level="WARNING")
+                return
+        self._log_decision("EDF Flextras hours booked",
+                           f"{len(hours)} free hour{'s' if len(hours) != 1 else ''}: "
+                           + ", ".join(hours) + " -- the plan will charge into them")
 
     def _saving_session_plan_note(self, start, end):
         """Best-effort: solve a fresh plan and report how much battery
@@ -7002,6 +7048,7 @@ class GridLock(hass.Hass):
                                        self.ent_edf_sunday_saver_end,
                                    "edf_flextras_bonus_hours_entity":
                                        self.ent_edf_flextras_bonus_hours,
+                                   "edf_flextras_hours_entity": self.ent_edf_flextras_hours,
                                    "ev_vehicle_stems": self.ev_vehicle_stems or None,
                                    "saving_events_entity": self.ent_saving_events,
                                    "daily_import_cost_entity": self.ent_daily_import_cost,

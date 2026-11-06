@@ -22,6 +22,7 @@ from core.warranty import parse_install_date  # noqa: E402 — needs the path in
 from core.space_heating import merge_settings as merge_space_heating_settings  # noqa: E402
 from core.space_heating import diff_from_defaults as space_heating_diff  # noqa: E402
 from core import flex_loads as core_flex  # noqa: E402
+from core import flextras as core_flextras  # noqa: E402
 
 SUPERVISOR_TOKEN = os.environ["SUPERVISOR_TOKEN"]
 PORT = 8099
@@ -192,6 +193,24 @@ def autho_solar_status(sensor):
 
 
 FLEX_SETTINGS_PATH = os.path.join(ENGINE_DIR, "flex_loads_settings.json")
+FLEXTRAS_SETTINGS_PATH = os.path.join(ENGINE_DIR, "edf_flextras_settings.json")
+
+
+def load_flextras_settings():
+    try:
+        with open(FLEXTRAS_SETTINGS_PATH) as f:
+            return core_flextras.clean_settings(json.load(f))
+    except (OSError, ValueError):
+        return core_flextras.clean_settings({})
+
+
+def save_flextras_settings(settings):
+    cleaned = core_flextras.clean_settings(settings)
+    tmp = FLEXTRAS_SETTINGS_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(cleaned, f)
+    os.replace(tmp, FLEXTRAS_SETTINGS_PATH)
+    return cleaned
 
 
 def load_flex_settings():
@@ -595,6 +614,8 @@ def _edf_perks(status_attrs, get, forecast_attrs):
 
     events = state("edf_power_perks_events_entity").get("attributes", {})
     bonus = state("edf_flextras_bonus_hours_entity")
+    hours = state("edf_flextras_hours_entity")
+    hours_attrs = hours.get("attributes", {})
     sunday = state("edf_sunday_saver_start_entity")
     return {
         "flextras_registered": state("edf_flextras_registered_entity").get("state") == "on",
@@ -607,6 +628,12 @@ def _edf_perks(status_attrs, get, forecast_attrs):
         "sunday_saver_enrolled": bool(sunday.get("attributes", {}).get("is_enrolled")),
         "sunday_saver_start": live(sunday.get("state")),
         "sunday_saver_end": live(state("edf_sunday_saver_end_entity").get("state")),
+        "free_hours_left": live(hours.get("state")),
+        "free_hours_booked": hours_attrs.get("booked_hours") or [],
+        "free_hours_days": hours_attrs.get("bookable_days") or [],
+        "free_hours_expiry": hours_attrs.get("next_expiry"),
+        "free_hours_found": bool(status_attrs.get("edf_flextras_hours_entity")),
+        "flextras_settings": load_flextras_settings(),
         "planned_free_slots": forecast_attrs.get("free_electricity_slots") or [],
         "plan_horizon_end": forecast_attrs.get("plan_horizon_end"),
     }
@@ -3532,7 +3559,7 @@ function renderEdfPerks(p) {
   const tiles = `<div class="gl-grid">
     <div class="gl-tile"><div class="lbl">Flextras</div><div class="val" style="font-size:16px">${yesNo(p.flextras_registered, 'Joined', 'Not joined')}</div></div>
     <div class="gl-tile"><div class="lbl">Power Perks</div><div class="val" style="font-size:16px">${yesNo(p.power_perks_registered, 'Registered', 'Not registered')}</div></div>
-    <div class="gl-tile" title="Hours banked with EDF as a joining bonus. They carry no start or end time, so they are not windows the plan can schedule around — only announced windows listed below are."><div class="lbl">Bonus hours</div><div class="val num">${p.bonus_hours === null ? '—' : esc(String(p.bonus_hours))}${p.bonus_hours_claimed ? ' <span style="color:var(--dim);font-size:12px">claimed</span>' : ''}</div></div>
+    <div class="gl-tile" title="Flextras free hours not booked yet. They only count once booked on a weekend day EDF offers; GridLock books them for you if auto-booking is on."><div class="lbl">Free hours to book</div><div class="val num">${p.free_hours_left === null || p.free_hours_left === undefined ? '-' : esc(String(Math.floor(Number(p.free_hours_left))))}${(p.free_hours_booked || []).length ? ` <span style="color:var(--dim);font-size:12px">${p.free_hours_booked.length} booked</span>` : ''}</div></div>
     <div class="gl-tile"><div class="lbl">Sunday Saver</div><div class="val" style="font-size:16px">${yesNo(p.sunday_saver_enrolled, 'Enrolled', 'Not enrolled')}</div></div>
   </div>`;
   const now = Date.now();
@@ -3540,7 +3567,7 @@ function renderEdfPerks(p) {
   // free_windows is the integration's rolling history as well as what's
   // still to come — only the latter belongs in this list.
   const windows = (p.free_windows || []).filter(w => ms(w.end) > now)
-    .map(w => ({ ...w, label: w.source === 'sunday_saver' ? 'Sunday Saver' : 'Power Perks' }));
+    .map(w => ({ ...w, label: w.source === 'sunday_saver' ? 'Sunday Saver' : w.source === 'flextras_hours' ? 'Flextras hours' : 'Power Perks' }));
   if (p.sunday_saver_enrolled && p.sunday_saver_start && p.sunday_saver_end
       && !windows.some(w => ms(w.start) === ms(p.sunday_saver_start))) {
     windows.push({ start: p.sunday_saver_start, end: p.sunday_saver_end, label: 'Sunday Saver' });
@@ -3568,7 +3595,31 @@ function renderEdfPerks(p) {
     : '<div style="color:var(--dim)">No upcoming free-electricity windows announced — nothing for the plan to use yet.</div>';
   const note = p.power_perks_registered ? ''
     : '<div class="gl-sub">Windows are only planned around once Power Perks registration is confirmed.</div>';
-  return `${tiles}<div style="margin-top:10px">${rows}</div>${note}`;
+  return `${tiles}${renderFlextrasBooking(p)}<div style="margin-top:10px">${rows}</div>${note}`;
+}
+function renderFlextrasBooking(p) {
+  if (!p.flextras_registered || !p.free_hours_found) return '';
+  const cfg = p.flextras_settings || { auto_book: true, start: '14:00' };
+  const left = Math.floor(Number(p.free_hours_left) || 0);
+  const days = (p.free_hours_days || []).map(d => new Date(d + 'T12:00:00').toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }));
+  const opts = Array.from({ length: 24 }, (_, h) => `${String(h).padStart(2, '0')}:00`)
+    .map(t => `<option value="${t}"${t === cfg.start ? ' selected' : ''}>${t}</option>`).join('');
+  const inp = 'background:#0b1220;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:4px 6px;font-family:inherit';
+  const status = !cfg.auto_book ? 'Auto-booking is off: book free hours in the EDF app.'
+    : left > 0 ? `Booking ${left} free hour${left === 1 ? '' : 's'} now, one a day from ${esc(cfg.start)} on the soonest days EDF offers.`
+    : `Nothing to book: no unbooked free hours. When EDF gives you some, GridLock books them at ${esc(cfg.start)}, one a day, on the soonest days on offer${days.length ? ` (now ${esc(days.slice(0, 4).join(', '))}${days.length > 4 ? ', ...' : ''})` : ''}.`;
+  return `<div class="gl-sub" style="margin-top:10px;display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+    <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="flx-auto"${cfg.auto_book ? ' checked' : ''} onchange="saveFlextras()"> Book free hours automatically</label>
+    <label style="display:flex;gap:6px;align-items:center">at <select id="flx-start" style="${inp}" onchange="saveFlextras()">${opts}</select></label>
+  </div><div class="gl-sub">${status}${p.free_hours_expiry ? ` Next hours expire ${esc(fmtDate(p.free_hours_expiry))}.` : ''}</div>`;
+}
+async function saveFlextras() {
+  const body = { auto_book: document.getElementById('flx-auto').checked, start: document.getElementById('flx-start').value };
+  try {
+    const r = await fetch('api/edf-flextras', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!r.ok) window.alert(((await r.json()) || {}).error || 'Failed to save.');
+    else refresh();
+  } catch (e) { window.alert('Failed to save: network error.'); }
 }
 function renderSavingSessions(joined, available) {
   const parts = [];
@@ -3916,6 +3967,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_flex_loads()
         elif path.endswith("/api/autho-solar"):
             self._handle_autho_solar()
+        elif path.endswith("/api/edf-flextras"):
+            self._handle_edf_flextras()
         else:
             self._send(404, b"not found", "text/plain")
 
@@ -4099,6 +4152,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
                              if e.split(".")[0] in ("switch", "input_boolean", "sensor")}}
             self._send(200, json.dumps(out).encode(), "application/json")
         except Exception as exc:  # noqa: BLE001 - surface it to the caller, don't crash the server
+            self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
+
+    def _handle_edf_flextras(self):
+        """Flextras free-hour auto-booking: {"auto_book": bool, "start": "HH:00"}."""
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+            if not isinstance(body, dict):
+                self._send(400, json.dumps({"error": "expected an object"}).encode(), "application/json")
+                return
+            saved = save_flextras_settings({**load_flextras_settings(), **body})
+            self._send(200, json.dumps({"ok": True, "settings": saved}).encode(), "application/json")
+        except Exception as exc:  # noqa: BLE001
             self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
 
     def _handle_flex_loads(self, resume=False):

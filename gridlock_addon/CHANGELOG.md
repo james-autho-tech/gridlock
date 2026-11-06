@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.77.0 - 2026-11-06
+
+### EDF Flextras
+- Free hours booked automatically: any unbooked Flextras hours go on the weekend days EDF offers, one a day from the chosen time (default 14:00), soonest first
+- Booked hours come back as free windows, so the plan charges the battery and runs loads into them
+- EDF perks card: free hours left and booked, auto-booking switch and start time; only shown on EDF with Flextras joined
+- Flextras booked hours labelled as such in the free windows list (were shown as Power Perks)
+
 ## 3.76.1 - 2026-11-06
 
 ### GridWarm hot water
