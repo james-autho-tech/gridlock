@@ -4294,10 +4294,13 @@ class GridLock(hass.Hass):
                 deadline = run_slots + 4
                 window = core_dhw.cheapest_window(scores, run_slots, deadline)
             elif (ready_target and tank_temp is not None
+                  and ready_target["slots"] > core_dhw.READY_BY_OWN_DRAW_SLOTS
                   and (nn is None or ready_target["slots"] <= nn[0])
                   and tank_temp <= d.get("night_target", 53.0) - core_dhw.READY_BY_DRAWN_C):
                 # The day's check: the tank has been drawn down since the night
                 # fill and won't hold the ready-by temperature until then, so
+                # (with over an hour to go -- a draw just before the ready-by
+                # is the evening's own use, left for the night run)
                 # top it up before it in the cheapest slot -- only as far as
                 # the ready-by needs (plus enough over the tank for the unit's
                 # start hysteresis), the night run still does the full fill.

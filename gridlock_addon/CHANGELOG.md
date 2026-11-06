@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.76.1 - 2026-11-06
+
+### GridWarm hot water
+- The ready-by top-up only books with over an hour to go: a draw just before the ready-by (the evening's own showers) is left for the night run instead of reheating straight away
+
 ## 3.76.0 - 2026-11-04
 
 ### GridWarm hot water
