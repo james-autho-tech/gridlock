@@ -79,6 +79,9 @@ PLAN_TABLE_COLS = ["slot", "import_p", "export_p", "pv_kwh", "load_kwh",
 # confirmed as a real gap, not a hypothetical one, before it shipped.
 KRAKEN_FORK_DOMAINS = ("octopus_energy", "edf_energy")
 
+# Free hours the dashboard previews a booking for (core/flextras.py).
+PREVIEW_FLEXTRAS_HOURS = 4
+
 # Bump to run the PV energy counter backfill (_pv_counter_backfill) again.
 PV_COUNTER_BACKFILL = 1
 PV_COUNTER_BACKFILL_DAYS = 11
@@ -343,6 +346,7 @@ class GridLock(hass.Hass):
         self.ent_edf_flextras_hours = (a.get("edf_flextras_hours_entity") or self.registry.find(
             prefix="sensor.edf_energy_", suffix="_flextras_hours_remaining"))
         self._flextras_last_try = None   # (time, hours tried), so a refused booking isn't hammered
+        self._flextras_preview = []
 
         # EDF's separate "Sunday Saver" perk — checked directly against
         # the integration's own source rather than guessed from its
@@ -1938,6 +1942,35 @@ class GridLock(hass.Hass):
             self.log(f"EDF Flextras auto-enrollment failed: {exc!r}", level="WARNING")
         self._auto_book_edf_flextras()
 
+    def _flextras_hour_value(self):
+        """value(date, hour) -> pence a free hour then would save: the learned
+        house use in that hour (heat pump and other circuits included) times
+        the import rate at that time of day, from the tariff's current day.
+        None if neither is known, so booking falls back to the fixed time."""
+        tz = self._local_tz()
+        rate_by_hour = {}
+        try:
+            windows = self.tariff_provider.import_windows() or []
+        except Exception:  # noqa: BLE001 - no rates, no ranking
+            windows = []
+        base = self.get_now().astimezone(tz).replace(minute=0, second=0, microsecond=0)
+        for h in range(48):
+            t = base + timedelta(hours=h)
+            if t.hour in rate_by_hour:
+                continue
+            for ws, we, rate in windows:
+                if ws <= t < we:
+                    rate_by_hour[t.hour] = float(rate)
+                    break
+        if len(rate_by_hour) < 24 or not self.load_provider:
+            return None
+
+        def value(date, hour):
+            t = datetime.fromisoformat(f"{date}T{hour:02d}:00:00").replace(tzinfo=tz)
+            kwh = self.load_provider.load_kwh(t) + self.load_provider.load_kwh(t + timedelta(minutes=30))
+            return kwh * rate_by_hour[hour] * 100.0
+        return value
+
     def _auto_book_edf_flextras(self):
         """Spend unbooked Flextras free hours: book them on the weekend days EDF
         is offering (core/flextras.py picks which). Once booked they come
@@ -1952,12 +1985,19 @@ class GridLock(hass.Hass):
             left = int(math.floor(float(self.get_state(self.ent_edf_flextras_hours)) + 1e-6))
         except (TypeError, ValueError):
             return
-        if left <= 0:
-            return
         attrs = self.get_state(self.ent_edf_flextras_hours, attribute="all") or {}
         attrs = attrs.get("attributes") or {}
+        value_fn = self._flextras_hour_value() if cfg["mode"] == "best" else None
+        # What it would book with a few hours in hand, for the dashboard, so
+        # the choice can be checked before any hours arrive.
+        preview = core_flextras.pick_hours(PREVIEW_FLEXTRAS_HOURS, attrs.get("bookable_days"),
+                                           attrs.get("booked_hours"), cfg["start"], value_fn)
+        self._flextras_preview = [{"hour": h, "saving_p": (round(value_fn(h[:10], int(h[11:13])), 1)
+                                                         if value_fn else None)} for h in preview]
+        if left <= 0:
+            return
         hours = core_flextras.pick_hours(left, attrs.get("bookable_days"), attrs.get("booked_hours"),
-                                         cfg["start"])
+                                         cfg["start"], value_fn)
         if not hours:
             return
         now = self.get_now()
@@ -7049,6 +7089,7 @@ class GridLock(hass.Hass):
                                    "edf_flextras_bonus_hours_entity":
                                        self.ent_edf_flextras_bonus_hours,
                                    "edf_flextras_hours_entity": self.ent_edf_flextras_hours,
+                                   "edf_flextras_preview": self._flextras_preview or None,
                                    "ev_vehicle_stems": self.ev_vehicle_stems or None,
                                    "saving_events_entity": self.ent_saving_events,
                                    "daily_import_cost_entity": self.ent_daily_import_cost,

@@ -8,16 +8,18 @@ through its book_flextras_hours action. Once booked they arrive as free
 electricity windows like any other, so the plan charges the battery and
 runs flexible loads into them.
 
-One hour per day, soonest days first, at the chosen time: a single free hour
-can already take a full-rate battery charge, so spreading them gets the most
-out of each. More hours than days adds the next hour on each day in turn.
+Which hours: "best" (the default) books the hours where a free hour saves
+most -- the house's learned use in that hour (heat pump included) times the
+rate it would otherwise pay -- soonest day first on a tie, so hours are used
+before they expire. "fixed" books one hour a day at a chosen time instead.
 
 Pure functions; gridlock.py does the calls, webui.py validates settings.
 """
 import re
 from datetime import datetime, timedelta
 
-DEFAULT_SETTINGS = {"auto_book": True, "start": "14:00"}
+DEFAULT_SETTINGS = {"auto_book": True, "mode": "best", "start": "14:00"}
+MODES = ("best", "fixed")
 RETRY_AFTER = timedelta(hours=6)
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):00$")
 
@@ -33,6 +35,8 @@ def clean_settings(raw):
         start = "0" + start
     if _TIME_RE.match(start):
         out["start"] = start
+    if raw.get("mode") in MODES:
+        out["mode"] = raw["mode"]
     return out
 
 
@@ -54,10 +58,12 @@ def _slot_key(value):
     return dt.strftime("%Y-%m-%d %H:%M")
 
 
-def pick_hours(hours_left, bookable_days, booked, start):
+def pick_hours(hours_left, bookable_days, booked, start, value_fn=None):
     """The hours to book: [ "YYYY-MM-DD HH:MM", ... ], at most hours_left.
-    Round one: `start` on each bookable day, soonest first. Then the hour
-    after it on each day, and so on. Hours already booked are skipped."""
+    With value_fn(date, hour) -> saving: the most valuable hours across the
+    bookable days, soonest first on a tie. Without it: `start` on each
+    bookable day, soonest first, then the hour after it on each day, and
+    so on. Hours already booked are skipped."""
     try:
         n = int(hours_left)
     except (TypeError, ValueError):
@@ -67,6 +73,19 @@ def pick_hours(hours_left, bookable_days, booked, start):
     if n <= 0 or not days:
         return []
     taken = {k for k in (_slot_key(b) for b in (booked or [])) if k}
+    if value_fn is not None:
+        scored = []
+        for d in days:
+            for hour in range(24):
+                key = f"{d} {hour:02d}:00"
+                if key in taken:
+                    continue
+                try:
+                    v = float(value_fn(d, hour))
+                except (TypeError, ValueError):
+                    continue
+                scored.append((-round(v, 6), d, hour, key))
+        return [k for *_, k in sorted(scored)[:n]]
     h0 = int(clean_settings({"start": start})["start"][:2])
     out = []
     for step in range(24):

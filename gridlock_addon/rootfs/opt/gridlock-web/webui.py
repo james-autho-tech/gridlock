@@ -634,6 +634,7 @@ def _edf_perks(status_attrs, get, forecast_attrs):
         "free_hours_expiry": hours_attrs.get("next_expiry"),
         "free_hours_found": bool(status_attrs.get("edf_flextras_hours_entity")),
         "flextras_settings": load_flextras_settings(),
+        "free_hours_preview": status_attrs.get("edf_flextras_preview") or [],
         "planned_free_slots": forecast_attrs.get("free_electricity_slots") or [],
         "plan_horizon_end": forecast_attrs.get("plan_horizon_end"),
     }
@@ -3599,22 +3600,32 @@ function renderEdfPerks(p) {
 }
 function renderFlextrasBooking(p) {
   if (!p.flextras_registered || !p.free_hours_found) return '';
-  const cfg = p.flextras_settings || { auto_book: true, start: '14:00' };
+  const cfg = p.flextras_settings || { auto_book: true, mode: 'best', start: '14:00' };
+  const best = cfg.mode !== 'fixed';
   const left = Math.floor(Number(p.free_hours_left) || 0);
-  const days = (p.free_hours_days || []).map(d => new Date(d + 'T12:00:00').toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }));
+  const when = h => new Date(h.replace(' ', 'T') + ':00').toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  const preview = (p.free_hours_preview || []).map(x => `${esc(when(x.hour))}${x.saving_p != null ? ` <span style="color:var(--dim)">(about ${Math.round(x.saving_p)}p)</span>` : ''}`);
   const opts = Array.from({ length: 24 }, (_, h) => `${String(h).padStart(2, '0')}:00`)
     .map(t => `<option value="${t}"${t === cfg.start ? ' selected' : ''}>${t}</option>`).join('');
   const inp = 'background:#0b1220;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:4px 6px;font-family:inherit';
-  const status = !cfg.auto_book ? 'Auto-booking is off: book free hours in the EDF app.'
-    : left > 0 ? `Booking ${left} free hour${left === 1 ? '' : 's'} now, one a day from ${esc(cfg.start)} on the soonest days EDF offers.`
-    : `Nothing to book: no unbooked free hours. When EDF gives you some, GridLock books them at ${esc(cfg.start)}, one a day, on the soonest days on offer${days.length ? ` (now ${esc(days.slice(0, 4).join(', '))}${days.length > 4 ? ', ...' : ''})` : ''}.`;
+  const how = best ? 'in the hours they save most (your usual use then, heat pump included, times the rate)' : `at ${esc(cfg.start)}, one a day`;
+  let status;
+  if (!cfg.auto_book) status = 'Auto-booking is off: book free hours in the EDF app.';
+  else if (left > 0) status = `Booking ${left} free hour${left === 1 ? '' : 's'} now, ${how}, soonest days first.`;
+  else status = `No free hours to book right now. When EDF gives you some, GridLock books them ${how}, soonest days first.`;
+  const previewLine = cfg.auto_book && preview.length
+    ? `<div class="gl-sub">${left > 0 ? 'Choosing' : 'It would choose'}: ${preview.join(', ')}</div>` : '';
   return `<div class="gl-sub" style="margin-top:10px;display:flex;flex-wrap:wrap;gap:10px;align-items:center">
     <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="flx-auto"${cfg.auto_book ? ' checked' : ''} onchange="saveFlextras()"> Book free hours automatically</label>
-    <label style="display:flex;gap:6px;align-items:center">at <select id="flx-start" style="${inp}" onchange="saveFlextras()">${opts}</select></label>
-  </div><div class="gl-sub">${status}${p.free_hours_expiry ? ` Next hours expire ${esc(fmtDate(p.free_hours_expiry))}.` : ''}</div>`;
+    <select id="flx-mode" style="${inp}" onchange="saveFlextras()">
+      <option value="best"${best ? ' selected' : ''}>when they save most</option>
+      <option value="fixed"${best ? '' : ' selected'}>at a fixed time</option>
+    </select>
+    <select id="flx-start" style="${inp}${best ? ';display:none' : ''}" onchange="saveFlextras()">${opts}</select>
+  </div><div class="gl-sub">${status}${p.free_hours_expiry ? ` Next hours expire ${esc(fmtDate(p.free_hours_expiry))}.` : ''}</div>${previewLine}`;
 }
 async function saveFlextras() {
-  const body = { auto_book: document.getElementById('flx-auto').checked, start: document.getElementById('flx-start').value };
+  const body = { auto_book: document.getElementById('flx-auto').checked, mode: document.getElementById('flx-mode').value, start: document.getElementById('flx-start').value };
   try {
     const r = await fetch('api/edf-flextras', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (!r.ok) window.alert(((await r.json()) || {}).error || 'Failed to save.');

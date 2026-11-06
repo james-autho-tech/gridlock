@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.78.0 - 2026-11-06
+
+### EDF Flextras
+- Free hours now booked when they save most: each bookable hour scored by the house's learned use then (heat pump included) times the rate, best hours first, soonest day on a tie
+- "At a fixed time" still available from the EDF perks card
+- Card previews the hours it would book, with the rough saving, even with no hours to spend yet
+
 ## 3.77.0 - 2026-11-06
 
 ### EDF Flextras
