@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.81.1 - 2026-11-09
+
+### GridWarm dashboard
+- Heat pump tile and status say what the unit is really doing (heating the house, heating the tank, defrosting, compressor resting) from its compressor and activity readings, not just whether GridWarm has heating switched on
+- Per-run COP figures and the "needs a power meter" note removed (COP comes from the unit's meters now; see the Heat pump COP tab)
+- COP factor note says it's set daily from the meters
+
 ## 3.81.0 - 2026-11-09
 
 ### Notifications (new page, System)

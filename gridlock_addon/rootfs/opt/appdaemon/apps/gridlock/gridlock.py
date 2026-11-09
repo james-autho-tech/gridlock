@@ -4007,7 +4007,12 @@ class GridLock(hass.Hass):
         """The heat pump's own live readings a flow-controlled zone uses
         for learning and shows on the dashboard. All optional."""
         g = lambda key: (self.get_float_state(zone[key], None) if zone.get(key) else None)  # noqa: E731
-        return {"thermal_kw": g("thermal_power_entity"),
+        act_ent = zone.get("mode_entity") or zone.get("heating_entity")
+        activity = self.get_state(act_ent) if act_ent else None
+        defrost = bool(zone.get("defrost_entity")) and self.get_state(zone["defrost_entity"]) == "on"
+        return {"activity": activity if activity not in ("unknown", "unavailable") else None,
+                "defrost": "yes" if defrost else "no",
+                "thermal_kw": g("thermal_power_entity"),
                 "flow_temp": g("flow_temp_entity"),
                 "return_temp": g("return_temp_entity"),
                 "compressor_hz": g("compressor_entity"),

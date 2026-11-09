@@ -1609,6 +1609,21 @@ function renderSpaceHeatingSettings(s) {
     </details>`;
 }
 // ---- The house heating panel: what matters at a glance ----
+// What the heat pump itself is doing right now, from its own compressor and
+// activity readings -- GridWarm allowing heating isn't the same as the unit
+// running (it rests once the water is at its setpoint, or does hot water).
+function hpDoing(z) {
+  const hp = z.hp || {};
+  const hz = Number(hp.compressor_hz);
+  const act = String(hp.activity || '').toLowerCase();
+  const known = Number.isFinite(hz) || act;
+  const running = Number.isFinite(hz) ? hz > 5 : (act.includes('heat') || act.includes('dhw'));
+  if (!known) return null;
+  if (running && hp.defrost === 'yes') return { running, label: 'Defrosting', what: 'defrost' };
+  if (running && act.includes('dhw')) return { running, label: 'Heating the tank', what: 'dhw' };
+  if (running) return { running, label: 'Heating the house', what: 'heating' };
+  return { running: false, label: 'Compressor resting', what: 'idle' };
+}
 function houseStatusPill(z, d) {
   const c = z.control;
   if (!c) return '<span class="gl-pill gl-pill-eco">Predict only</span>';
@@ -1617,7 +1632,15 @@ function houseStatusPill(z, d) {
   if (st === 'paused') return '<span class="gl-pill gl-pill-eco">⏸️ Paused</span>';
   if (st === 'blocked') return '<span class="gl-pill gl-pill-bypass">⛔ Blocked</span>';
   if (st === 'rejected') return '<span class="gl-pill gl-pill-storm">⚠️ Reverted by the unit</span>';
-  if (st === 'heating') return `<span class="gl-pill gl-pill-charge">🔥 ${z.dhw ? 'Heating the tank' : 'Heating'}</span>`;
+  if (st === 'heating') {
+    // GridWarm has it switched on; say what the unit is really doing.
+    const doing = hpDoing(z);
+    const mine = doing && (z.dhw ? doing.what === 'dhw' : doing.what === 'heating');
+    if (!doing || mine) return `<span class="gl-pill gl-pill-charge">🔥 ${z.dhw ? 'Heating the tank' : 'Heating'}</span>`;
+    if (doing.what === 'defrost') return '<span class="gl-pill gl-pill-charge">On · unit defrosting</span>';
+    if (doing.running) return `<span class="gl-pill gl-pill-eco">On · unit busy with ${z.dhw ? 'the house' : 'hot water'}</span>`;
+    return `<span class="gl-pill gl-pill-eco">On · ${z.dhw ? 'unit not heating the tank yet' : 'compressor resting'}</span>`;
+  }
   if (st === 'off') {
     if (z.dhw) {
       const w = z.dhw;
@@ -1647,15 +1670,13 @@ function copLine(b, lifetime) {
   // This run / last run / week / month / lifetime COP, whichever are known.
   b = b || {};
   const parts = [];
-  if (b.run) parts.push(`this run ${Number(b.run).toFixed(1)}<span title="Electricity side from the outdoor unit's whole-amp current sensor — approximate">*</span>`);
-  else if (b.last_run) parts.push(`last run ${Number(b.last_run).toFixed(1)}<span title="Electricity side from the outdoor unit's whole-amp current sensor — approximate">*</span>`);
   if (b.week) parts.push(`week ${Number(b.week).toFixed(1)}`);
   if (b.month) parts.push(`month ${Number(b.month).toFixed(1)}`);
   const life = b.lifetime || lifetime;
   if (life) parts.push(`lifetime ${Number(life).toFixed(2)}`);
-  const note = (!b.run && !b.last_run && b.run_unmeasurable)
-    ? `<div class="sub" style="color:var(--dim)">Per-run COP needs a power meter on the heat pump — its own current sensor under-reads.</div>` : '';
-  return parts.length ? `<div class="sub">COP: ${parts.join(' · ')}</div>${note}` : note;
+  // Week and month come from the unit's own meters (the Heat pump COP tab
+  // has the detail); a single run can't be measured on its current sensor.
+  return parts.length ? `<div class="sub">COP: ${parts.join(' · ')}</div>` : '';
 }
 async function hwSet(key, el) {
   if (hwBusy) return;
@@ -1907,7 +1928,10 @@ function renderHouseHero(d) {
   const flowTile = c.flow_entity
     ? `<div class="gl-tile"><div class="lbl">Flow setpoint</div><div class="val num">${c.commanded === false ? '<span style="font-size:16px;color:var(--dim)">off</span>' : n1(c.flow_setpoint, 0, '°C')}</div><div class="sub">unit set to ${n1(hp.flow_setpoint_live, 0, '°C')} · water out ${n1(hp.flow_temp, 0, '°C')} / back ${n1(hp.return_temp, 0, '°C')}${f && c.commanded !== false ? ` · plan wants ${n1(f.flow_setpoint_wanted, 0, '°C')}` : ''}</div></div>`
     : '';
-  const hpTile = `<div class="gl-tile"><div class="lbl">Heat pump</div><div class="val" style="font-size:16px"><span class="gl-legend-dot" style="background:${z.heating_on ? 'var(--green)' : 'var(--dim)'}"></span>${z.heating_on ? 'Heating' : 'Not heating'}</div><div class="sub">${hp.compressor_hz !== undefined && hp.compressor_hz !== null ? `compressor ${n1(hp.compressor_hz, 0, ' Hz')} · ` : ''}${n1(hp.thermal_kw, 1, ' kW')} out</div>${copLine(z.cop_breakdown, hp.live_cop)}</div>`;
+  const doing = hpDoing(z);
+  const hpLabel = doing ? doing.label : (z.heating_on ? 'Heating' : 'Not heating');
+  const hpOn = doing ? doing.running : z.heating_on;
+  const hpTile = `<div class="gl-tile"><div class="lbl">Heat pump</div><div class="val" style="font-size:16px"><span class="gl-legend-dot" style="background:${hpOn ? 'var(--green)' : 'var(--dim)'}"></span>${esc(hpLabel)}</div><div class="sub">${hp.compressor_hz !== undefined && hp.compressor_hz !== null ? `compressor ${n1(hp.compressor_hz, 0, ' Hz')} · ` : ''}${n1(hp.thermal_kw, 1, ' kW')} out</div>${copLine(z.cop_breakdown, hp.live_cop)}</div>`;
   const planTile = f
     ? (Number(f.required_kw) < 0.05
         ? (() => {
@@ -1928,7 +1952,7 @@ function renderHouseHero(d) {
   const pricingNote = f && f.pricing_mode
     ? `<div class="gl-sub" style="margin-top:6px">${f.pricing_mode === 'battery' ? 'Electricity priced via the battery plan: cheap-rate energy from the battery where it covers the heating, the tariff only where GridLock expects it to run flat or export — so most of the day the plan is simply chasing COP.' : f.pricing_mode === 'cop' ? 'Prices ignored: the plan minimises electricity, i.e. maximises COP.' : 'Priced at the import tariff, as if there were no battery.'}</div>`
     : '';
-  const learned = `${pricingNote}<div class="gl-sub" style="margin-top:8px">Learned so far — radiators ${n1(z.learned_emitter_w_at_dt50, 0, ' W')} at ΔT50 (started ${n1(z.config_emitter_w_at_dt50, 0)}), COP factor ${n1(z.learned_cop_eta, 2)} (started ${n1(z.config_cop_eta, 2)}${(z.measured_runs || []).length ? `, from ${(z.measured_runs || []).length} measured run${(z.measured_runs || []).length === 1 ? '' : 's'}: last ${z.measured_runs[z.measured_runs.length - 1].mode === 'dhw' ? 'hot water' : 'heating'} run COP ${n1(z.measured_runs[z.measured_runs.length - 1].cop, 2)} at ${n1(z.measured_runs[z.measured_runs.length - 1].flow, 0)}°C flow, ${n1(z.measured_runs[z.measured_runs.length - 1].outdoor, 0)}°C outside` : ', no measured runs yet'}), thermal mass ${n1(z.learned_thermal_mass, 0, ' Wh/°C')} (started ${n1(z.config_thermal_mass, 0)}), compressor minimum ${n1(z.learned_min_output_w, 0, ' W')} (${z.min_output_learned === 'yes' ? 'learned from your unit' : 'default — learns once it has run steadily'}), heat loss ${n1(z.learned_heat_loss_degrees, 4)} °C/h/°C from ${Math.round(Number(z.thermal_learning_observations) || 0)} cooling observations.</div>`;
+  const learned = `${pricingNote}<div class="gl-sub" style="margin-top:8px">Learned so far — radiators ${n1(z.learned_emitter_w_at_dt50, 0, ' W')} at ΔT50 (started ${n1(z.config_emitter_w_at_dt50, 0)}), COP factor ${n1(z.learned_cop_eta, 2)} (started ${n1(z.config_cop_eta, 2)}${(z.cop_breakdown || {}).week ? `, set daily from the heat pump's own meters: COP ${n1(z.cop_breakdown.week, 1)} over the last week` : (z.measured_runs || []).length ? `, from ${(z.measured_runs || []).length} measured run${(z.measured_runs || []).length === 1 ? '' : 's'}` : ', no measurements yet'}), thermal mass ${n1(z.learned_thermal_mass, 0, ' Wh/°C')} (started ${n1(z.config_thermal_mass, 0)}), compressor minimum ${n1(z.learned_min_output_w, 0, ' W')} (${z.min_output_learned === 'yes' ? 'learned from your unit' : 'default — learns once it has run steadily'}), heat loss ${n1(z.learned_heat_loss_degrees, 4)} °C/h/°C from ${Math.round(Number(z.thermal_learning_observations) || 0)} cooling observations.</div>`;
   return `
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px">
       <span style="color:var(--ink);font-weight:600">${esc(z.name)}</span>
