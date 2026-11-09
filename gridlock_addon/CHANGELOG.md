@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.79.0 - 2026-11-09
+
+### Heat pump COP (new tab)
+- COP from the heat pump's own heat and electricity kWh meters, day by day, split heating / hot water
+- Last 7 days, last 30 days and season so far (SCOP); daily COP chart, COP against outdoor temperature, table of days
+- Cost per kWh of heat against a gas boiler (gas price and boiler efficiency editable)
+- Allowance for what the unit's meter usually misses: indoor pump while running and standby (editable)
+- Share: download an image card or a self-contained web page; optional name, nothing else identifying
+- Rebuilt from Home Assistant's history on first start; works with any heat pump that has the two kWh meters set in GridWarm
+
+### GridWarm
+- COP model calibrated once a day from the last 7 days of meter totals instead of single runs (which the whole-amp current sensor made unreadable), so predicted COP and planned heat pump kWh match reality
+- `sensor.gridlock_cop` with the headline figures
+
 ## 3.78.0 - 2026-11-06
 
 ### EDF Flextras

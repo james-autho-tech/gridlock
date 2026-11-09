@@ -41,6 +41,7 @@ from core import octopus_compare as core_octopus
 from core import ev_model as core_ev_model
 from core import flex_loads as core_flex
 from core import flextras as core_flextras
+from core import cop_report as core_cop
 
 # First day the risk-profile comparison is trusted (see _publish savings).
 PROFILE_COMPARISON_VALID_FROM = "2026-10-21"
@@ -48,7 +49,7 @@ PROFILE_COMPARISON_VALID_FROM = "2026-10-21"
 STATE_FILES = ("load_profile.json", "savings_state.json", "savings_history.json",
                "cost_tracking_state.json", "decision_log.json",
                "circuit_state.json", "circuit_history.json", "solar_accuracy.json",
-               "autho_solar_state.json", "flex_loads_state.json")
+               "autho_solar_state.json", "flex_loads_state.json", "cop_ledger.json")
 
 # publish_plan()'s per-slot row shape — a single source of truth for both
 # the row length it builds and the "columns" name list it publishes
@@ -783,6 +784,10 @@ class GridLock(hass.Hass):
         self._autho_state = core_autho.clean_state(self._load_json("autho_solar_state.json", {}))
         # Flexible loads (dashboard Flex loads tab): plugs run in the cheapest half-hours.
         self._flex_state = core_flex.clean_state(self._load_json("flex_loads_state.json", {}))
+        # Heat pump COP from its own kWh counters, day by day (core/cop_report.py).
+        self._cop_ledger = core_cop.clean_ledger(self._load_json("cop_ledger.json", {}))
+        self._cop_tick_at = None
+        self._cop_calibrated_day = None
         self._flex_settings_cache = (None, {"loads": [], "resume": {}})
         self._flex_listeners = {}
         self._flex_last_run = None
@@ -1011,6 +1016,8 @@ class GridLock(hass.Hass):
         # Once, before the first Autho Solar poll sends them: half-hours rebuilt
         # from the PV energy counter's history (a no-op once done).
         self.run_in(self._pv_counter_backfill, 10)
+        # Once: the COP ledger rebuilt from the heat pump counters' history.
+        self.run_in(self._cop_backfill, 40)
         # Autho Solar forecast + sending readings: every 15 min, no-op without a key.
         self.run_every(self.poll_autho_solar, "now+20", 900)
         self._autho_mtime_seen = None
@@ -4002,7 +4009,10 @@ class GridLock(hass.Hass):
                      "heat_kwh": round(run["th_wh"] / 1000.0, 2), "elec_kwh": round(run["el_wh"] / 1000.0, 2),
                      "eta": round(eta, 3) if eta is not None else None})
         learn["cop_runs"] = runs[-30:]
-        if eta is not None and 0.2 <= eta <= 0.8:
+        counters = bool(zone.get("heat_counter_entity") and zone.get("elec_counter_entity"))
+        # With the unit's kWh counters the COP model is calibrated from whole
+        # days instead (_cop_calibrate); single runs only stand in without them.
+        if eta is not None and 0.2 <= eta <= 0.8 and not counters:
             if run["mode"] == "heating":
                 zone["cop_eta"] = min(0.8, max(0.2, core_flow.blend(zone["cop_eta"], eta, alpha=0.2)))
                 learn["cop_eta"] = zone["cop_eta"]
@@ -4014,6 +4024,144 @@ class GridLock(hass.Hass):
                            f"COP {cop:.2f} at {avg_flow:.0f}°C flow, {avg_out:.0f}°C outside "
                            f"({run['th_wh'] / 1000:.1f} kWh heat for {run['el_wh'] / 1000:.1f} kWh)")
         self._save_json("thermal_learning_state.json", self.thermal_learning_state)
+
+    def _cop_settings(self):
+        return core_cop.clean_settings(self._load_dashboard_json("cop_settings.json", {}))
+
+    def _cop_tick(self, zone, now, hp, outdoor, heat_rate_curve):
+        """Credit the heat pump counters' increase since the last tick to what
+        it was doing (core/cop_report.py), once per tick whichever zone reads
+        it, then once a day calibrate the COP model from the week's totals."""
+        if self._cop_tick_at == now:
+            return
+        self._cop_tick_at = now
+        heat = self.get_float_state(zone["heat_counter_entity"], None)
+        elec = self.get_float_state(zone["elec_counter_entity"], None)
+        mode = core_cop.mode_of(self.get_state(zone["mode_entity"]) if zone.get("mode_entity") else None,
+                                hp.get("compressor_hz"))
+        price_p = None
+        try:
+            price_p = float(heat_rate_curve[0]) * 100.0 if heat_rate_curve else None
+        except (TypeError, ValueError, IndexError):
+            price_p = None
+        if core_cop.add_reading(self._cop_ledger, now.astimezone(self._local_tz()), heat, elec, mode,
+                                outdoor, hp.get("flow_temp"), price_p):
+            self._save_json("cop_ledger.json", self._cop_ledger)
+        self._cop_calibrate(zone, now)
+
+    def _cop_calibrate(self, zone, now):
+        """Once a day: the COP model's Carnot factor for heating and for hot
+        water from the last week's counter totals (pooled; one day's split is
+        too lumpy). Capped at the model's 0.8 -- this unit's measured heating
+        COP goes beyond what the model can express, so it settles at the top."""
+        today = now.astimezone(self._local_tz()).date()
+        if self._cop_calibrated_day == today:
+            return
+        self._cop_calibrated_day = today
+        cfg = self._cop_settings()
+        learn = self.thermal_learning_state.setdefault(zone["name"], {})
+        hw_learn = self.thermal_learning_state.setdefault("Hot water", {})
+        notes = []
+        for mode in ("heating", "dhw"):
+            pooled = core_cop.pooled_mode(self._cop_ledger, mode, today, cfg)
+            if not pooled:
+                continue
+            cop, flow, outdoor, _ = pooled
+            eta = core_flow.implied_eta(cop, flow, outdoor)
+            eta = 0.8 if eta is None and cop > 0 else eta
+            if eta is None:
+                continue
+            eta = min(0.8, max(0.2, eta))
+            if mode == "heating":
+                zone["cop_eta"] = round(core_flow.blend(zone["cop_eta"], eta, alpha=0.5), 3)
+                learn["cop_eta"] = zone["cop_eta"]
+                notes.append(f"heating COP {cop:.1f} at {flow:.0f}°C flow -> factor {zone['cop_eta']:.2f}")
+            else:
+                prev = hw_learn.get("dhw_cop_eta") or 0.45
+                hw_learn["dhw_cop_eta"] = round(core_flow.blend(prev, eta, alpha=0.5), 3)
+                notes.append(f"hot water COP {cop:.1f} at {flow:.0f}°C flow -> factor {hw_learn['dhw_cop_eta']:.2f}")
+        if notes:
+            self._save_json("thermal_learning_state.json", self.thermal_learning_state)
+            self._log_decision("GridWarm: COP model calibrated", "Last 7 days from the unit's meters: " + "; ".join(notes))
+        self._publish_cop(today, cfg)
+
+    def _publish_cop(self, today, cfg):
+        """sensor.gridlock_cop: the headline numbers (the tab reads the full
+        ledger itself)."""
+        summ = core_cop.summarise(self._cop_ledger, today, cfg, show_days=0)
+        p = summ["periods"]
+        state = p["week"]["cop"] if p["week"]["cop"] is not None else "unknown"
+        attrs = {"friendly_name": "GridLock heat pump COP", "icon": "mdi:heat-pump-outline",
+                 "season_start": summ["season_start"]}
+        for key, per in p.items():
+            for k in ("cop", "heating_cop", "dhw_cop", "heat_kwh", "elec_kwh", "p_per_kwh_heat"):
+                if per.get(k) is not None:
+                    attrs[f"{key}_{k}"] = per[k]
+        self.set_state("sensor.gridlock_cop", state=state, attributes=attrs)
+
+    def _cop_backfill(self, kwargs):
+        """Once, while the ledger is empty: rebuild it from the counters' and
+        activity sensor's history, ticking through it every 5 minutes as
+        the engine would have."""
+        if self._cop_ledger["days"]:
+            return
+        zones = (getattr(self, "_ui_zone_cache", None) or (None, None, None))[1] or []
+        zone = next((z for z in zones
+                     if not z.get("is_tank") and z.get("heat_counter_entity") and z.get("elec_counter_entity")), None)
+        if not zone:
+            tries = (kwargs or {}).get("tries", 0)
+            if tries < 10:   # GridWarm's zones load on the first tick
+                self.run_in(self._cop_backfill, 120, tries=tries + 1)
+            return
+        now = self.get_now()
+        start = now - timedelta(days=PV_COUNTER_BACKFILL_DAYS)
+        ents = {"heat": zone["heat_counter_entity"], "elec": zone["elec_counter_entity"],
+                "mode": zone.get("mode_entity"), "out": zone.get("external_temp_entity"),
+                "flow": zone.get("flow_temp_entity")}
+        series = {}
+        try:
+            for key, ent in ents.items():
+                if not ent:
+                    continue
+                rows = []
+                for st in ((self.get_history(entity_id=ent, start_time=start, end_time=now, no_attributes=True)
+                            or [[]])[0] or []):
+                    t = st.get("last_changed")
+                    t = t if hasattr(t, "isoformat") else datetime.fromisoformat(str(t))
+                    v = st.get("state")
+                    if v in (None, "unknown", "unavailable", ""):
+                        continue
+                    rows.append((t, v))
+                series[key] = sorted(rows, key=lambda r: r[0])
+        except Exception as exc:  # noqa: BLE001 - tried again at the next start
+            self.log(f"COP backfill: history fetch failed ({exc!r})", level="WARNING")
+            return
+        if len(series.get("heat") or []) < 2 or len(series.get("elec") or []) < 2:
+            return
+        import bisect
+
+        def at(key, t, num=True):
+            rows = series.get(key) or []
+            i = bisect.bisect_right([r[0] for r in rows], t) - 1
+            if i < 0:
+                return None
+            try:
+                return float(rows[i][1]) if num else rows[i][1]
+            except (TypeError, ValueError):
+                return None
+        tz = self._local_tz()
+        t = series["heat"][0][0].replace(second=0, microsecond=0) + timedelta(minutes=5)
+        ledger = core_cop.clean_ledger({})
+        while t < now:
+            core_cop.add_reading(ledger, t.astimezone(tz), at("heat", t), at("elec", t),
+                                 core_cop.mode_of(at("mode", t, num=False)), at("out", t), at("flow", t))
+            t += timedelta(minutes=5)
+        if not ledger["days"]:
+            return
+        self._cop_ledger = ledger
+        self._save_json("cop_ledger.json", ledger)
+        self._cop_calibrated_day = None
+        self.log(f"COP backfill: {len(ledger['days'])} days rebuilt from the heat pump's counters")
 
     def _cop_breakdown(self, zone, now):
         """COP over four spans, for the dashboard:
@@ -5138,6 +5286,8 @@ class GridLock(hass.Hass):
         hp = self._hp_live(zone)
         if zone.get("water_flow_entity"):
             self._measure_run_cop(zone, now, hp, external_now)
+        if not zone["is_tank"] and zone.get("heat_counter_entity") and zone.get("elec_counter_entity"):
+            self._cop_tick(zone, now, hp, external_now, heat_rate_curve)
         self._update_flow_learning(zone, now, internal_temp, external_now, heating_on, hp)
         if zone.get("dhw"):
             self._update_dhw_learning(zone, now, internal_temp, heating_on)

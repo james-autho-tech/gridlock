@@ -23,6 +23,7 @@ from core.space_heating import merge_settings as merge_space_heating_settings  #
 from core.space_heating import diff_from_defaults as space_heating_diff  # noqa: E402
 from core import flex_loads as core_flex  # noqa: E402
 from core import flextras as core_flextras  # noqa: E402
+from core import cop_report as core_cop  # noqa: E402
 
 SUPERVISOR_TOKEN = os.environ["SUPERVISOR_TOKEN"]
 PORT = 8099
@@ -194,6 +195,52 @@ def autho_solar_status(sensor):
 
 FLEX_SETTINGS_PATH = os.path.join(ENGINE_DIR, "flex_loads_settings.json")
 FLEXTRAS_SETTINGS_PATH = os.path.join(ENGINE_DIR, "edf_flextras_settings.json")
+COP_SETTINGS_PATH = os.path.join(ENGINE_DIR, "cop_settings.json")
+
+
+def load_cop_settings():
+    try:
+        with open(COP_SETTINGS_PATH) as f:
+            return core_cop.clean_settings(json.load(f))
+    except (OSError, ValueError):
+        return core_cop.clean_settings({})
+
+
+def save_cop_settings(settings):
+    cleaned = core_cop.clean_settings(settings)
+    tmp = COP_SETTINGS_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(cleaned, f)
+    os.replace(tmp, COP_SETTINGS_PATH)
+    return cleaned
+
+
+def cop_status():
+    """The COP tab: the engine's day-by-day ledger (core/cop_report.py)
+    summarised, or what's missing to make one."""
+    paths = glob.glob(os.path.join(ENGINE_DIR, "*__cop_ledger.json"))
+    ledger = {"last": None, "days": {}}
+    if paths:
+        try:
+            with open(max(paths, key=os.path.getmtime)) as f:
+                ledger = core_cop.clean_ledger(json.load(f))
+        except (OSError, ValueError):
+            pass
+    try:
+        sh = merge_space_heating_settings(load_gridwarm_settings())
+    except Exception:  # noqa: BLE001
+        sh = {}
+    counters = bool(sh.get("configured") and sh.get("heat_counter_entity") and sh.get("elec_counter_entity"))
+    if not ledger["days"]:
+        return {"available": counters, "configured": counters, "empty": True,
+                "settings": load_cop_settings()}
+    # "Today" is the heat pump's own local day: the last reading's date.
+    try:
+        today = datetime.fromisoformat(ledger["last"]["t"]).date()
+    except (TypeError, ValueError, KeyError):
+        today = datetime.now().date()
+    summ = core_cop.summarise(ledger, today, load_cop_settings(), show_days=60)
+    return {"available": True, "configured": counters, "empty": False, **summ}
 
 
 def load_flextras_settings():
@@ -511,6 +558,7 @@ def build_status():
         "axle": axle_status(get("sensor.gridlock_axle") or {}),
         "autho_solar": autho_solar_status(get("sensor.gridlock_autho_solar") or {}),
         "flex_loads": flex_status(get("sensor.gridlock_flex_loads") or {}),
+        "cop": cop_status(),
         "weather": find_weather_entity(states),
         "mode_active": status_attrs.get("battery_risk_profile") or "balanced",
         "mode_override": (get("input_select.gridlock_mode_override") or {}).get("state", "auto"),
@@ -1045,6 +1093,7 @@ PAGE = r"""<!doctype html>
   <button class="gl-nav-btn" data-tab="solar">Solar</button>
   <div class="gl-side-h">Home</div>
   <button class="gl-nav-btn" data-tab="gridwarm" id="gl-nav-gridwarm" style="display:none">GridWarm</button>
+  <button class="gl-nav-btn" data-tab="cop" id="gl-nav-cop" style="display:none">Heat pump COP</button>
   <button class="gl-nav-btn" data-tab="flex">Flex loads</button>
   <button class="gl-nav-btn" data-tab="circuits" id="gl-nav-circuits" style="display:none">Circuits</button>
   <div class="gl-side-h">Money</div>
@@ -2493,6 +2542,173 @@ async function saveAuthoSolar(clear) {
   } catch (e) { window.alert('Failed to save: network error.'); }
   authoBusy = false;
 }
+// ---- Heat pump COP tab: the unit's own kWh counters, day by day ----
+// Heating and hot water colours: validated together (dataviz validator,
+// dark surface #111a2c): lightness band, CVD and normal-vision separation.
+const COP_HEAT = '#d97706', COP_DHW = '#3a8fd6';
+let copLast = null, copBusy = false;
+const copN = (v, d = 1) => (v === null || v === undefined || !Number.isFinite(Number(v))) ? '-' : Number(v).toFixed(d);
+const copDay = (iso) => new Date(iso + 'T12:00:00').toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+function copTile(label, per, note) {
+  return `<div class="gl-tile"><div class="lbl">${esc(label)}</div>
+    <div class="val num">${copN(per.cop, 1)}</div>
+    <div class="sub"><span class="gl-legend-dot" style="background:${COP_HEAT}"></span>heating ${copN(per.heating_cop, 1)}
+      &nbsp;<span class="gl-legend-dot" style="background:${COP_DHW}"></span>hot water ${copN(per.dhw_cop, 1)}<br>
+      ${copN(per.heat_kwh, 0)} kWh of heat from ${copN(per.elec_kwh, 0)} kWh${note ? ` · ${note}` : ''}</div></div>`;
+}
+function copBars(days) {
+  const D = days.slice(-30);
+  const vals = D.flatMap((d) => [d.heating.cop, d.dhw.cop]).filter((v) => v != null);
+  if (!vals.length) return '<div class="gl-sub">Not enough days yet.</div>';
+  const H = 170, hi = Math.max(4, 2 * Math.ceil((Math.max(...vals) + 0.5) / 2)), y = yScale(0, hi, H);
+  const colW = VB_W / D.length, barW = Math.max(2, (colW - 6) / 2);
+  const bar = (v, x, colour, op, tip) => v == null ? '' :
+    `<rect x="${x.toFixed(1)}" y="${y(v).toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(1, y(0) - y(v)).toFixed(1)}" rx="2" fill="${colour}" opacity="${op}"><title>${tip}</title></rect>`;
+  const marks = D.map((d, i) => {
+    const x0 = i * colW + 2, op = d.ok ? 1 : 0.4;
+    const tip = (m, l) => `${esc(copDay(d.date))}: ${l} COP ${copN(d[m].cop, 1)} (${copN(d[m].heat_kwh, 0)} kWh heat / ${copN(d[m].elec_kwh, 1)} kWh)${d[m].flow != null ? `, ${copN(d[m].flow, 0)}°C flow` : ''}${d.outdoor != null ? `, ${copN(d.outdoor, 1)}°C outside` : ''}${d.ok ? '' : ', small day'}`;
+    return bar(d.heating.cop, x0, COP_HEAT, op, tip('heating', 'heating')) + bar(d.dhw.cop, x0 + barW + 2, COP_DHW, op, tip('dhw', 'hot water'));
+  }).join('');
+  const ticks = [0, hi / 2, hi].map((v) => ({ frac: v / hi, label: copN(v, 0) }));
+  const nw = 'white-space:nowrap';
+  const legend = `<div class="gl-combo-legend" style="margin:8px 0 4px"><span style="${nw}"><span class="gl-legend-dot" style="background:${COP_HEAT}"></span>Heating</span><span style="${nw}"><span class="gl-legend-dot" style="background:${COP_DHW}"></span>Hot water</span><span style="color:var(--dim)">faded: a small day, read less into it</span></div>`;
+  // Four date labels at most, so they fit a phone.
+  const every = Math.max(1, Math.ceil(D.length / 4));
+  const short = (iso) => new Date(iso + 'T12:00:00').toLocaleDateString([], { day: 'numeric', month: 'short' });
+  return legend + chartFrame(marks, H, ticks, null, barAxisLabels(D.length, every, (i) => short(D[i].date)));
+}
+function copScatter(days) {
+  const P = days.filter((d) => d.heating.cop != null && d.heating.elec_kwh >= 1 && d.heating.outdoor != null);
+  if (P.length < 3) return '<div class="gl-sub">Needs a few more heating days.</div>';
+  const W = 600, H = 330, L = 48, R = 14, T = 14, B = 58, FS = 17;
+  const xs = P.map((d) => d.heating.outdoor), ys = P.map((d) => d.heating.cop);
+  const x0 = Math.floor(Math.min(...xs, 0)), x1 = Math.ceil(Math.max(...xs, 12)), y1 = Math.max(4, Math.ceil(Math.max(...ys)));
+  const X = (v) => L + (v - x0) / (x1 - x0) * (W - L - R), Y = (v) => T + (1 - v / y1) * (H - T - B);
+  const grid = [0, y1 / 2, y1].map((v) => `<line x1="${L}" x2="${W - R}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" stroke="var(--line)"/><text x="${L - 8}" y="${(Y(v) + 6).toFixed(1)}" text-anchor="end" fill="var(--dim)" font-size="${FS}">${copN(v, 0)}</text>`).join('');
+  const xt = []; for (let v = x0; v <= x1; v += Math.max(1, Math.round((x1 - x0) / 6))) xt.push(v);
+  const xg = xt.map((v) => `<text x="${X(v).toFixed(1)}" y="${H - B + 22}" text-anchor="middle" fill="var(--dim)" font-size="${FS}">${v}°</text>`).join('');
+  const dots = P.map((d) => `<circle cx="${X(d.heating.outdoor).toFixed(1)}" cy="${Y(d.heating.cop).toFixed(1)}" r="7" fill="${COP_HEAT}" stroke="var(--panel)" stroke-width="2" opacity="${d.ok ? 1 : 0.45}"><title>${esc(copDay(d.date))}: COP ${copN(d.heating.cop, 1)} at ${copN(d.heating.outdoor, 1)}°C outside, ${copN(d.heating.flow, 0)}°C flow</title></circle>`).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px;height:auto;display:block" role="img" aria-label="Heating COP against outdoor temperature, one dot per day">${grid}${xg}${dots}
+    <text x="${(L + W - R) / 2}" y="${H - 8}" text-anchor="middle" fill="var(--dim)" font-size="${FS}">average outdoor temperature while heating</text></svg>`;
+}
+function renderCop(c) {
+  copLast = c;
+  if (!c || !c.available) {
+    return `<div class="gl-wrap"><div class="gl-h">Heat pump COP</div><div class="gl-sub">To work out your heat pump's COP, GridWarm needs two of its meters: heat produced (kWh) and electricity used (kWh), both as running totals. Set them under GridWarm, space heating, "heat counter" and "electricity counter".</div></div>`;
+  }
+  if (c.empty) {
+    return `<div class="gl-wrap"><div class="gl-h">Heat pump COP</div><div class="gl-sub">Collecting the first day's readings from your heat pump's meters. Figures appear here once a day has gone through.</div></div>`;
+  }
+  const P = c.periods, cfg = c.settings || {};
+  const season = P.season, gasP = season.gas_p_per_kwh_heat, myP = season.p_per_kwh_heat;
+  const money = myP != null
+    ? `Heat has cost you <b style="color:var(--ink)">${copN(myP, 1)}p</b> per kWh this season; a ${copN((cfg.boiler_eff || 0.9) * 100, 0)}% efficient gas boiler at ${copN(cfg.gas_p, 1)}p per kWh of gas would be <b style="color:var(--ink)">${copN(gasP, 1)}p</b>.`
+    : `A ${copN((cfg.boiler_eff || 0.9) * 100, 0)}% efficient gas boiler at ${copN(cfg.gas_p, 1)}p per kWh of gas makes heat at ${copN(gasP, 1)}p per kWh; your own cost per kWh of heat appears once a full day has been priced.`;
+  const rows = [...c.days].reverse().map((d) => `<tr style="${d.ok ? '' : 'opacity:.55'}"><td>${esc(copDay(d.date))}</td><td class="num">${copN(d.cop, 1)}</td><td class="num">${copN(d.heating.cop, 1)}</td><td class="num">${copN(d.dhw.cop, 1)}</td><td class="num">${copN(d.heat_kwh, 0)}</td><td class="num">${copN(d.elec_kwh, 1)}</td><td class="num">${copN(d.outdoor, 1)}°</td><td class="num">${copN(d.heating.flow, 0)}°</td><td class="num">${copN(d.heating.hours + d.dhw.hours, 1)} h</td></tr>`).join('');
+  const inp = 'background:#0b1220;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:4px 6px;font-family:inherit;width:90px';
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `<div class="gl-wrap">
+      <div class="gl-h">Heat pump COP</div>
+      <div class="gl-sub">COP is how many kWh of heat the heat pump makes from each kWh of electricity. A gas boiler manages about 0.9; a heat pump 3 to 4 over a year is good, and it rises in mild weather and with lower flow temperatures.</div>
+      <div class="gl-grid" style="margin-top:12px">
+        ${copTile('Last 7 days', P.week)}
+        ${copTile('Last 30 days', P.month)}
+        ${copTile('Season so far (SCOP)', P.season, `since ${esc(copDay(c.season_start))}`)}
+      </div>
+      <div class="gl-sub" style="margin-top:10px">${money}</div>
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="gl-btn-sm" onclick="copShareImage()">Download share image</button>
+        <button class="gl-btn-sm" onclick="copShareHtml()">Download web page</button>
+      </div>
+    </div>
+    <div class="gl-wrap"><div class="gl-h">Day by day</div>${copBars(c.days)}
+      <div class="gl-sub" style="margin-top:4px">COP per day. Hover a bar for the day's heat, electricity and temperatures.</div></div>
+    <div class="gl-wrap"><div class="gl-h">Heating COP and the weather</div>${copScatter(c.days)}
+      <div class="gl-sub">One dot per day. Colder days pull COP down; a lower flow temperature lifts it.</div></div>
+    <div class="gl-wrap"><div class="gl-h">Days</div><div style="overflow-x:auto"><table class="gl-plan">
+      <tr><th>Day</th><th>COP</th><th>Heating</th><th>Hot water</th><th>Heat kWh</th><th>Elec kWh</th><th>Outside</th><th>Flow</th><th>Ran</th></tr>${rows}</table></div>
+      <div class="gl-sub" style="margin-top:6px">From the heat pump's own meters, which count in whole kWh, so a single day's heating/hot water split is rough; weeks and months are solid. Faded days used under 3 kWh. Electricity includes an allowance for what the unit's meter usually misses: the indoor pump (${copN(cfg.pump_w, 0)} W while running) and standby (${copN(cfg.standby_w, 0)} W).</div></div>
+    <div class="gl-wrap"><div class="gl-h">Settings</div>
+      <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center" class="gl-sub">
+        <label>Gas price <input id="cop-gas" type="number" step="0.1" value="${copN(cfg.gas_p, 1)}" style="${inp}"> p/kWh</label>
+        <label>Boiler efficiency <input id="cop-eff" type="number" step="1" value="${copN((cfg.boiler_eff || 0.9) * 100, 0)}" style="${inp}"> %</label>
+        <label>Indoor pump <input id="cop-pump" type="number" step="5" value="${copN(cfg.pump_w, 0)}" style="${inp}"> W</label>
+        <label>Standby <input id="cop-standby" type="number" step="5" value="${copN(cfg.standby_w, 0)}" style="${inp}"> W</label>
+        <label>Season starts <select id="cop-season" style="${inp}">${months.map((m, i) => `<option value="${i + 1}"${cfg.season_start_month === i + 1 ? ' selected' : ''}>${m}</option>`).join('')}</select></label>
+        <label>Name on share card <input id="cop-name" type="text" maxlength="40" value="${esc(cfg.share_name || '')}" placeholder="optional" style="${inp};width:160px"></label>
+        <button class="gl-btn-sm" onclick="saveCop()">Save</button>
+      </div></div>`;
+}
+async function saveCop() {
+  if (copBusy) return;
+  copBusy = true;
+  const v = (id) => document.getElementById(id).value;
+  try {
+    const r = await fetch('api/cop-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+      gas_p: Number(v('cop-gas')), boiler_eff: Number(v('cop-eff')) / 100, pump_w: Number(v('cop-pump')),
+      standby_w: Number(v('cop-standby')), season_start_month: Number(v('cop-season')), share_name: v('cop-name') }) });
+    if (!r.ok) window.alert(((await r.json()) || {}).error || 'Failed to save.');
+    else refresh();
+  } catch (e) { window.alert('Failed to save: network error.'); }
+  copBusy = false;
+}
+// Share card: everything worth showing off, nothing that identifies the house
+// beyond an optional name. Drawn on a canvas so it downloads as a PNG.
+function copShareFacts() {
+  const c = copLast || {}, P = c.periods || {}, s = P.season || {}, cfg = c.settings || {};
+  const days = (c.days || []).filter((d) => d.date >= c.season_start);
+  return { c, P, s, cfg, days, name: (cfg.share_name || '').trim(),
+    range: days.length ? `${copDay(days[0].date)} to ${copDay(days[days.length - 1].date)}` : '' };
+}
+function copShareImage() {
+  const { s, P, cfg, days, name, range } = copShareFacts();
+  const W = 1200, H = 630, cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#0b1220'; g.fillRect(0, 0, W, H);
+  g.fillStyle = '#111a2c'; g.fillRect(40, 40, W - 80, H - 80);
+  const font = (w, px) => `${w} ${px}px system-ui, -apple-system, Segoe UI, sans-serif`;
+  g.fillStyle = '#94a3b8'; g.font = font(600, 26); g.fillText((name ? name + "'s " : '') + 'heat pump', 80, 100);
+  g.fillStyle = '#64748b'; g.font = font(400, 22); g.fillText(range, 80, 134);
+  g.fillStyle = '#e2e8f0'; g.font = font(800, 150); g.fillText(copN(s.cop, 1), 76, 300);
+  g.fillStyle = '#94a3b8'; g.font = font(600, 26); g.fillText('seasonal COP (SCOP)', 84, 345);
+  const line = (y, colour, label, val) => { g.fillStyle = colour; g.fillRect(84, y - 16, 18, 18); g.fillStyle = '#e2e8f0'; g.font = font(600, 28); g.fillText(`${label} ${val}`, 114, y); };
+  line(410, COP_HEAT, 'Heating', copN(s.heating_cop, 1));
+  line(456, COP_DHW, 'Hot water', copN(s.dhw_cop, 1));
+  g.fillStyle = '#94a3b8'; g.font = font(400, 24);
+  g.fillText(`${copN(s.heat_kwh, 0)} kWh of heat from ${copN(s.elec_kwh, 0)} kWh of electricity`, 84, 520);
+  if (s.p_per_kwh_heat != null) g.fillText(`Heat at ${copN(s.p_per_kwh_heat, 1)}p/kWh vs ${copN(s.gas_p_per_kwh_heat, 1)}p from a gas boiler`, 84, 556);
+  // daily COP bars, right half
+  const D = days.slice(-30), x0 = 640, y0 = 520, ch = 330, cw = 480;
+  const hi = Math.max(4, 2 * Math.ceil(Math.max(...D.flatMap((d) => [d.heating.cop || 0, d.dhw.cop || 0]), 1) / 2));
+  g.strokeStyle = '#1e293b'; g.lineWidth = 2;
+  [0, hi / 2, hi].forEach((v) => { const y = y0 - v / hi * ch; g.beginPath(); g.moveTo(x0, y); g.lineTo(x0 + cw, y); g.stroke(); g.fillStyle = '#64748b'; g.font = font(400, 18); g.fillText(copN(v, 0), x0 - 30, y + 6); });
+  const col = cw / Math.max(1, D.length), bw = Math.max(2, (col - 4) / 2);
+  D.forEach((d, i) => [[d.heating.cop, COP_HEAT, 0], [d.dhw.cop, COP_DHW, 1]].forEach(([v, colour, k]) => {
+    if (v == null) return;
+    const h = Math.min(hi, v) / hi * ch; g.globalAlpha = d.ok ? 1 : 0.4; g.fillStyle = colour;
+    g.fillRect(x0 + i * col + 1 + k * (bw + 1), y0 - h, bw, h); g.globalAlpha = 1;
+  }));
+  g.fillStyle = '#64748b'; g.font = font(400, 18); g.fillText('COP per day', x0, y0 - ch - 16);
+  g.fillText('Made with GridLock', W - 260, H - 60);
+  cv.toBlob((b) => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'heat-pump-cop.png'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); }, 'image/png');
+}
+function copShareHtml() {
+  const { s, cfg, days, name, range } = copShareFacts();
+  const e = (x) => String(x).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+  const rows = days.slice().reverse().map((d) => `<tr${d.ok ? '' : ' class="small"'}><td>${e(copDay(d.date))}</td><td>${copN(d.cop, 1)}</td><td>${copN(d.heating.cop, 1)}</td><td>${copN(d.dhw.cop, 1)}</td><td>${copN(d.heat_kwh, 0)}</td><td>${copN(d.elec_kwh, 1)}</td><td>${copN(d.outdoor, 1)}&deg;C</td></tr>`).join('');
+  const D = days.slice(-30), hi = Math.max(4, 2 * Math.ceil(Math.max(...D.flatMap((d) => [d.heating.cop || 0, d.dhw.cop || 0]), 1) / 2)), col = 600 / Math.max(1, D.length), bw = Math.max(2, (col - 4) / 2);
+  const bars = D.map((d, i) => [[d.heating.cop, COP_HEAT, 0, 'heating'], [d.dhw.cop, COP_DHW, 1, 'hot water']].map(([v, c, k, l]) => v == null ? '' : `<rect x="${(i * col + 1 + k * (bw + 1)).toFixed(1)}" y="${(200 - Math.min(hi, v) / hi * 190).toFixed(1)}" width="${bw.toFixed(1)}" height="${(Math.min(hi, v) / hi * 190).toFixed(1)}" rx="2" fill="${c}" opacity="${d.ok ? 1 : 0.4}"><title>${e(copDay(d.date))}: ${l} COP ${copN(v, 1)}</title></rect>`).join('')).join('');
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${e(name ? name + "'s heat pump" : 'Heat pump COP')}</title>
+<style>body{margin:0;background:#0b1220;color:#e2e8f0;font-family:system-ui,-apple-system,Segoe UI,sans-serif}main{max-width:760px;margin:0 auto;padding:32px 16px}.big{font-size:88px;font-weight:800;line-height:1}.dim{color:#94a3b8}.k{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:6px}table{width:100%;border-collapse:collapse;font-size:14px;margin-top:16px}td,th{padding:6px 4px;border-bottom:1px solid #1e293b;text-align:right}td:first-child,th:first-child{text-align:left}.small{opacity:.55}svg{width:100%;height:auto;margin-top:16px}</style></head>
+<body><main><div class="dim">${e(name ? name + "'s heat pump" : 'Heat pump')} &middot; ${e(range)}</div><div class="big">${copN(s.cop, 1)}</div><div class="dim">seasonal COP (SCOP): ${copN(s.heat_kwh, 0)} kWh of heat from ${copN(s.elec_kwh, 0)} kWh of electricity</div>
+<p><span class="k" style="background:${COP_HEAT}"></span>Heating ${copN(s.heating_cop, 1)} &nbsp; <span class="k" style="background:${COP_DHW}"></span>Hot water ${copN(s.dhw_cop, 1)}</p>
+${s.p_per_kwh_heat != null ? `<p class="dim">Heat at ${copN(s.p_per_kwh_heat, 1)}p per kWh, against ${copN(s.gas_p_per_kwh_heat, 1)}p from a ${copN((cfg.boiler_eff || 0.9) * 100, 0)}% gas boiler.</p>` : ''}
+<svg viewBox="0 0 600 210" role="img" aria-label="COP per day, heating and hot water">${bars}</svg>
+<table><tr><th>Day</th><th>COP</th><th>Heating</th><th>Hot water</th><th>Heat kWh</th><th>Elec kWh</th><th>Outside</th></tr>${rows}</table>
+<p class="dim" style="font-size:13px">COP from the heat pump's own meters, with an allowance for the indoor pump and standby. Made with GridLock.</p></main></body></html>`;
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([html], { type: 'text/html' })); a.download = 'heat-pump-cop.html'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
 // ---- Flex loads tab: plugs run in the cheapest half-hours ----
 // refresh() rebuilds the page every 30 s; unsaved edits live in flexDraft.
 let flexDraft = null, flexEnts = null, flexBusy = false, flexLast = null;
@@ -3814,6 +4030,9 @@ async function refresh() {
     <div class="tab-page" data-tab="flex">
       ${renderFlexLoads(d.flex_loads)}
     </div>
+    <div class="tab-page" data-tab="cop">
+      ${renderCop(d.cop)}
+    </div>
     <div class="tab-page" data-tab="billing">
       <div class="gl-wrap">
         <div class="gl-h">Daily cost history</div>
@@ -3908,6 +4127,7 @@ async function refresh() {
   const hasGridwarm = !!(d.thermal_zones && d.thermal_zones.length) || !!d.space_heating_settings;
   fillGridwarmDatalists();
   document.getElementById('gl-nav-gridwarm').style.display = hasGridwarm ? '' : 'none';
+  document.getElementById('gl-nav-cop').style.display = (d.cop && d.cop.available) ? '' : 'none';
   if (!hasGridwarm && currentTab === 'gridwarm') {
     currentTab = 'overview';
   }
@@ -3980,6 +4200,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_autho_solar()
         elif path.endswith("/api/edf-flextras"):
             self._handle_edf_flextras()
+        elif path.endswith("/api/cop-settings"):
+            self._handle_cop_settings()
         else:
             self._send(404, b"not found", "text/plain")
 
@@ -4163,6 +4385,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
                              if e.split(".")[0] in ("switch", "input_boolean", "sensor")}}
             self._send(200, json.dumps(out).encode(), "application/json")
         except Exception as exc:  # noqa: BLE001 - surface it to the caller, don't crash the server
+            self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
+
+    def _handle_cop_settings(self):
+        """COP tab settings: gas price, boiler efficiency, the meter allowance,
+        season start month and the name on the share card."""
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+            if not isinstance(body, dict):
+                self._send(400, json.dumps({"error": "expected an object"}).encode(), "application/json")
+                return
+            saved = save_cop_settings({**load_cop_settings(), **body})
+            self._send(200, json.dumps({"ok": True, "settings": saved}).encode(), "application/json")
+        except Exception as exc:  # noqa: BLE001
             self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
 
     def _handle_edf_flextras(self):
