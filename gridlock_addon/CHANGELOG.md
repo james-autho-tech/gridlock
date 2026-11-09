@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.80.0 - 2026-11-09
+
+### GridWarm warm-up
+- A thermostat turned up past the warm-up limit (default 20.5 °C) is taken as "I'm cold": the house warms to the limit with the flow capped (default 38 °C) instead of running flat out
+- Cap lifted if the house is well below the limit (default 1.5 °C), so a cold house still recovers
+- Thermostat set back to where it was after the warm-up (default 3 h) or when the night setback begins; one turned up during the night just runs its hours
+- Phone notification when a warm-up starts (with when the house should be warm) and when the thermostat is set back
+- Turning the thermostat down is always followed as-is; all settings on the GridWarm tab
+
 ## 3.79.0 - 2026-11-09
 
 ### Heat pump COP (new tab)

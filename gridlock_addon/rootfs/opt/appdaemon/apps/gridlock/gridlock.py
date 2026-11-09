@@ -3848,6 +3848,7 @@ class GridLock(hass.Hass):
                 "anticipation_max_adjust": (float(z.get("anticipation_max_adjust", 2.0))
                                             if z.get("active", True) and not z.get("flow_entity") else 0.0),
                 "night_setback": z.get("night_setback"),
+                "warmup": z.get("warmup"),
                 # Active control -- opt-in, off unless control_entity is
                 # explicitly set. Everything else about this zone (the
                 # prediction, the anticipation curve) stays advisory-only
@@ -4862,11 +4863,14 @@ class GridLock(hass.Hass):
         grid_rates = [(grid_rate_curve or rate_curve)[j] * 100.0 for j in idx]
         params = zone["params"]
         emitter, eta = zone["emitter_rated_w_at_dt50"], zone["cop_eta"]
+        # A warm-up (_warmup_check) caps the flow so a thermostat turned up
+        # warms the house efficiently instead of flat out.
+        fmax = zone.get("flow_max_eff") or zone["flow_max"]
         max_w = params.heat_max_power or 7000.0
         low_w = min(max_w, core_flow.emitter_output_w(
             zone["flow_min"] - zone["water_dt"] / 2.0, tgt[0] if tgt else internal_temp, emitter))
         cop_low = [core_flow.cop_estimate(zone["flow_min"], e, eta) for e in ext]
-        cop_high = [core_flow.cop_estimate(zone["flow_max"], e, eta) for e in ext]
+        cop_high = [core_flow.cop_estimate(fmax, e, eta) for e in ext]
         # Slots where the tank's run is booked: the unit can't heat the house.
         t0 = self._slot_floor(now)
         blocked = []
@@ -4876,7 +4880,7 @@ class GridLock(hass.Hass):
             if any(ws < s1 and we > s0 for ws, we in getattr(self, "_dhw_busy", []) or []):
                 blocked.append(i)
         segment_curve = [core_flow.heat_segments(tgt[i], ext[i], emitter, eta, zone["flow_min"],
-                                                 zone["flow_max"], zone["water_dt"], 5.0, max_w)
+                                                 fmax, zone["water_dt"], 5.0, max_w)
                          for i in range(len(ext))]
         hp = self._hp_live(zone)
         delivering_kwh = ((hp["thermal_kw"] or 0.0) * slot_hours
@@ -4905,7 +4909,7 @@ class GridLock(hass.Hass):
         else:
             required_w = max(0.0, core_flow.steady_state_loss_w(internal_temp, ext[0] if ext else 10.0, params))
         wanted = core_flow.flow_setpoint_for_power(
-            required_w, internal_temp, emitter, zone["water_dt"], zone["flow_min"], zone["flow_max"], 1.0)
+            required_w, internal_temp, emitter, zone["water_dt"], zone["flow_min"], fmax, 1.0)
         ext_now = ext[0] if ext else 10.0
         # The whole horizon (48 h) for the battery plan's heat pump load --
         # the published plan below is the dashboard's 24 h view, and
@@ -4938,7 +4942,7 @@ class GridLock(hass.Hass):
                           "hot_water": "yes" if i in blocked else "no",
                           "flow": core_flow.flow_setpoint_for_power(
                               p["heat_kwh"] * 1000.0 / slot_hours, p["temp"], emitter,
-                              zone["water_dt"], zone["flow_min"], zone["flow_max"], 1.0)
+                              zone["water_dt"], zone["flow_min"], fmax, 1.0)
                           if p["heat_kwh"] > 1e-6 else None}
                          for i, p in enumerate(today)]}
 
@@ -4986,6 +4990,111 @@ class GridLock(hass.Hass):
                 return value
         zone["_reading_source"] = None
         return None
+
+    def _warmup_check(self, zone, now, target, internal_temp):
+        """A thermostat turned up past the zone's warm-up limit is "I'm cold",
+        not "heat flat out": the house warms to the limit with the flow
+        capped (lifted only if the house is well below it), and once the
+        warm-up has had its hours, or the night setback begins, the
+        thermostat is set back to where it was. Turning it down is followed
+        as-is. Returns the target to plan for."""
+        zone["flow_max_eff"] = zone["flow_max"]
+        w = zone.get("warmup")
+        if not w or zone.get("is_tank") or target is None or not zone.get("target_temp_attribute"):
+            return target
+        learn = self.thermal_learning_state.setdefault(zone["name"], {})
+        st = learn.get("warmup")
+        top = float(w["max_temp"])
+        if target <= top + 0.05:
+            learn["warmup_last_ok"] = target
+            if st:
+                learn["warmup"] = None
+                self._save_json("thermal_learning_state.json", self.thermal_learning_state)
+                self._log_decision(f"GridWarm: {zone['name']} warm-up over",
+                                   f"Thermostat back at {target:.1f}°C")
+            return target
+        back_to = min(top, float(learn.get("warmup_last_ok") or top - 0.5))
+        setback = zone.get("night_setback")
+        in_setback = bool(setback) and core_dhw.night_mask(
+            self._slot_floor(now).astimezone(), 1, setback["window"], SLOT_MIN)[0]
+        if not st or abs(float(st.get("raw", 0)) - target) > 0.05:
+            st = {"since": now.isoformat(), "raw": target, "back_to": back_to, "announced": False,
+                  "in_setback": in_setback}
+            learn["warmup"] = st
+            self._save_json("thermal_learning_state.json", self.thermal_learning_state)
+            self._log_decision(f"GridWarm: {zone['name']} warm-up",
+                               f"Thermostat turned up to {target:.1f}°C: warming to {top:.1f}°C, "
+                               f"flow capped at {float(w['flow_cap']):.0f}°C")
+        try:
+            since = self._iso(st["since"])
+        except (TypeError, ValueError, KeyError):
+            since = now
+        controllable = (self.get_state(self.ent_gridwarm_mode) == "active"
+                        and self.get_state(self._thermal_pause_helper(zone["name"])) != "off")
+        # The night setback ends a warm-up that began before it; one asked
+        # for during the night just runs its hours.
+        setback_ends_it = in_setback and not st.get("in_setback")
+        if controllable and (now - since >= timedelta(hours=float(w["reset_hours"])) or setback_ends_it):
+            try:
+                self.call_service("climate/set_temperature", entity_id=zone["target_temp_entity"],
+                                  temperature=st["back_to"])
+                learn["warmup"] = None
+                learn["warmup_last_ok"] = st["back_to"]
+                self._save_json("thermal_learning_state.json", self.thermal_learning_state)
+                why = "night setback" if setback_ends_it else f"{float(w['reset_hours']):g} h warm-up"
+                self._log_decision(f"GridWarm: {zone['name']} thermostat set back",
+                                   f"{target:.1f}°C -> {st['back_to']:.1f}°C after the {why}")
+                self._warmup_notify(w, "Heating back to normal",
+                                    f"The thermostat has gone back to {st['back_to']:.1f}°C after the warm-up.")
+                return st["back_to"]
+            except Exception as exc:  # noqa: BLE001 - tried again next tick
+                self.log(f"GridWarm: setting the thermostat back failed: {exc!r}", level="WARNING")
+        cold = internal_temp is not None and internal_temp < top - float(w["release_c"])
+        if not cold:
+            zone["flow_max_eff"] = min(zone["flow_max"], float(w["flow_cap"]))
+        return top
+
+    def _warmup_announce(self, zone, now, flow):
+        """Once per warm-up, after the plan: tell whoever turned it up that
+        it's happening, and roughly when the house gets there."""
+        st = self.thermal_learning_state.get(zone["name"], {}).get("warmup")
+        w = zone.get("warmup")
+        if not st or not w or st.get("announced"):
+            return
+        st["announced"] = True
+        self._save_json("thermal_learning_state.json", self.thermal_learning_state)
+        top = float(w["max_temp"])
+        eta = None
+        for p in (flow or {}).get("plan") or []:
+            if p.get("temp") is not None and p["temp"] >= top - 0.2:
+                eta = p.get("x")
+                break
+        tz = self._local_tz()
+        when = ""
+        if eta:
+            try:
+                when = f" It should be there by about {self._iso(eta).astimezone(tz):%H:%M}."
+            except (TypeError, ValueError):
+                when = ""
+        try:
+            reset_at = (self._iso(st["since"]) + timedelta(hours=float(w["reset_hours"]))).astimezone(tz)
+            reset = f" The thermostat goes back to {st['back_to']:.1f}°C at {reset_at:%H:%M} (or at the night setback)."
+        except (TypeError, ValueError, KeyError):
+            reset = ""
+        self._warmup_notify(w, "Warming up gently",
+                            f"Thermostat turned up to {float(st['raw']):.1f}°C. The heat pump is warming the house "
+                            f"to {top:.1f}°C at an efficient flow temperature, so it doesn't use far more "
+                            f"electricity.{when}{reset}")
+
+    def _warmup_notify(self, w, title, message):
+        service = (w or {}).get("notify") or self.notify_service
+        try:
+            if service:
+                self.call_service(service.replace(".", "/", 1), title=title, message=message)
+            else:
+                self.call_service("persistent_notification/create", title=title, message=message)
+        except Exception as exc:  # noqa: BLE001 - a notification never breaks the tick
+            self.log(f"GridWarm warm-up notification failed: {exc!r}", level="WARNING")
 
     def _thermal_target_temp(self, zone):
         ent = zone["target_temp_entity"]
@@ -5279,6 +5388,7 @@ class GridLock(hass.Hass):
         target_temp = self._thermal_target_temp(zone)
         if target_temp is None:
             target_temp = internal_temp
+        target_temp = self._warmup_check(zone, now, target_temp, internal_temp)
         external_now = self._thermal_external_temp(zone)
         heating_on = self._thermal_heating_on(zone)
         if not zone["is_tank"]:
@@ -5368,6 +5478,7 @@ class GridLock(hass.Hass):
             except Exception as exc:  # noqa: BLE001 — a plan failure must not drop the zone
                 self.log(f"GridWarm: flow plan for '{zone['name']}' failed: {exc!r}", level="WARNING")
                 flow = None
+            self._warmup_announce(zone, now, flow)
             if flow and flow["plan_status"] != "empty":
                 # The flow plan is the real forecast for this zone -- its
                 # cost figures supersede the on/off simulation's.

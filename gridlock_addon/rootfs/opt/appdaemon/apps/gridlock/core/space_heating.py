@@ -18,6 +18,7 @@ hides the zone entirely.
 """
 
 import copy
+import re
 
 DEFAULTS = {
     # Show the zone at all. Off hides it (nothing predicted, nothing
@@ -51,6 +52,17 @@ DEFAULTS = {
     # house on the cheap overnight rate to be at the day target by the
     # window's end, held for the first two hours of the morning.
     "night_setback_enabled": True,
+    # Warm-up: a thermostat turned up past warmup_max_temp is taken as "I'm
+    # cold" -- the house warms to warmup_max_temp with the flow capped at
+    # warmup_flow_cap (lifted if the house is warmup_release_c below), and
+    # the thermostat is set back after warmup_reset_hours or at the night
+    # setback. Turning it down is always followed as-is.
+    "warmup_enabled": True,
+    "warmup_max_temp": 20.5,
+    "warmup_flow_cap": 38.0,
+    "warmup_reset_hours": 3.0,
+    "warmup_release_c": 1.5,
+    "warmup_notify": "",      # a notify service; blank = GridLock's own
     "night_setback_temp": 16.0,
     "night_setback_window": "22:00-06:00",
     # The heat pump measures the outdoor temperature itself, at the
@@ -512,6 +524,10 @@ NUMERIC_BOUNDS = {
     "emergency_stop_temp": (4.0, 20.0),
     "emergency_flow": (20.0, 45.0),
     "solar_gain_w_per_kw_pv": (0.0, 2000.0),
+    "warmup_max_temp": (15.0, 25.0),
+    "warmup_flow_cap": (25.0, 60.0),
+    "warmup_reset_hours": (0.5, 12.0),
+    "warmup_release_c": (0.5, 5.0),
 }
 
 ENTITY_FIELDS = ("internal_temp_entity", "internal_temp_fallback_entity",
@@ -522,7 +538,8 @@ ENTITY_FIELDS = ("internal_temp_entity", "internal_temp_fallback_entity",
                  "outdoor_current_entity", "defrost_entity", "mode_entity", "start_delta_entity",
                  "target_temp_entity",
                  "heat_counter_entity", "elec_counter_entity")
-BOOL_FIELDS = ("configured", "tariff_optimise", "notify_external_commands", "night_setback_enabled")
+BOOL_FIELDS = ("configured", "tariff_optimise", "notify_external_commands", "night_setback_enabled",
+               "warmup_enabled")
 
 
 def _clean_entity(value):
@@ -586,6 +603,9 @@ def merge_settings(saved):
         out["night_setback_window"] = clean_window(saved["night_setback_window"]) or out["night_setback_window"]
     if out["flow_max"] < out["flow_min"]:
         out["flow_max"] = out["flow_min"]
+    if "warmup_notify" in saved:
+        svc = str(saved.get("warmup_notify") or "").strip()
+        out["warmup_notify"] = svc if re.match(r"^notify\.[a-z0-9_]+$", svc) else ""
     # The hot water zone rides along in the same file under its own key.
     out["hot_water"] = merge_hot_water(saved.get("hot_water"))
     return out
@@ -604,6 +624,10 @@ def to_zone_cfg(settings):
         "target_temp_entity": settings.get("target_temp_entity"),
         "night_setback": ({"temp": settings["night_setback_temp"], "window": settings["night_setback_window"]}
                           if settings.get("night_setback_enabled") else None),
+        "warmup": ({"max_temp": settings["warmup_max_temp"], "flow_cap": settings["warmup_flow_cap"],
+                    "reset_hours": settings["warmup_reset_hours"], "release_c": settings["warmup_release_c"],
+                    "notify": settings.get("warmup_notify") or ""}
+                   if settings.get("warmup_enabled") else None),
         # A climate entity's state is its mode; the setpoint is an attribute.
         "target_temp_attribute": ("temperature" if str(settings.get("target_temp_entity") or "").startswith("climate.")
                                   else None),
