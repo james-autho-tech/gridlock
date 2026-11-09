@@ -24,6 +24,7 @@ from core.space_heating import diff_from_defaults as space_heating_diff  # noqa:
 from core import flex_loads as core_flex  # noqa: E402
 from core import flextras as core_flextras  # noqa: E402
 from core import cop_report as core_cop  # noqa: E402
+from core import daily_summary as core_summary  # noqa: E402
 
 SUPERVISOR_TOKEN = os.environ["SUPERVISOR_TOKEN"]
 PORT = 8099
@@ -196,6 +197,47 @@ def autho_solar_status(sensor):
 FLEX_SETTINGS_PATH = os.path.join(ENGINE_DIR, "flex_loads_settings.json")
 FLEXTRAS_SETTINGS_PATH = os.path.join(ENGINE_DIR, "edf_flextras_settings.json")
 COP_SETTINGS_PATH = os.path.join(ENGINE_DIR, "cop_settings.json")
+NOTIFY_SETTINGS_PATH = os.path.join(ENGINE_DIR, "notify_settings.json")
+
+
+def load_notify_settings():
+    try:
+        with open(NOTIFY_SETTINGS_PATH) as f:
+            return core_summary.clean_settings(json.load(f))
+    except (OSError, ValueError):
+        return core_summary.clean_settings({})
+
+
+def save_notify_settings(settings):
+    cleaned = core_summary.clean_settings(settings)
+    tmp = NOTIFY_SETTINGS_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(cleaned, f)
+    os.replace(tmp, NOTIFY_SETTINGS_PATH)
+    return cleaned
+
+
+def ha_notify_services():
+    """Every notify.* action HA offers (phones first)."""
+    req = urllib.request.Request("http://supervisor/core/api/services",
+                                 headers={"Authorization": f"Bearer {SUPERVISOR_TOKEN}"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            domains = json.load(resp)
+    except (urllib.error.URLError, TimeoutError, ValueError):
+        return []
+    names = [f"notify.{k}" for d in domains if d.get("domain") == "notify" for k in (d.get("services") or {})]
+    return sorted(names, key=lambda n: (not n.startswith("notify.mobile_app_"), n))
+
+
+def ha_service(domain_service, **data):
+    """POST an action with plain data (no entity_id) -- notify actions take none."""
+    req = urllib.request.Request(
+        f"http://supervisor/core/api/services/{domain_service}",
+        data=json.dumps(data).encode(), method="POST",
+        headers={"Authorization": f"Bearer {SUPERVISOR_TOKEN}", "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return resp.status
 
 
 def load_cop_settings():
@@ -559,6 +601,7 @@ def build_status():
         "autho_solar": autho_solar_status(get("sensor.gridlock_autho_solar") or {}),
         "flex_loads": flex_status(get("sensor.gridlock_flex_loads") or {}),
         "cop": cop_status(),
+        "notify": load_notify_settings(),
         "weather": find_weather_entity(states),
         "mode_active": status_attrs.get("battery_risk_profile") or "balanced",
         "mode_override": (get("input_select.gridlock_mode_override") or {}).get("state", "auto"),
@@ -1101,6 +1144,7 @@ PAGE = r"""<!doctype html>
   <button class="gl-nav-btn" data-tab="tariffs">Tariffs</button>
   <div class="gl-side-h">System</div>
   <button class="gl-nav-btn" data-tab="warranty">Warranty</button>
+  <button class="gl-nav-btn" data-tab="notify">Notifications</button>
   <button class="gl-nav-btn" data-tab="entities">Entities</button>
   <button class="gl-nav-btn" data-tab="log">Log</button>
 </aside>
@@ -1174,6 +1218,7 @@ function selectTab(tab) {
   document.querySelectorAll('.tab-page').forEach(p => p.style.display = (p.dataset.tab === tab) ? '' : 'none');
   if (tab === 'gridwarm') loadGridwarmEntities();
   if (tab === 'flex') loadFlexEntities();
+  if (tab === 'notify') loadNotifyServices();
 }
 document.querySelectorAll('.gl-nav-btn').forEach(b => b.addEventListener('click', () => selectTab(b.dataset.tab)));
 function dotColor(state) {
@@ -2547,6 +2592,48 @@ async function saveAuthoSolar(clear) {
     else refresh();
   } catch (e) { window.alert('Failed to save: network error.'); }
   authoBusy = false;
+}
+// ---- Notifications: the phone, alerts, the evening summary ----
+let notifyServices = null, notifyLast = null;
+async function loadNotifyServices() {
+  if (notifyServices) return;
+  try {
+    notifyServices = (await (await fetch('api/notify-services')).json()).services || [];
+    const page = document.querySelector('.tab-page[data-tab="notify"]');
+    if (page && notifyLast) page.innerHTML = renderNotify(notifyLast);
+  } catch (e) { notifyServices = []; }
+}
+function renderNotify(n) {
+  notifyLast = n = n || { service: '', alerts: true, summary: true, summary_time: '21:00' };
+  const inp = 'background:#0b1220;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:6px 8px;font-family:inherit';
+  const opts = [''].concat(notifyServices || []);
+  if (n.service && !opts.includes(n.service)) opts.push(n.service);
+  const label = (s) => !s ? 'None (HA notifications panel only)' : s.replace(/^notify\.mobile_app_/, 'Phone: ').replace(/^notify\./, '');
+  return `<div class="gl-wrap"><div class="gl-h">Notifications</div>
+    <div class="gl-sub">Where GridLock tells you what's happening. Everything also goes to Home Assistant's notifications panel.</div>
+    <div style="display:grid;gap:14px;margin-top:12px;max-width:560px">
+      <label class="gl-sub">Send to<br><select id="nt-service" style="${inp};width:100%">${opts.map((s) => `<option value="${esc(s)}"${s === n.service ? ' selected' : ''}>${esc(label(s))}</option>`).join('')}</select>
+        ${notifyServices === null ? '<span style="color:var(--dim)">loading phones...</span>' : ''}</label>
+      <label class="gl-sub"><input type="checkbox" id="nt-alerts"${n.alerts ? ' checked' : ''}> Important alerts: Storm Watch, power cuts, going off-grid, Axle and saving sessions, a load that won't run, heating commands overridden</label>
+      <label class="gl-sub"><input type="checkbox" id="nt-summary"${n.summary ? ' checked' : ''}> Evening summary at <input id="nt-time" type="time" value="${esc(n.summary_time)}" style="${inp}">: today's cost, saving, solar and heat pump COP, and tonight's battery, hot water and heating plan</label>
+      <div class="gl-sub">Thermostat warm-up messages go here too, unless GridWarm has its own phone set.</div>
+      <div style="display:flex;gap:8px"><button class="gl-btn-sm" onclick="saveNotify()">Save</button><button class="gl-btn-sm" onclick="testNotify()">Send a test</button></div>
+    </div></div>`;
+}
+async function saveNotify() {
+  const body = { service: document.getElementById('nt-service').value, alerts: document.getElementById('nt-alerts').checked,
+    summary: document.getElementById('nt-summary').checked, summary_time: document.getElementById('nt-time').value };
+  try {
+    const r = await fetch('api/notify-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!r.ok) window.alert(((await r.json()) || {}).error || 'Failed to save.'); else refresh();
+  } catch (e) { window.alert('Failed to save: network error.'); }
+}
+async function testNotify() {
+  try {
+    const r = await fetch('api/notify-test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ service: document.getElementById('nt-service').value }) });
+    const out = await r.json();
+    window.alert(r.ok ? 'Sent. Check the phone.' : (out.error || 'Failed.'));
+  } catch (e) { window.alert('Failed: network error.'); }
 }
 // ---- Heat pump COP tab: the unit's own kWh counters, day by day ----
 // Heating and hot water colours: validated together (dataviz validator,
@@ -4039,6 +4126,9 @@ async function refresh() {
     <div class="tab-page" data-tab="cop">
       ${renderCop(d.cop)}
     </div>
+    <div class="tab-page" data-tab="notify">
+      ${renderNotify(d.notify)}
+    </div>
     <div class="tab-page" data-tab="billing">
       <div class="gl-wrap">
         <div class="gl-h">Daily cost history</div>
@@ -4157,6 +4247,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_gridwarm_entities()
         elif path.endswith("/api/flex-entities"):
             self._handle_flex_entities()
+        elif path.endswith("/api/notify-services"):
+            self._send(200, json.dumps({"services": ha_notify_services()}).encode(), "application/json")
         elif path.endswith("/api/autho-solar/day"):
             query = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
             date = (query.get("date") or [""])[0]
@@ -4208,6 +4300,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_edf_flextras()
         elif path.endswith("/api/cop-settings"):
             self._handle_cop_settings()
+        elif path.endswith("/api/notify-settings"):
+            self._handle_notify_settings()
+        elif path.endswith("/api/notify-test"):
+            self._handle_notify_test()
         else:
             self._send(404, b"not found", "text/plain")
 
@@ -4391,6 +4487,34 @@ class Handler(http.server.BaseHTTPRequestHandler):
                              if e.split(".")[0] in ("switch", "input_boolean", "sensor")}}
             self._send(200, json.dumps(out).encode(), "application/json")
         except Exception as exc:  # noqa: BLE001 - surface it to the caller, don't crash the server
+            self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
+
+    def _handle_notify_settings(self):
+        """Notifications page: the phone, important alerts on/off, the evening summary and its time."""
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+            if not isinstance(body, dict):
+                self._send(400, json.dumps({"error": "expected an object"}).encode(), "application/json")
+                return
+            saved = save_notify_settings({**load_notify_settings(), **body})
+            self._send(200, json.dumps({"ok": True, "settings": saved}).encode(), "application/json")
+        except Exception as exc:  # noqa: BLE001
+            self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
+
+    def _handle_notify_test(self):
+        """A test message to the chosen phone."""
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+            svc = core_summary.clean_settings({"service": (body or {}).get("service")})["service"]
+            if not svc:
+                self._send(400, json.dumps({"error": "pick a phone first"}).encode(), "application/json")
+                return
+            ha_service(svc.replace(".", "/", 1), title="GridLock",
+                       message="Test message: GridLock can reach this phone.")
+            self._send(200, json.dumps({"ok": True}).encode(), "application/json")
+        except Exception as exc:  # noqa: BLE001
             self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
 
     def _handle_cop_settings(self):

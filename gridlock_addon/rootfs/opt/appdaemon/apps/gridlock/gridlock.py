@@ -42,6 +42,7 @@ from core import ev_model as core_ev_model
 from core import flex_loads as core_flex
 from core import flextras as core_flextras
 from core import cop_report as core_cop
+from core import daily_summary as core_summary
 
 # First day the risk-profile comparison is trusted (see _publish savings).
 PROFILE_COMPARISON_VALID_FROM = "2026-10-21"
@@ -49,7 +50,8 @@ PROFILE_COMPARISON_VALID_FROM = "2026-10-21"
 STATE_FILES = ("load_profile.json", "savings_state.json", "savings_history.json",
                "cost_tracking_state.json", "decision_log.json",
                "circuit_state.json", "circuit_history.json", "solar_accuracy.json",
-               "autho_solar_state.json", "flex_loads_state.json", "cop_ledger.json")
+               "autho_solar_state.json", "flex_loads_state.json", "cop_ledger.json",
+               "notify_state.json")
 
 # publish_plan()'s per-slot row shape — a single source of truth for both
 # the row length it builds and the "columns" name list it publishes
@@ -1012,6 +1014,8 @@ class GridLock(hass.Hass):
         self.run_every(self.poll_carbon_intensity, "now+2", 1800)
         # Every 10 min, as Axle's own HA sensor does; a no-op without a key.
         self.run_every(self.poll_axle, "now+15", 600)
+        # The evening summary to the phone, at the dashboard's chosen time.
+        self.run_every(self._evening_summary_check, "now+45", 60)
         self._axle_mtime_seen = None
         # Once, before the first Autho Solar poll sends them: half-hours rebuilt
         # from the PV energy counter's history (a no-op once done).
@@ -2076,15 +2080,74 @@ class GridLock(hass.Hass):
                             "restore": f.get("estimatedRestorationTimeUtc")}
                            for f in local]}
 
+    def _notify_settings(self):
+        return core_summary.clean_settings(self._load_dashboard_json("notify_settings.json", {}))
+
+    def _phone_service(self):
+        """The phone GridLock notifies: the dashboard's choice, else apps.yaml's."""
+        return self._notify_settings()["service"] or self.notify_service
+
     def _notify(self, title, message):
         self.call_service("persistent_notification/create",
                           title=title, message=message)
-        if self.notify_service:
+        service = self._phone_service()
+        if service and self._notify_settings()["alerts"]:
             try:
-                self.call_service(self.notify_service.replace(".", "/", 1),
+                self.call_service(service.replace(".", "/", 1),
                                   title=title, message=message)
             except Exception as exc:  # noqa: BLE001 — a bad notify_service shouldn't break the tick
                 self.log(f"notify_service call failed: {exc!r}", level="WARNING")
+
+    def _evening_summary_check(self, kwargs):
+        """Once a day at the dashboard's chosen time: today and tonight's plan
+        to the phone (core/daily_summary.py)."""
+        cfg = self._notify_settings()
+        service = cfg["service"] or self.notify_service
+        now = self.get_now().astimezone(self._local_tz())
+        if not cfg["summary"] or not service or now.strftime("%H:%M") < cfg["summary_time"]:
+            return
+        state = self._load_json("notify_state.json", {})
+        if state.get("summary_day") == now.date().isoformat():
+            return
+        state["summary_day"] = now.date().isoformat()
+        self._save_json("notify_state.json", state)
+        try:
+            title, message = core_summary.compose(*self._summary_figures(now))
+            self.call_service(service.replace(".", "/", 1), title=title, message=message)
+            self.log(f"Evening summary sent: {message!r}")
+        except Exception as exc:  # noqa: BLE001 - tried again tomorrow
+            self.log(f"Evening summary failed: {exc!r}", level="WARNING")
+
+    def _summary_figures(self, now):
+        """(today, tonight, tomorrow) for core_summary.compose, from what the
+        engine has already published."""
+        tz = self._local_tz()
+        today = {"cost_gbp": self.get_float_state("sensor.gridlock_calculated_net_cost_today", None),
+                 "saved_gbp": self.get_state("sensor.gridlock_savings", attribute="today"),
+                 "solar_kwh": self._read_pv_counter()}
+        days = core_cop.summarise(self._cop_ledger, now.date(), self._cop_settings(), show_days=1)["days"]
+        if days and days[-1]["date"] == now.date().isoformat() and days[-1]["cop"] is not None:
+            today.update(cop=days[-1]["cop"], heat_kwh=days[-1]["heat_kwh"], hp_elec_kwh=days[-1]["elec_kwh"])
+        table = self.get_state("sensor.gridlock_soc_forecast", attribute="plan_table") or {}
+        tonight = core_summary.plan_tonight(table.get("columns"), table.get("rows"))
+        hhmm = lambda iso: self._iso(iso).astimezone(tz).strftime("%H:%M")  # noqa: E731
+        try:
+            for z in self.get_state("sensor.gridlock_gridwarm", attribute="zones") or []:
+                d = z.get("dhw") or {}
+                if z.get("is_tank") and d.get("window_start") and d.get("status") in ("waiting", "running"):
+                    if self._iso(d["window_start"]) - now < timedelta(hours=14):
+                        tonight.update(dhw_from=hhmm(d["window_start"]), dhw_to=hhmm(d["window_end"]),
+                                       dhw_temp=d.get("daily_target"))
+            sh = self.get_state("sensor.gridlock_gridwarm", attribute="space_heating_settings") or {}
+            if sh.get("night_setback_enabled") in (True, "true") and sh.get("night_setback_window"):
+                tonight.update(setback_temp=sh.get("night_setback_temp"),
+                               setback_from=str(sh["night_setback_window"]).split("-")[0])
+        except (TypeError, ValueError, KeyError):
+            pass
+        tomorrow_day = (now + timedelta(days=1)).date()
+        solar = sum(v for t, v in self._planning_pv_curve(now).items()
+                    if t.astimezone(tz).date() == tomorrow_day)
+        return today, tonight, {"solar_kwh": solar if solar > 0 else None}
 
     def _thermal_derate_factor(self):
         """Scale factor (1.0 = full rate) applied to charge/discharge
@@ -5087,7 +5150,7 @@ class GridLock(hass.Hass):
                             f"electricity.{when}{reset}")
 
     def _warmup_notify(self, w, title, message):
-        service = (w or {}).get("notify") or self.notify_service
+        service = (w or {}).get("notify") or self._phone_service()
         try:
             if service:
                 self.call_service(service.replace(".", "/", 1), title=title, message=message)

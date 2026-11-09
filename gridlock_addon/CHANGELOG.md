@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.81.0 - 2026-11-09
+
+### Notifications (new page, System)
+- Pick the phone from the dashboard (any notify action HA offers); overrides apps.yaml's `notify_service`
+- Important alerts to the phone on/off (Storm Watch, power cuts, off-grid, Axle and saving sessions, loads that won't run, heating commands overridden)
+- Evening summary at a chosen time (default 21:00): today's cost, saving, solar and heat pump COP; tonight's battery charge, hot water run and heating setback; tomorrow's solar
+- Send a test message from the page; GridWarm warm-ups use this phone unless set separately
+
 ## 3.80.0 - 2026-11-09
 
 ### GridWarm warm-up
