@@ -100,6 +100,10 @@ def engine(tmp_path, monkeypatch):
     g.cheap_rate = 0.10
     g.degradation = 0.01
     g.cfg = types.SimpleNamespace(efficiency=0.9)
+    # Heat pump COP bookkeeping (initialize() sets these on a real install).
+    g._cop_ledger = {}
+    g._cop_tick_at = None
+    g._cop_calibrated_day = None
     return g, gridlock
 
 
@@ -740,6 +744,59 @@ def test_a_warm_tank_still_gets_its_night_fill(engine):
     g._publish_thermal_forecast(t23 + timedelta(minutes=m + 10))
     d = {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}["Hot water"]["dhw"]
     assert d["daily_target"] == 55.0
+
+
+def test_a_night_fill_frees_the_house_as_soon_as_the_tank_is_full(engine):
+    # 12-13 Nov 2026: a 24 C tank booked a 4 h night run at 23:00, the tank
+    # was full at 00:13, and the house still couldn't heat until 03:05.
+    g, _ = engine
+    _seed_house(g, room_temp="18.0")
+    _seed_tank(g)
+    from datetime import timedelta
+    with open(g._dashboard_path("gridwarm_settings.json"), "w") as f:
+        json.dump({"hot_water": {"legionella_enabled": False}}, f)
+    st = g.states
+    sp_ent = "number.loft_heatpump_controller_set_dhw_tank_temperature_t5s"
+    st[sp_ent]["state"] = "45.0"
+    st["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "24.0"
+    now = g.get_now()
+    t23 = now.astimezone().replace(hour=23, minute=0, second=0, microsecond=0).astimezone(now.tzinfo)
+    g.build_slots = lambda now_: _peak_and_night_slots(g, now_.replace(minute=0, second=0, microsecond=0))
+
+    def zones():
+        return {z["name"]: z for z in g.published["sensor.gridlock_gridwarm"]["attributes"]["zones"]}
+
+    for m in range(0, 390, 30):
+        g._publish_thermal_forecast(t23 + timedelta(minutes=m))
+        if zones()["Hot water"]["dhw"]["committed"]:
+            break
+    d = zones()["Hot water"]["dhw"]
+    assert d["committed"] is True and d["daily_target"] == 53.0
+    start = t23 + timedelta(minutes=m)
+    assert g._iso(d["window_end"]) - start >= timedelta(hours=3)     # sized for a cold tank
+    for svc, kw in g.calls:
+        if svc == "number/set_value" and kw["target"]["entity_id"] == sp_ent:
+            st[sp_ent]["state"] = str(kw["value"])
+    # Mid-run, still heating: the booking holds and the house waits.
+    st["sensor.loft_heatpump_controller_active_state"]["state"] = "DHW"
+    st["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "45.0"
+    g._publish_thermal_forecast(start + timedelta(minutes=40))
+    assert zones()["Hot water"]["dhw"]["committed"] is True
+    # 53 reached, the unit stops by itself: the run is over now, not at 03:00.
+    st["sensor.loft_heatpump_controller_active_state"]["state"] = "Idle"
+    st["sensor.loft_heatpump_controller_water_tank_temperature_t5"]["state"] = "53.0"
+    g.calls.clear()
+    g._publish_thermal_forecast(start + timedelta(minutes=75))
+    z = zones()
+    assert z["Hot water"]["dhw"]["committed"] is False
+    assert all(p["hot_water"] == "no" for p in z["House"]["flow"]["plan"])
+    assert ("number/set_value", {"target": {"entity_id": sp_ent}, "value": 45.0}) in g.calls
+    assert ("switch/turn_off", {"target": {"entity_id": "switch.loft_heatpump_controller_power_dhw_t5s"}}) in g.calls
+    # Restoring an ordinary night fill's setpoint isn't called a legionella cycle.
+    assert not any("Legionella" in e["reason"] for e in g.decision_log)
+    # And the night's fill isn't booked again.
+    g._publish_thermal_forecast(start + timedelta(minutes=105))
+    assert zones()["Hot water"]["dhw"]["committed"] is False
 
 
 def test_a_full_tank_skips_the_night_fill(engine):

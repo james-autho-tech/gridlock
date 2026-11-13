@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.81.2 - 2026-11-13
+
+### GridWarm hot water
+- A hot water run ends once the tank is at its target and the unit has stopped, not at the end of its booked window; the house can heat straight away (a 4 h night run from a cold tank kept the house off for 3 h after the tank was full)
+- Decision log calls an ordinary run's setpoint change "Hot water run" / "Run over, setpoint restored"; "Legionella cycle" only for a real one
+
+### Tests
+- Engine test fixture sets the COP bookkeeping, so the House zone tests run again (20 were failing since 3.79.0)
+
 ## 3.81.1 - 2026-11-09
 
 ### GridWarm dashboard

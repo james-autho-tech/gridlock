@@ -4701,6 +4701,17 @@ class GridLock(hass.Hass):
             # A daytime top-up goes to the normal setpoint, no further; the
             # ready-by check's only as far as the ready-by needs.
             daily_target = committed.get("to") or base_sp
+        if (committed and not lg.get("phase") and not lg_due and tank_temp is not None
+                and tank_temp >= (committed.get("to") or max(daily_target, base_sp)) - 1.0
+                and not self._thermal_heating_on(zone)):
+            # The tank is at what this run heats it to and the unit has
+            # stopped heating it: the run is over. Holding the booking to its
+            # sized end (up to 4 h from a cold tank) kept the house planned
+            # around a tank that was already full, with nothing heating either.
+            # Within 1 °C (whole-degree sensor, the unit stops a hair short),
+            # and only once the unit itself has stopped, so it's never cut short.
+            state["dhw_last_window_end"] = now.isoformat()
+            committed = state["dhw_window"] = None
         if committed:
             start_iso, end_iso = committed["start"], committed["end"]
         elif window:
@@ -6114,8 +6125,10 @@ class GridLock(hass.Hass):
             raising = live_sp is None or sw > live_sp + 0.4
             if (live_sp is None or abs(live_sp - sw) > 0.4) and not (paused and raising):
                 self.call_service("number/set_value", target={"entity_id": tgt_ent}, value=float(sw))
+                lg_on = ((result.get("dhw") or {}).get("legionella") or {}).get("phase") in ("heating", "holding")
                 self._log_decision(f"GridWarm: {name} setpoint {sw:.0f}°C",
-                                   "Legionella cycle" if raising else "Legionella cycle over — setpoint restored")
+                                   ("Legionella cycle" if lg_on else "Hot water run") if raising
+                                   else "Run over, setpoint restored")
         # Low and slow hot water: the unit's silent mode for the duration of
         # a run GridWarm started, and off again after -- only ever undoing
         # what it switched on itself.
