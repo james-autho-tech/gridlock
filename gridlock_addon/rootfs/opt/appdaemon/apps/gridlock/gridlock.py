@@ -42,6 +42,7 @@ from core import ev_model as core_ev_model
 from core import flex_loads as core_flex
 from core import flextras as core_flextras
 from core import cop_report as core_cop
+from core import ev_history as core_evh
 from core import daily_summary as core_summary
 
 # First day the risk-profile comparison is trusted (see _publish savings).
@@ -1022,6 +1023,9 @@ class GridLock(hass.Hass):
         self.run_in(self._pv_counter_backfill, 10)
         # Once: the COP ledger rebuilt from the heat pump counters' history.
         self.run_in(self._cop_backfill, 40)
+        # Months before the ledger, and the cars' miles and charging by month,
+        # from HA's long-term statistics: at start, then every 6 hours.
+        self.run_every(self._import_month_history, "now+150", 6 * 3600)
         # Autho Solar forecast + sending readings: every 15 min, no-op without a key.
         self.run_every(self.poll_autho_solar, "now+20", 900)
         self._autho_mtime_seen = None
@@ -2907,6 +2911,10 @@ class GridLock(hass.Hass):
         open_ = sessions.setdefault("open", {})
         done = sessions.setdefault("done", [])
         changed = False
+        if not isinstance(sessions.get("months"), dict):
+            # Month totals outlive the 100-session list; seeded from it once.
+            sessions["months"] = core_evh.months_from_sessions(done)
+            changed = True
         rate = self.get_float_state(self.ent_import_rate, self.default_import)
         ev_power = getattr(self, "ent_ev_power", None)
         charger_kw = self._read_live_kw(ev_power) if ev_power else None
@@ -2938,6 +2946,7 @@ class GridLock(hass.Hass):
                         sess["range_to"] = rng
                     sess.update({"stem": stem, "end": now.isoformat()})
                     done.append(sess)
+                    core_evh.add_session(sessions["months"], sess)
                     del done[:-100]
                 changed = True
         if changed:
@@ -3035,6 +3044,10 @@ class GridLock(hass.Hass):
                     v["finish"] = core_ev_model.finish_time(
                         car["need_kwh"], car["rate_kw"], now).isoformat()
             v.update(self._ev_session_stats(stem, now))
+            hist = core_evh.summarise((self._ev_sessions or {}).get("months"), (self._ev_sessions or {}).get("imported"),
+                                      now.astimezone(self._local_tz()).strftime("%Y-%m")).get(stem)
+            if hist:
+                v["history"] = hist
             vehicles[stem] = v
             if not plugged_in or not assist_on:
                 self.ev_vehicle_last_commanded[stem] = None
@@ -4167,6 +4180,83 @@ class GridLock(hass.Hass):
                 if per.get(k) is not None:
                     attrs[f"{key}_{k}"] = per[k]
         self.set_state("sensor.gridlock_cop", state=state, attributes=attrs)
+
+    def _monthly_statistics(self, ids, types, years=3):
+        """HA's long-term statistics by calendar month (HA's own timezone):
+        {statistic_id: {"YYYY-MM": {type: value}}}. Empty when the recorder
+        action isn't there or fails."""
+        ids = [i for i in ids if i]
+        if not ids:
+            return {}
+        start = (self.get_now() - timedelta(days=366 * years)).replace(microsecond=0).isoformat()
+        try:
+            resp = self.call_service("recorder/get_statistics", statistic_ids=ids, start_time=start,
+                                     period="month", types=types, return_response=True) or {}
+        except Exception as exc:  # noqa: BLE001 - history is a nicety; retried next run
+            self.log(f"Monthly history: recorder statistics unavailable ({exc!r})", level="WARNING")
+            return {}
+        stats = None
+        for layer in (resp, resp.get("result"), resp.get("response"),
+                      (resp.get("result") or {}).get("response") if isinstance(resp.get("result"), dict) else None):
+            if isinstance(layer, dict) and isinstance(layer.get("statistics"), dict):
+                stats = layer["statistics"]
+                break
+        tz = self._local_tz()
+        out = {}
+        for sid, rows in (stats or {}).items():
+            for r in rows or []:
+                try:
+                    m = self._iso(str(r["start"])).astimezone(tz).strftime("%Y-%m")
+                except (KeyError, TypeError, ValueError):
+                    continue
+                out.setdefault(sid, {})[m] = {k: r.get(k) for k in types}
+        return out
+
+    def _import_month_history(self, kwargs):
+        """Heat pump meter totals per month into the COP ledger (months before
+        it began), and each car's miles and energy added per month."""
+        zones = (getattr(self, "_ui_zone_cache", None) or (None, None, None))[1] or []
+        zone = next((z for z in zones
+                     if not z.get("is_tank") and z.get("heat_counter_entity") and z.get("elec_counter_entity")), None)
+        if zone:
+            st = self._monthly_statistics([zone["heat_counter_entity"], zone["elec_counter_entity"],
+                                           zone.get("external_temp_entity")], ["change", "mean"])
+            heat = st.get(zone["heat_counter_entity"]) or {}
+            elec = st.get(zone["elec_counter_entity"]) or {}
+            out = st.get(zone.get("external_temp_entity")) or {}
+            months = {m: {"heat": heat[m].get("change"), "elec": elec[m].get("change"),
+                          "outdoor": (out.get(m) or {}).get("mean")}
+                      for m in heat if m in elec and (heat[m].get("change") or 0) >= 0 and (elec[m].get("change") or 0) >= 0}
+            if months and months != self._cop_ledger.get("imported"):
+                core_cop.set_imported(self._cop_ledger, months)
+                self._save_json("cop_ledger.json", self._cop_ledger)
+        self._ev_import_month_history()
+
+    def _ev_import_month_history(self):
+        """Each car's miles (odometer) and energy added per month, from HA's
+        long-term statistics, into the session file (core/ev_history.py)."""
+        stems = list(getattr(self, "ev_vehicle_stems", None) or [])
+        if not stems:
+            return
+        ids = {stem: (f"sensor.{stem}_odometer", f"sensor.{stem}_charge_energy_added") for stem in stems}
+        st = self._monthly_statistics([i for pair in ids.values() for i in pair], ["change"])
+        imported = {}
+        for stem, (odo, added) in ids.items():
+            unit = self.get_state(odo, attribute="unit_of_measurement")
+            rows = {}
+            for m, r in (st.get(odo) or {}).items():
+                if (r.get("change") or 0) > 0:
+                    rows.setdefault(m, {})["miles"] = round(core_evh.to_miles(r["change"], unit), 1)
+            for m, r in (st.get(added) or {}).items():
+                if (r.get("change") or 0) > 0:
+                    rows.setdefault(m, {})["added_kwh"] = round(r["change"], 2)
+            if rows:
+                imported[stem] = rows
+        if not isinstance(getattr(self, "_ev_sessions", None), dict):
+            self._ev_sessions = {}
+        if imported and imported != self._ev_sessions.get("imported"):
+            self._ev_sessions["imported"] = imported
+            self._save_json("ev_sessions.json", self._ev_sessions)
 
     def _cop_backfill(self, kwargs):
         """Once, while the ledger is empty: rebuild it from the counters' and

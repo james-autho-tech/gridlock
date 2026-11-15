@@ -895,6 +895,10 @@ PAGE = r"""<!doctype html>
   .flow-line { fill:none; stroke:#1e293b; stroke-width:2; }
   .flow-line.active { stroke-width:3; filter:drop-shadow(0 0 3px currentColor); }
   .flow-dot { filter:drop-shadow(0 0 6px currentColor); }
+  .flow-cable { fill:none; stroke-width:1.5; opacity:.35; }
+  .flow-cable.active { opacity:.9; }
+  .flow-cable.bypass { stroke:#fb923c !important; animation:flowwarn 1.3s ease-in-out infinite; }
+  .flow-pulse { filter:drop-shadow(0 0 4px currentColor); }
   .flow-hub { fill:var(--line); }
   .flow-hub.active { fill:var(--ink); filter:drop-shadow(0 0 5px var(--ink)); }
   .flow-node circle.ring { fill:var(--panel); stroke:var(--line); stroke-width:1.5; }
@@ -906,8 +910,7 @@ PAGE = r"""<!doctype html>
   .flow-node text.icon { font-size:24px; text-anchor:middle; dominant-baseline:central; }
   .flow-node text.label { font-size:10px; letter-spacing:1.5px; text-transform:uppercase;
                            fill:var(--dim); text-anchor:middle; }
-  .flow-node text.val { font-size:14px; font-weight:700; text-anchor:middle;
-                         font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .flow-node text.val { font-size:14px; font-weight:600; text-anchor:middle; font-variant-numeric:tabular-nums; }
   .gl-ent-list { display:flex; flex-direction:column; gap:6px; }
   .gl-ent-row { display:flex; align-items:baseline; gap:8px; font-size:13px;
                 padding:4px 0; border-bottom:1px solid #14203a; }
@@ -2186,78 +2189,73 @@ function renderSohTile(value) {
 }
 function renderFlow(f, bypassActive) {
   if (!f) return '';
-  // Everything routes through a virtual centre hub — keeps 5
-  // independent flows (solar/grid/battery/home/ev) simple to animate
-  // without modelling every real physical wiring path.
-  const CX = 210, CY = 195;
+  // The house in the middle, everything wired to its walls: solar onto the
+  // roof, grid and battery on the left, the car and the heat pump on the
+  // right. Thin cables with small pulses running the way the power goes,
+  // quicker and closer together the bigger that flow is.
   const socPct = typeof f.soc_pct === 'number' ? Math.round(f.soc_pct) : null;
+  const kw = (v) => `${Math.abs(Number(v) || 0).toFixed(2)} kW`;
+  const gridCol = bypassActive ? '#fb923c' : (f.exporting ? 'var(--cyan)' : 'var(--amber)');
   const nodes = {
-    solar:   { x: 55,  y: 55,  icon: '☀️', label: 'Solar',   val: `${f.pv_kw.toFixed(2)} kW`,
-               color: 'var(--amber)', active: f.pv_generating, glow: f.pv_kw > 2 },
-    grid:    { x: 55,  y: 195, icon: '⚡',  label: 'Grid',    val: `${f.grid_kw.toFixed(2)} kW`,
-               color: bypassActive ? '#fb923c' : (f.exporting ? 'var(--cyan)' : 'var(--amber)'),
-               active: f.importing || f.exporting || bypassActive },
-    ev:      { x: 365, y: 55,  icon: '🚗', label: 'EV',      val: `${f.ev_kw.toFixed(2)} kW`,
-               color: f.ev_protected ? 'var(--violet)' : 'var(--green)',
-               active: f.ev_charging, badge: f.ev_protected ? '🛡️' : null },
-    home:    { x: 365, y: 195, icon: '🏠', label: 'Home',    val: `${f.home_kw.toFixed(2)} kW`,
-               color: bypassActive ? '#fb923c' : 'var(--violet)',
-               active: f.home_kw > 0.05 || bypassActive },
-    ...(f.has_heatpump ? { heatpump: { x: 365, y: 335, icon: '♨️', label: 'Heat pump', val: `${Number(f.heatpump_kw || 0).toFixed(2)} kW`,
-               color: 'var(--red)', active: Number(f.heatpump_kw) > 0.05 } } : {}),
-    battery: { x: 55,  y: 335, icon: '🔋', label: 'Battery',
-               val: socPct === null ? `${f.battery_kw.toFixed(2)} kW` : `${socPct}% · ${f.battery_kw.toFixed(2)}kW`,
-               color: f.battery_charging ? 'var(--green)' : 'var(--cyan)',
-               active: f.battery_charging || f.battery_discharging,
-               glow: f.battery_charging },
+    solar: { x: 72, y: 52, to: [174, 124], icon: 'solar', label: 'Solar', val: kw(f.pv_kw), color: 'var(--amber)',
+             active: f.pv_generating || f.pv_kw > 0.05, out: true, glow: f.pv_kw > 2 },
+    grid: { x: 52, y: 192, to: [140, 196], icon: 'grid', label: f.exporting ? 'Grid · export' : 'Grid', val: kw(f.grid_kw), color: gridCol,
+            active: f.importing || f.exporting || bypassActive, out: f.importing || bypassActive || !f.exporting },
+    battery: { x: 52, y: 310, to: [140, 280], icon: 'battery', label: socPct === null ? 'Battery' : `Battery ${socPct}%`, val: kw(f.battery_kw),
+               color: f.battery_charging ? 'var(--green)' : 'var(--cyan)', active: f.battery_charging || f.battery_discharging,
+               out: !!f.battery_discharging, glow: f.battery_charging },
+    ev: { x: 388, y: 192, to: [300, 196], icon: 'car', label: f.ev_protected ? 'Car · protected' : 'Car', val: kw(f.ev_kw), color: f.ev_protected ? 'var(--violet)' : 'var(--green)',
+          active: f.ev_charging || f.ev_kw > 0.05, out: false },
+    ...(f.has_heatpump ? { heatpump: { x: 388, y: 310, to: [300, 280], icon: 'heatpump', label: 'Heat pump', val: kw(f.heatpump_kw),
+          color: 'var(--red)', active: Number(f.heatpump_kw) > 0.05, out: false } } : {}),
   };
-  // [outward, dotColor] — outward = node -> hub; false = hub -> node
-  const dirs = {
-    solar: [true, 'var(--amber)'],
-    grid: [f.importing || bypassActive, bypassActive ? '#fb923c' : (f.exporting ? 'var(--cyan)' : 'var(--amber)')],
-    ev: [false, f.ev_protected ? 'var(--violet)' : 'var(--green)'],
-    home: [bypassActive ? true : false, bypassActive ? '#fb923c' : 'var(--violet)'],
-    heatpump: [false, 'var(--red)'],
-    battery: [f.battery_discharging, f.battery_charging ? 'var(--green)' : 'var(--cyan)'],
-  };
-  // Sankey-style: line thickness scales with that flow's actual kW,
-  // relative to whichever flow is biggest right now — thin lines mean
-  // "barely anything moving here", thick means "this is where most of
-  // the power's going", at a glance rather than reading five numbers.
-  const mags = { solar: f.pv_kw, grid: f.grid_kw, ev: f.ev_kw, home: f.home_kw, battery: f.battery_kw, heatpump: Number(f.heatpump_kw) || 0 };
-  const maxMag = Math.max(...Object.values(mags), 0.3);
-  const widthFor = v => Math.max(2, Math.min(16, 2 + (v / maxMag) * 14));
+  const mags = { solar: f.pv_kw, grid: f.grid_kw, battery: f.battery_kw, ev: f.ev_kw, heatpump: Number(f.heatpump_kw) || 0, home: f.home_kw };
+  const maxMag = Math.max(...Object.values(mags).map((v) => Math.abs(Number(v) || 0)), 0.3);
+  const share = (v) => Math.min(1, Math.abs(Number(v) || 0) / maxMag);
   const lines = Object.entries(nodes).map(([key, n]) => {
-    const [outward, dotColor] = dirs[key];
-    const path = outward ? `M${n.x},${n.y} L${CX},${CY}` : `M${CX},${CY} L${n.x},${n.y}`;
-    const isWarn = bypassActive && (key === 'grid' || key === 'home');
-    const dur = n.active ? (isWarn ? '0.9s' : '1.6s') : '0s';
-    const w = n.active ? widthFor(mags[key]) : 2;
-    return `
-      <path class="flow-line ${n.active ? 'active' : ''} ${isWarn ? 'bypass' : ''}" d="M${n.x},${n.y} L${CX},${CY}"
-            stroke="${n.active ? n.color : '#1e293b'}"
-            style="stroke-width:${w.toFixed(1)}px" stroke-linecap="round" />
-      ${n.active ? `<circle r="${Math.max(3.5, w * 0.4).toFixed(1)}" class="flow-dot" fill="${dotColor}" style="color:${dotColor}">
-        <animateMotion dur="${dur}" repeatCount="indefinite" path="${path}" />
-      </circle>` : ''}`;
+    const [tx, ty] = n.to;
+    // A gentle curve, like a cable, from beside the icon to its wall.
+    const sx = n.x + (tx > n.x ? 20 : -20), sy = n.y - 8;
+    const mx = (sx + tx) / 2, my = Math.min(sy, ty) - (key === 'solar' ? 0 : 14);
+    const fwd = `M${sx},${sy} Q${mx},${my} ${tx},${ty}`, back = `M${tx},${ty} Q${mx},${my} ${sx},${sy}`;
+    const warn = bypassActive && key === 'grid';
+    const sh = share(mags[key]);
+    const dur = warn ? 0.9 : 2.6 - 1.4 * sh;          // seconds end to end
+    const pulses = n.active ? (sh > 0.5 ? 3 : sh > 0.15 ? 2 : 1) : 0;
+    const dots = Array.from({ length: pulses }, (_, i) => `<circle r="2.4" class="flow-pulse" fill="${n.color}" style="color:${n.color}">
+        <animateMotion dur="${dur.toFixed(2)}s" begin="${(-i * dur / pulses).toFixed(2)}s" repeatCount="indefinite" path="${n.out ? fwd : back}" />
+        <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.15;0.85;1" dur="${dur.toFixed(2)}s" begin="${(-i * dur / pulses).toFixed(2)}s" repeatCount="indefinite" /></circle>`).join('');
+    return `<path class="flow-cable ${n.active ? 'active' : ''} ${warn ? 'bypass' : ''}" d="${fwd}" fill="none"
+        stroke="${n.active ? n.color : 'var(--line)'}" stroke-linecap="round" />${dots}`;
   }).join('');
-  const nodeEls = Object.values(nodes).map(n => `
+  // Line icons on a 24 unit grid, drawn in the node's colour when it's busy.
+  const soc = socPct === null ? 0 : Math.max(0, Math.min(100, socPct)) / 100;
+  const ICONS = {
+    solar: '<path d="M3.5 15.5 L6.5 5.5 H20.5 L17.5 15.5 Z"/><path d="M5 10.5 H19 M10.5 5.5 L8.5 15.5 M15.5 5.5 L13.5 15.5"/><path d="M10.5 20 H14.5 M12.5 15.5 V20"/>',
+    grid: '<path d="M12 2.5 L7 21.5 M12 2.5 L17 21.5 M4.5 7 H19.5 M6.5 11.5 H17.5 M8.2 16.5 H15.8 M7.5 7 L12 11.5 L16.5 7 M8.2 16.5 L14.9 11.5 M15.8 16.5 L9.1 11.5"/>',
+    battery: `<rect x="6.5" y="4" width="11" height="18" rx="2"/><path d="M10 2 H14"/><rect x="8.5" y="${(20 - 14 * soc).toFixed(1)}" width="7" height="${(14 * soc).toFixed(1)}" rx="0.8" fill="currentColor" stroke="none" opacity=".55"/>`,
+    car: '<path d="M2.5 15.5 V13 L5 9 C5.6 8 6.6 7.5 7.7 7.5 H16.3 C17.4 7.5 18.4 8 19 9 L21.5 13 V15.5 H19 M5 15.5 H2.5 M9 15.5 H15"/><path d="M4.6 12 H19.4"/><circle cx="7" cy="15.5" r="2"/><circle cx="17" cy="15.5" r="2"/>',
+    heatpump: '<rect x="2.5" y="5" width="19" height="14" rx="2"/><circle cx="10" cy="12" r="4.6"/><path d="M10 7.4 V16.6 M5.4 12 H14.6"/><path d="M17.5 8.5 V15.5 M19.5 8.5 V15.5"/>',
+  };
+  const nodeEls = Object.values(nodes).map((n) => `
     <g class="flow-node ${n.active ? 'active' : ''}" transform="translate(${n.x},${n.y})">
-      <circle class="ring" r="30" style="stroke:${n.active ? n.color : 'var(--line)'};color:${n.color};${n.glow ? `filter:drop-shadow(0 0 10px ${n.color})` : ''}" />
-      <text class="icon" y="-2">${n.icon}</text>
-      <text class="val" style="fill:${n.active ? n.color : 'var(--dim)'}" y="48">${n.val}</text>
-      <text class="label" y="-38">${n.label}</text>
-      ${n.badge ? `<text x="22" y="-20" style="font-size:16px">${n.badge}</text>` : ''}
+      <g transform="translate(-14,-22) scale(${(28 / 24).toFixed(3)})" fill="none" stroke="${n.active ? n.color : 'var(--dim)'}"
+         stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="color:${n.active ? n.color : 'var(--dim)'}">${ICONS[n.icon]}</g>
+      <text class="val" style="fill:${n.active ? 'var(--ink)' : 'var(--dim)'}" y="26">${n.val}</text>
+      <text class="label" y="41">${n.label}</text>
     </g>`).join('');
-  const anyActive = Object.values(nodes).some(n => n.active);
-  const hubR = anyActive
-    ? Math.max(5, Math.min(13, 5 + (Object.values(mags).reduce((a, b) => a + b, 0) / (maxMag * 4)) * 8))
-    : 4;
-  return `<div class="flow-wrap"><svg class="flow-svg" viewBox="0 0 420 400">
-    ${lines}
-    <circle class="flow-hub ${anyActive ? 'active' : ''}" cx="${CX}" cy="${CY}" r="${hubR.toFixed(1)}" />
-    ${nodeEls}
-  </svg></div>${f.ev_protected ? '<div style="text-align:center;color:var(--violet);font-size:13px;margin-top:8px">⚡ EV/PV Bypass — battery locked while the EV charges</div>' : ''}`;
+  const homeCol = bypassActive ? '#fb923c' : 'var(--ink)';
+  // The house: roof with a strip of panels, walls, a door.
+  const house = `
+    <polygon points="122,152 220,80 318,152" fill="var(--panel)" stroke="var(--line)" stroke-width="2" stroke-linejoin="round" />
+    ${[0, 1, 2, 3].map((i) => `<rect x="${180 + i * 21}" y="116" width="18" height="11" rx="1.5" fill="${f.pv_kw > 0.05 ? 'var(--amber)' : 'var(--line)'}" opacity="${f.pv_kw > 0.05 ? 0.85 : 0.5}" />`).join('')}
+    <rect x="140" y="152" width="160" height="148" rx="4" fill="var(--panel)" stroke="var(--line)" stroke-width="2" />
+    <rect x="206" y="256" width="28" height="44" rx="3" fill="none" stroke="var(--line)" stroke-width="2" />
+    <text x="220" y="190" text-anchor="middle" fill="var(--dim)" font-size="13">Home</text>
+    <text x="220" y="222" text-anchor="middle" fill="${homeCol}" font-size="26" font-weight="700" class="num">${kw(f.home_kw)}</text>`;
+  return `<div class="flow-wrap"><svg class="flow-svg" viewBox="0 0 440 360" role="img" aria-label="Where the house's power is coming from and going to right now">
+    ${lines}${house}${nodeEls}
+  </svg></div>${f.ev_protected ? '<div style="text-align:center;color:var(--violet);font-size:13px;margin-top:8px">EV/PV Bypass: battery locked while the car charges</div>' : ''}`;
 }
 // Column order is gridlock.py's publish_plan()'s plan_table.columns —
 // read positionally rather than assuming it, so this can't silently
@@ -2433,6 +2431,30 @@ function evCostLine(v) {
   else if (typeof v.last_kwh === 'number') parts.push(`last ${v.last_kwh.toFixed(1)} kWh £${(v.last_cost_gbp || 0).toFixed(2)}${typeof v.last_p_per_mile === 'number' ? ` (${v.last_p_per_mile.toFixed(1)}p/mi)` : ''}`);
   if (typeof v.month_cost_gbp === 'number') parts.push(`month £${v.month_cost_gbp.toFixed(2)}`);
   return parts.length ? `<div style="color:var(--dim);font-size:10px">${esc(parts.join(' · '))}</div>` : '';
+}
+function renderEvHistory(evs) {
+  const cars = (evs || []).filter((v) => v.history && (v.history.months || []).length);
+  if (!cars.length) return '';
+  const gbp = (v, est) => v == null ? '-' : `${est ? '~' : ''}£${Number(v).toFixed(2)}`;
+  const n = (v, d = 1) => v == null ? '-' : Number(v).toFixed(d);
+  const monthName = (m) => new Date(m + '-15T12:00:00').toLocaleDateString([], { month: 'short', year: 'numeric' });
+  return cars.map((v) => {
+    const h = v.history;
+    const rows = [...h.months].reverse().map((r) => `<tr><td>${esc(monthName(r.month))}</td>
+      <td class="num">${gbp(r.cost_gbp, r.estimated)}</td><td class="num">${n(r.kwh)}</td><td class="num">${n(r.p_per_kwh)}${r.p_per_kwh == null ? '' : 'p'}</td>
+      <td class="num">${r.miles == null ? '-' : r.miles}</td><td class="num">${r.p_per_mile == null ? '-' : n(r.p_per_mile) + 'p'}</td>
+      <td class="num">${r.sessions == null ? '-' : r.sessions}</td><td class="num">${n(r.added_kwh)}</td></tr>`).join('');
+    const years = h.years.map((y) => `<div class="gl-tile"><div class="lbl">${esc(y.year)}${y.months < 12 ? ` (${y.months} mo)` : ''}</div>
+      <div class="val num">${gbp(y.cost_gbp, y.estimated)}</div>
+      <div class="sub">${n(y.kwh, 0)} kWh${y.miles ? ` · ${y.miles} miles` : ''}${y.p_per_mile != null ? ` · ${n(y.p_per_mile)}p/mile` : ''}</div></div>`).join('');
+    return `<div class="gl-wrap"><div class="gl-h">${esc(v.name || 'Car')}: charging by month</div>
+      <div class="gl-grid" style="margin-top:8px">${years}</div>
+      <div style="overflow-x:auto;margin-top:10px"><table class="gl-plan">
+        <tr><th>Month</th><th>Home charging</th><th>kWh</th><th>Per kWh</th><th>Miles</th><th>Per mile</th><th>Charges</th><th>Car says added</th></tr>${rows}</table></div>
+      <div class="gl-sub" style="margin-top:6px">Home charging is what GridLock recorded at the charger, priced at the rate each half-hour was charged at.
+        ~ marks a month before that started: the car's own energy-added figure at its average ${h.avg_p_per_kwh == null ? '' : `${n(h.avg_p_per_kwh)}p/kWh `}here.
+        Miles are from the odometer; per mile counts home charging only, so if "car says added" is well above the home kWh, it also charged elsewhere.</div></div>`;
+  }).join('');
 }
 async function setEvAssist(on) {
   try {
@@ -2708,6 +2730,37 @@ function copScatter(days) {
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px;height:auto;display:block" role="img" aria-label="Heating COP against outdoor temperature, one dot per day">${grid}${xg}${dots}
     <text x="${(L + W - R) / 2}" y="${H - 8}" text-anchor="middle" fill="var(--dim)" font-size="${FS}">average outdoor temperature while heating</text></svg>`;
 }
+function copMonths(c) {
+  const M = c.months || [], Y = c.years || [];
+  if (!M.length) return '';
+  const monthName = (m) => new Date(m + '-15T12:00:00').toLocaleDateString([], { month: 'short', year: 'numeric' });
+  const pounds = (p) => p == null ? '-' : `£${(p / 100).toFixed(2)}`;
+  const vsLast = (r) => {
+    if (!r.last_year || r.last_year.cop == null || r.cop == null) return '-';
+    const d = r.cop - r.last_year.cop;
+    return `${copN(r.last_year.cop, 1)} <span style="color:${d >= 0 ? 'var(--green)' : 'var(--amber)'}">(${d >= 0 ? '+' : ''}${copN(d, 1)})</span>`;
+  };
+  // Bars: COP per month, faded where the month is the meters' totals only.
+  const vals = M.map((r) => r.cop).filter((v) => v != null);
+  const H = 150, hi = Math.max(4, Math.ceil(Math.max(...vals, 1) + 0.5)), y = yScale(0, hi, H);
+  const colW = VB_W / M.length, barW = Math.max(4, colW - 8);
+  const marks = M.map((r, i) => r.cop == null ? '' : `<rect x="${(i * colW + 4).toFixed(1)}" y="${y(r.cop).toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(1, y(0) - y(r.cop)).toFixed(1)}" rx="2" fill="${COP_HEAT}" opacity="${r.source === 'meters' ? 0.55 : 1}"><title>${esc(monthName(r.month))}: COP ${copN(r.cop, 1)}, ${copN(r.heat_kwh, 0)} kWh heat from ${copN(r.elec_kwh, 0)} kWh${r.outdoor != null ? `, ${copN(r.outdoor, 1)}°C average outside` : ''}</title></rect>`).join('');
+  const ticks = [0, hi / 2, hi].map((v) => ({ frac: v / hi, label: copN(v, 0) }));
+  const every = Math.max(1, Math.ceil(M.length / 6));
+  const chart = chartFrame(marks, H, ticks, null, barAxisLabels(M.length, every, (i) => new Date(M[i].month + '-15T12:00:00').toLocaleDateString([], { month: 'short' })));
+  const rows = [...M].reverse().map((r) => `<tr style="${r.source === 'meters' ? 'opacity:.8' : ''}"><td>${esc(monthName(r.month))}${r.source === 'meters' ? ' *' : ''}</td>
+    <td class="num">${copN(r.cop, 1)}</td><td class="num">${copN(r.heating_cop, 1)}</td><td class="num">${copN(r.dhw_cop, 1)}</td>
+    <td class="num">${copN(r.heat_kwh, 0)}</td><td class="num">${copN(r.elec_kwh, 0)}</td><td class="num">${r.outdoor == null ? '-' : copN(r.outdoor, 1) + '°'}</td>
+    <td class="num">${pounds(r.cost_p)}</td><td class="num">${pounds(r.gas_cost_p)}</td><td class="num">${vsLast(r)}</td></tr>`).join('');
+  const years = Y.map((y) => `<div class="gl-tile"><div class="lbl">${esc(y.year)}${y.months < 12 ? ` (${y.months} mo, from ${esc(monthName(y.first))})` : ''}</div>
+    <div class="val num">${copN(y.cop, 1)}</div>
+    <div class="sub">${copN(y.heat_kwh, 0)} kWh of heat from ${copN(y.elec_kwh, 0)} kWh${y.cost_p != null ? `<br>cost ${pounds(y.cost_p)}${y.priced_months < y.months ? ` over ${y.priced_months} priced month${y.priced_months === 1 ? '' : 's'}` : ''}` : ''}<br>gas boiler: ${pounds(y.gas_cost_p)}</div></div>`).join('');
+  return `<div class="gl-wrap"><div class="gl-h">Years</div><div class="gl-grid" style="margin-top:8px">${years}</div></div>
+    <div class="gl-wrap"><div class="gl-h">Month by month</div>${chart}
+      <div style="overflow-x:auto;margin-top:10px"><table class="gl-plan">
+        <tr><th>Month</th><th>COP</th><th>Heating</th><th>Hot water</th><th>Heat kWh</th><th>Elec kWh</th><th>Outside</th><th>Cost</th><th>Gas would be</th><th>Same month last year</th></tr>${rows}</table></div>
+      <div class="gl-sub" style="margin-top:6px">* from the heat pump meters' history in Home Assistant (whole months, before GridLock's own record): no heating/hot water split or prices, and the pump and standby allowance estimated from the months GridLock recorded. Outside is the month's average. "Same month last year" fills in from next year.</div></div>`;
+}
 function renderCop(c) {
   copLast = c;
   if (!c || !c.available) {
@@ -2738,6 +2791,7 @@ function renderCop(c) {
         <button class="gl-btn-sm" onclick="copShareHtml()">Download web page</button>
       </div>
     </div>
+    ${copMonths(c)}
     <div class="gl-wrap"><div class="gl-h">Day by day</div>${copBars(c.days)}
       <div class="gl-sub" style="margin-top:4px">COP per day. Hover a bar for the day's heat, electricity and temperatures.</div></div>
     <div class="gl-wrap"><div class="gl-h">Heating COP and the weather</div>${copScatter(c.days)}
@@ -4026,6 +4080,7 @@ async function refresh() {
           <span class="gl-state"><span class="gl-dot" style="background:${dotColor(d.state)}"></span>${d.state}</span>
           <span class="gl-reason">${d.reason}</span>
         </div>
+        ${renderFlow(d.flow, isBypass(d.state))}
         <div class="gl-grid">
           <div class="gl-tile"><div class="lbl">Import</div><div class="val num ${priceClass(d.import_p, d.cheap_rate_p)}">${d.import_p.toFixed(1)}p</div>${sparkline(planCol(d.plan_table, 'import_p').slice(0, 24), 'var(--amber)')}</div>
           <div class="gl-tile"><div class="lbl">Export</div><div class="val num" style="color:var(--cyan)">${d.export_p.toFixed(1)}p</div>${sparkline(planCol(d.plan_table, 'export_p').slice(0, 24), 'var(--cyan)')}</div>
@@ -4048,10 +4103,7 @@ async function refresh() {
       </div>
       ${isBypass(d.state) ? `<div class="gl-bypass-banner">⚠️ BYPASS ACTIVE — ${esc(d.reason)}</div>` : ''}
       ${renderLoadManagement(d.load_mgmt)}
-      <div class="gl-wrap">
-        <div class="gl-h">Live power flow</div>
-        ${renderFlow(d.flow, isBypass(d.state))}
-      </div>
+      ${renderEvHistory(d.evs)}
       <div class="gl-wrap">
         <div style="display:flex;justify-content:space-between;align-items:center">
           <div class="gl-h" style="margin:0">Next up</div>

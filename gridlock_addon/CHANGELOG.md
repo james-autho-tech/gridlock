@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.82.0 - 2026-11-15
+
+### Overview
+- Live power flow is now a house at the top of the Overview: solar onto the roof, grid and battery on the left, car and heat pump on the right
+- Thin cables with small pulses running the way the power goes (quicker for bigger flows); line icons and text labels instead of emoji; battery icon shows its charge
+
+### Heat pump COP
+- Years: COP, heat, electricity, cost and what a gas boiler would have cost, per calendar year
+- Month by month: chart and table (COP, heating and hot water COP, heat, electricity, average outside, cost, gas equivalent, same month last year)
+- Months before GridLock's own record come from the heat pump meters' history in Home Assistant (whole months from install, marked)
+- Days older than 400 are kept as part of their month instead of being dropped
+
+### Car charging
+- Per car, by month and year: home charging cost, kWh, p/kWh, miles driven (odometer), p/mile, number of charges, and what the car says it added
+- Month totals kept for good (the session list still keeps the last 100); months before session tracking estimated from the car's own figure, marked ~
+- Needs the car's odometer sensor enabled in Home Assistant (Tesla ships it disabled)
+
 ## 3.81.2 - 2026-11-13
 
 ### GridWarm hot water

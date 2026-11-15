@@ -22,6 +22,12 @@ Those are added back as an allowance (pump_w while running, standby_w all
 the time; editable) when figures are worked out, so changing them re-states
 history rather than needing it recorded again.
 
+Months and years: days older than KEEP_DAYS are folded into a month bucket
+(ledger["months"]) rather than dropped, and months from before the ledger
+began come from HA's long-term statistics of the same meters
+(ledger["imported"]: totals only, no heating/hot water split or prices),
+so a month can be compared with the same month a year on.
+
 Pure functions; gridlock.py feeds it, webui.py reads the published sensor.
 """
 from datetime import date, datetime, timedelta
@@ -74,9 +80,26 @@ def empty_day():
 
 def clean_ledger(raw):
     """The saved ledger, whatever state the file is in."""
-    out = {"last": None, "days": {}}
+    out = {"last": None, "days": {}, "months": {}, "imported": {}}
     if not isinstance(raw, dict):
         return out
+    for key in ("months", "imported"):
+        src = raw.get(key) if isinstance(raw.get(key), dict) else {}
+        for m, v in src.items():
+            if not (isinstance(m, str) and len(m) == 7 and isinstance(v, dict)):
+                continue
+            try:
+                date.fromisoformat(m + "-01")
+            except ValueError:
+                continue
+            if key == "imported":
+                try:
+                    out[key][m] = {"heat": float(v["heat"]), "elec": float(v["elec"]),
+                                   "outdoor": float(v["outdoor"]) if v.get("outdoor") is not None else None}
+                except (KeyError, TypeError, ValueError):
+                    pass
+            else:
+                out[key][m] = dict(_clean_day(v), days=int(v.get("days") or 0))
     last = raw.get("last")
     if isinstance(last, dict) and isinstance(last.get("t"), str):
         try:
@@ -96,23 +119,37 @@ def clean_ledger(raw):
                 date.fromisoformat(d)
             except (TypeError, ValueError):
                 continue
-            day = empty_day()
-            for key, modes in (("heat", MODES), ("elec", MODES), ("cost_p", MODES),
-                               ("run_h", ("heating", "dhw")), ("out_h", ("heating", "dhw")),
-                               ("flow_h", ("heating", "dhw"))):
-                sub = v.get(key) if isinstance(v.get(key), dict) else {}
-                for m in modes:
-                    try:
-                        day[key][m] = float(sub.get(m) or 0.0)
-                    except (TypeError, ValueError):
-                        pass
-            for key in ("out_all", "hours"):
-                try:
-                    day[key] = float(v.get(key) or 0.0)
-                except (TypeError, ValueError):
-                    pass
-            out["days"][d] = day
+            out["days"][d] = _clean_day(v)
     return out
+
+
+def _clean_day(v):
+    day = empty_day()
+    for key, modes in (("heat", MODES), ("elec", MODES), ("cost_p", MODES),
+                       ("run_h", ("heating", "dhw")), ("out_h", ("heating", "dhw")),
+                       ("flow_h", ("heating", "dhw"))):
+        sub = v.get(key) if isinstance(v.get(key), dict) else {}
+        for m in modes:
+            try:
+                day[key][m] = float(sub.get(m) or 0.0)
+            except (TypeError, ValueError):
+                pass
+    for key in ("out_all", "hours"):
+        try:
+            day[key] = float(v.get(key) or 0.0)
+        except (TypeError, ValueError):
+            pass
+    return day
+
+
+def _fold(into, day):
+    """Add one day's figures into a month bucket."""
+    for key in ("heat", "elec", "cost_p", "run_h", "out_h", "flow_h"):
+        for m, v in day[key].items():
+            into[key][m] = into[key].get(m, 0.0) + v
+    into["out_all"] += day["out_all"]
+    into["hours"] += day["hours"]
+    into["days"] = into.get("days", 0) + 1
 
 
 def mode_of(state, compressor_hz=None):
@@ -182,7 +219,9 @@ def add_reading(ledger, now, heat_kwh, elec_kwh, mode, outdoor=None, flow=None, 
         if flow is not None:
             day["flow_h"][m] += flow * hours
     for old in sorted(ledger["days"])[:-KEEP_DAYS]:
-        ledger["days"].pop(old, None)
+        # Kept as part of its month, so months and years outlive the days.
+        bucket = ledger.setdefault("months", {}).setdefault(old[:7], dict(empty_day(), days=0))
+        _fold(bucket, ledger["days"].pop(old))
     return True
 
 
@@ -258,6 +297,85 @@ def _period(days, keys, cfg):
             "p_per_kwh_heat": round(tot["cost_p"] / tot["priced_heat"], 2) if tot["priced_heat"] > 0 else None}
 
 
+def set_imported(ledger, months):
+    """Monthly meter totals from HA's long-term statistics: {"YYYY-MM":
+    {"heat", "elec", "outdoor"}}. Replaces what was imported before."""
+    ledger["imported"] = {m: v for m, v in (months or {}).items() if v.get("heat") is not None and v.get("elec") is not None}
+
+
+def _month_row(m, day, cfg, source):
+    """One month from the ledger (days plus any folded bucket)."""
+    s = day_summary(m, day, cfg)
+    priced = sum(day["cost_p"].values()) > 0
+    return {"month": m, "source": source, "heat_kwh": s["heat_kwh"], "elec_kwh": s["elec_kwh"], "cop": s["cop"],
+            "heating_cop": s["heating"]["cop"], "dhw_cop": s["dhw"]["cop"],
+            "heating_heat_kwh": s["heating"]["heat_kwh"], "dhw_heat_kwh": s["dhw"]["heat_kwh"],
+            "outdoor": s["outdoor"], "flow": s["heating"]["flow"],
+            "cost_p": s["cost_p"] if priced else None,
+            "p_per_kwh_heat": round(s["cost_p"] / s["heat_kwh"], 2) if priced and s["heat_kwh"] > 0 else None}
+
+
+def months_and_years(ledger, today, settings=None):
+    """Every month since the meters' history begins, and calendar years.
+    A month is the ledger's when it covers the month from its 1st day (or
+    the month is older than the days kept, folded); otherwise HA's meter
+    totals for it, with the pump and standby allowance estimated from the
+    ledger's own months (no heating/hot water split, no prices)."""
+    cfg = clean_settings(settings)
+    days = ledger.get("days") or {}
+    folded = ledger.get("months") or {}
+    imported = ledger.get("imported") or {}
+    by_month = {}
+    for k, d in days.items():
+        b = by_month.setdefault(k[:7], dict(empty_day(), days=0))
+        _fold(b, d)
+    for m, b in folded.items():
+        tgt = by_month.setdefault(m, dict(empty_day(), days=0))
+        _fold(tgt, b)
+        tgt["days"] = tgt["days"] - 1 + b.get("days", 0)
+    first_day = min(list(days) + [m + "-01" for m in folded], default=None)
+    # The allowance the meter misses, per kWh of electricity it does count.
+    seen = sum(sum(d["elec"].values()) for d in days.values())
+    extra = sum(sum(_extra_kwh(d, mm, cfg) for mm in MODES) for d in days.values())
+    allowance = extra / seen if seen > 0 else 0.0
+    months = []
+    for m in sorted(set(by_month) | set(imported)):
+        if m > today.isoformat()[:7]:
+            continue
+        led = by_month.get(m)
+        whole = led is not None and first_day is not None and first_day <= m + "-01"
+        if whole or (led is not None and m not in imported):
+            months.append(_month_row(m, led, cfg, "ledger" if whole else "ledger_partial"))
+        else:
+            v = imported[m]
+            elec = v["elec"] * (1 + allowance)
+            months.append({"month": m, "source": "meters", "heat_kwh": round(v["heat"], 1), "elec_kwh": round(elec, 1),
+                           "cop": _ratio(v["heat"], elec), "heating_cop": None, "dhw_cop": None,
+                           "heating_heat_kwh": None, "dhw_heat_kwh": None,
+                           "outdoor": round(v["outdoor"], 1) if v.get("outdoor") is not None else None, "flow": None,
+                           "cost_p": None, "p_per_kwh_heat": None})
+    by_key = {r["month"]: r for r in months}
+    for r in months:
+        y, mo = r["month"].split("-")
+        prev = by_key.get(f"{int(y) - 1}-{mo}")
+        r["last_year"] = {"cop": prev["cop"], "heat_kwh": prev["heat_kwh"], "outdoor": prev["outdoor"]} if prev else None
+    gas_per_kwh_heat = cfg["gas_p"] / cfg["boiler_eff"]
+    years = []
+    for y in sorted({r["month"][:4] for r in months}):
+        rs = [r for r in months if r["month"].startswith(y)]
+        heat, elec = sum(r["heat_kwh"] for r in rs), sum(r["elec_kwh"] for r in rs)
+        priced = [r for r in rs if r["cost_p"] is not None]
+        years.append({"year": y, "months": len(rs), "heat_kwh": round(heat, 1), "elec_kwh": round(elec, 1),
+                      "cop": _ratio(heat, elec),
+                      "cost_p": round(sum(r["cost_p"] for r in priced), 1) if priced else None,
+                      "priced_months": len(priced),
+                      "gas_cost_p": round(heat * gas_per_kwh_heat, 1),
+                      "first": rs[0]["month"], "last": rs[-1]["month"]})
+    for r in months:
+        r["gas_cost_p"] = round(r["heat_kwh"] * gas_per_kwh_heat, 1)
+    return months, years
+
+
 def summarise(ledger, today, settings=None, show_days=60):
     """Everything the COP tab and share card need. today: local date."""
     cfg = clean_settings(settings)
@@ -274,7 +392,8 @@ def summarise(ledger, today, settings=None, show_days=60):
     for p in periods.values():
         p["gas_p_per_kwh_heat"] = round(gas_per_kwh_heat, 2)
         p["gas_cost_p"] = round(p["heat_kwh"] * gas_per_kwh_heat, 1)
-    return {"season_start": start.isoformat(), "periods": periods,
+    months, years = months_and_years(ledger, today, cfg)
+    return {"season_start": start.isoformat(), "periods": periods, "months": months, "years": years,
             "days": [day_summary(k, days[k], cfg) for k in (keys[-show_days:] if show_days > 0 else [])],
             "first_day": keys[0] if keys else None, "settings": cfg}
 
