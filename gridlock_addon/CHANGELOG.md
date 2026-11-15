@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.82.1 - 2026-11-15
+
+### Car charging
+- The first month the odometer has figures for counts as partial (it started mid-month): miles shown as part, no p/mile, left out of the year's p/mile
+
 ## 3.82.0 - 2026-11-15
 
 ### Overview

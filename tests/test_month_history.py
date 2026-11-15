@@ -63,13 +63,17 @@ def test_car_months_cost_per_mile_and_estimates_before_tracking():
         {"stem": "semi", "start": "2026-11-02T22:00:00+00:00", "kwh": 40.0, "cost_gbp": 2.80},
         {"stem": "semi", "start": "2026-11-09T22:00:00+00:00", "kwh": 20.0, "cost_gbp": 1.40},
     ])
-    imported = {"semi": {"2026-10": {"miles": 900.0, "added_kwh": 300.0},
+    imported = {"semi": {"2026-09": {"miles": 120.0},
+                         "2026-10": {"miles": 900.0, "added_kwh": 300.0},
                          "2026-11": {"miles": 600.0, "added_kwh": 65.0}}}
     s = evh.summarise(months, imported, "2026-11")["semi"]
     nov = s["months"][-1]
     assert nov["cost_gbp"] == 4.2 and nov["sessions"] == 2 and nov["p_per_kwh"] == 7.0
     assert nov["p_per_mile"] == 0.7        # 420p / 600 miles
-    oct_ = s["months"][0]
+    sep = s["months"][0]
+    assert sep["miles_partial"] and sep["p_per_mile"] is None   # odometer began mid-month
+    oct_ = s["months"][1]
     assert oct_["estimated"] and oct_["cost_gbp"] == 21.0   # 300 kWh at the car's own 7p average
     assert s["years"][0]["cost_gbp"] == 25.2 and s["years"][0]["estimated"]
+    assert s["years"][0]["p_per_mile"] == round(2520 / 1500, 1)   # Oct + Nov, not the partial Sep
     assert evh.to_miles(1609.344, "km") == 1000.0

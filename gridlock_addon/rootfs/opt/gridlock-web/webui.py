@@ -2442,7 +2442,7 @@ function renderEvHistory(evs) {
     const h = v.history;
     const rows = [...h.months].reverse().map((r) => `<tr><td>${esc(monthName(r.month))}</td>
       <td class="num">${gbp(r.cost_gbp, r.estimated)}</td><td class="num">${n(r.kwh)}</td><td class="num">${n(r.p_per_kwh)}${r.p_per_kwh == null ? '' : 'p'}</td>
-      <td class="num">${r.miles == null ? '-' : r.miles}</td><td class="num">${r.p_per_mile == null ? '-' : n(r.p_per_mile) + 'p'}</td>
+      <td class="num">${r.miles == null ? '-' : r.miles + (r.miles_partial ? ' (part)' : '')}</td><td class="num">${r.p_per_mile == null ? '-' : n(r.p_per_mile) + 'p'}</td>
       <td class="num">${r.sessions == null ? '-' : r.sessions}</td><td class="num">${n(r.added_kwh)}</td></tr>`).join('');
     const years = h.years.map((y) => `<div class="gl-tile"><div class="lbl">${esc(y.year)}${y.months < 12 ? ` (${y.months} mo)` : ''}</div>
       <div class="val num">${gbp(y.cost_gbp, y.estimated)}</div>

@@ -14,7 +14,9 @@ A month before GridLock tracked sessions has its cost estimated from the
 car's energy added at the car's own tracked average p/kWh (flagged
 estimated). Pence per mile is home charging cost over miles driven, so a car
 that also charges away from home looks cheaper than it is; the energy-added
-figure alongside shows when that's happening.
+figure alongside shows when that's happening. The first month the odometer
+has figures for is taken as partial (it started mid-month), so it gets no
+pence per mile.
 
 Pure functions; gridlock.py feeds it, the dashboard reads the summary.
 """
@@ -54,12 +56,14 @@ def summarise(months, imported, today_month):
         mine, imp = (months or {}).get(stem, {}), (imported or {}).get(stem, {})
         tracked_kwh = sum(v["kwh"] for v in mine.values())
         avg_p = (sum(v["cost_gbp"] for v in mine.values()) * 100 / tracked_kwh) if tracked_kwh >= 5 else None
+        first_miles = min((m for m, v in imp.items() if v.get("miles") is not None), default=None)
         rows = []
         for m in sorted(set(mine) | set(imp)):
             if m > today_month:
                 continue
             s, i = mine.get(m), imp.get(m) or {}
             miles = i.get("miles")
+            partial = m == first_miles
             added = i.get("added_kwh")
             if s:
                 kwh, cost, est = s["kwh"], s["cost_gbp"], False
@@ -71,16 +75,18 @@ def summarise(months, imported, today_month):
                          "cost_gbp": round(cost, 2) if cost is not None else None, "estimated": est,
                          "sessions": s["sessions"] if s else None,
                          "p_per_kwh": round(cost * 100 / kwh, 1) if cost is not None and kwh else None,
-                         "miles": round(miles) if miles is not None else None,
-                         "p_per_mile": round(cost * 100 / miles, 1) if cost is not None and miles and miles >= 20 else None,
+                         "miles": round(miles) if miles is not None else None, "miles_partial": partial,
+                         "p_per_mile": (round(cost * 100 / miles, 1)
+                                        if cost is not None and miles and miles >= 20 and not partial else None),
                          "added_kwh": round(added, 1) if added is not None else None})
         years = []
         for y in sorted({r["month"][:4] for r in rows}):
             rs = [r for r in rows if r["month"].startswith(y)]
             cost = sum(r["cost_gbp"] for r in rs if r["cost_gbp"] is not None)
             kwh = sum(r["kwh"] for r in rs if r["kwh"] is not None)
-            priced_miles = sum(r["miles"] for r in rs if r["miles"] is not None and r["cost_gbp"] is not None)
-            cost_with_miles = sum(r["cost_gbp"] for r in rs if r["miles"] is not None and r["cost_gbp"] is not None)
+            whole = [r for r in rs if r["miles"] is not None and r["cost_gbp"] is not None and not r["miles_partial"]]
+            priced_miles = sum(r["miles"] for r in whole)
+            cost_with_miles = sum(r["cost_gbp"] for r in whole)
             years.append({"year": y, "months": len(rs), "kwh": round(kwh, 1), "cost_gbp": round(cost, 2),
                           "estimated": any(r["estimated"] for r in rs),
                           "miles": round(sum(r["miles"] for r in rs if r["miles"] is not None)) or None,
