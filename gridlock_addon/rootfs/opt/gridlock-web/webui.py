@@ -2189,72 +2189,136 @@ function renderSohTile(value) {
 }
 function renderFlow(f, bypassActive) {
   if (!f) return '';
-  // The house in the middle, everything wired to its walls: solar onto the
-  // roof, grid and battery on the left, the car and the heat pump on the
-  // right. Thin cables with small pulses running the way the power goes,
-  // quicker and closer together the bigger that flow is.
+  // An angled, three-quarter view of the house at night: panels on the
+  // roof, the battery on the front wall, the car in the garage, the heat
+  // pump outside and the grid coming in on a pole. Every wire runs along
+  // the walls to the battery and inverter; a busy wire glows and a soft
+  // pulse glides along it the way the power goes, quicker the more power.
+  // Figures sit along the top with thin leader lines down to their thing.
+  const S = 21, C = 0.866, OX = 190, OY = 214;
+  const P = (x, y, z) => [OX + (x - y) * C * S, OY + (x + y) * 0.5 * S - z * S];
+  const pt = (x, y, z) => P(x, y, z).map((v) => v.toFixed(1)).join(',');
+  const poly = (pts, fill, extra = '') => `<polygon points="${pts.map((p) => pt(...p)).join(' ')}" fill="${fill}" ${extra}/>`;
+  const line = (pts) => 'M' + pts.map((p) => pt(...p)).join(' L');
+  const num = (v) => Math.abs(Number(v) || 0);
+  const kw = (v) => `${num(v).toFixed(1)} kW`;
   const socPct = typeof f.soc_pct === 'number' ? Math.round(f.soc_pct) : null;
-  const kw = (v) => `${Math.abs(Number(v) || 0).toFixed(2)} kW`;
-  const gridCol = bypassActive ? '#fb923c' : (f.exporting ? 'var(--cyan)' : 'var(--amber)');
-  const nodes = {
-    solar: { x: 72, y: 52, to: [174, 124], icon: 'solar', label: 'Solar', val: kw(f.pv_kw), color: 'var(--amber)',
-             active: f.pv_generating || f.pv_kw > 0.05, out: true, glow: f.pv_kw > 2 },
-    grid: { x: 52, y: 192, to: [140, 196], icon: 'grid', label: f.exporting ? 'Grid · export' : 'Grid', val: kw(f.grid_kw), color: gridCol,
-            active: f.importing || f.exporting || bypassActive, out: f.importing || bypassActive || !f.exporting },
-    battery: { x: 52, y: 310, to: [140, 280], icon: 'battery', label: socPct === null ? 'Battery' : `Battery ${socPct}%`, val: kw(f.battery_kw),
-               color: f.battery_charging ? 'var(--green)' : 'var(--cyan)', active: f.battery_charging || f.battery_discharging,
-               out: !!f.battery_discharging, glow: f.battery_charging },
-    ev: { x: 388, y: 192, to: [300, 196], icon: 'car', label: f.ev_protected ? 'Car · protected' : 'Car', val: kw(f.ev_kw), color: f.ev_protected ? 'var(--violet)' : 'var(--green)',
-          active: f.ev_charging || f.ev_kw > 0.05, out: false },
-    ...(f.has_heatpump ? { heatpump: { x: 388, y: 310, to: [300, 280], icon: 'heatpump', label: 'Heat pump', val: kw(f.heatpump_kw),
-          color: 'var(--red)', active: Number(f.heatpump_kw) > 0.05, out: false } } : {}),
-  };
-  const mags = { solar: f.pv_kw, grid: f.grid_kw, battery: f.battery_kw, ev: f.ev_kw, heatpump: Number(f.heatpump_kw) || 0, home: f.home_kw };
-  const maxMag = Math.max(...Object.values(mags).map((v) => Math.abs(Number(v) || 0)), 0.3);
-  const share = (v) => Math.min(1, Math.abs(Number(v) || 0) / maxMag);
-  const lines = Object.entries(nodes).map(([key, n]) => {
-    const [tx, ty] = n.to;
-    // A gentle curve, like a cable, from beside the icon to its wall.
-    const sx = n.x + (tx > n.x ? 20 : -20), sy = n.y - 8;
-    const mx = (sx + tx) / 2, my = Math.min(sy, ty) - (key === 'solar' ? 0 : 14);
-    const fwd = `M${sx},${sy} Q${mx},${my} ${tx},${ty}`, back = `M${tx},${ty} Q${mx},${my} ${sx},${sy}`;
-    const warn = bypassActive && key === 'grid';
-    const sh = share(mags[key]);
-    const dur = warn ? 0.9 : 2.6 - 1.4 * sh;          // seconds end to end
-    const pulses = n.active ? (sh > 0.5 ? 3 : sh > 0.15 ? 2 : 1) : 0;
-    const dots = Array.from({ length: pulses }, (_, i) => `<circle r="2.4" class="flow-pulse" fill="${n.color}" style="color:${n.color}">
-        <animateMotion dur="${dur.toFixed(2)}s" begin="${(-i * dur / pulses).toFixed(2)}s" repeatCount="indefinite" path="${n.out ? fwd : back}" />
-        <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.15;0.85;1" dur="${dur.toFixed(2)}s" begin="${(-i * dur / pulses).toFixed(2)}s" repeatCount="indefinite" /></circle>`).join('');
-    return `<path class="flow-cable ${n.active ? 'active' : ''} ${warn ? 'bypass' : ''}" d="${fwd}" fill="none"
-        stroke="${n.active ? n.color : 'var(--line)'}" stroke-linecap="round" />${dots}`;
-  }).join('');
-  // Line icons on a 24 unit grid, drawn in the node's colour when it's busy.
   const soc = socPct === null ? 0 : Math.max(0, Math.min(100, socPct)) / 100;
-  const ICONS = {
-    solar: '<path d="M3.5 15.5 L6.5 5.5 H20.5 L17.5 15.5 Z"/><path d="M5 10.5 H19 M10.5 5.5 L8.5 15.5 M15.5 5.5 L13.5 15.5"/><path d="M10.5 20 H14.5 M12.5 15.5 V20"/>',
-    grid: '<path d="M12 2.5 L7 21.5 M12 2.5 L17 21.5 M4.5 7 H19.5 M6.5 11.5 H17.5 M8.2 16.5 H15.8 M7.5 7 L12 11.5 L16.5 7 M8.2 16.5 L14.9 11.5 M15.8 16.5 L9.1 11.5"/>',
-    battery: `<rect x="6.5" y="4" width="11" height="18" rx="2"/><path d="M10 2 H14"/><rect x="8.5" y="${(20 - 14 * soc).toFixed(1)}" width="7" height="${(14 * soc).toFixed(1)}" rx="0.8" fill="currentColor" stroke="none" opacity=".55"/>`,
-    car: '<path d="M2.5 15.5 V13 L5 9 C5.6 8 6.6 7.5 7.7 7.5 H16.3 C17.4 7.5 18.4 8 19 9 L21.5 13 V15.5 H19 M5 15.5 H2.5 M9 15.5 H15"/><path d="M4.6 12 H19.4"/><circle cx="7" cy="15.5" r="2"/><circle cx="17" cy="15.5" r="2"/>',
-    heatpump: '<rect x="2.5" y="5" width="19" height="14" rx="2"/><circle cx="10" cy="12" r="4.6"/><path d="M10 7.4 V16.6 M5.4 12 H14.6"/><path d="M17.5 8.5 V15.5 M19.5 8.5 V15.5"/>',
-  };
-  const nodeEls = Object.values(nodes).map((n) => `
-    <g class="flow-node ${n.active ? 'active' : ''}" transform="translate(${n.x},${n.y})">
-      <g transform="translate(-14,-22) scale(${(28 / 24).toFixed(3)})" fill="none" stroke="${n.active ? n.color : 'var(--dim)'}"
-         stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="color:${n.active ? n.color : 'var(--dim)'}">${ICONS[n.icon]}</g>
-      <text class="val" style="fill:${n.active ? 'var(--ink)' : 'var(--dim)'}" y="26">${n.val}</text>
-      <text class="label" y="41">${n.label}</text>
-    </g>`).join('');
-  const homeCol = bypassActive ? '#fb923c' : 'var(--ink)';
-  // The house: roof with a strip of panels, walls, a door.
-  const house = `
-    <polygon points="122,152 220,80 318,152" fill="var(--panel)" stroke="var(--line)" stroke-width="2" stroke-linejoin="round" />
-    ${[0, 1, 2, 3].map((i) => `<rect x="${180 + i * 21}" y="116" width="18" height="11" rx="1.5" fill="${f.pv_kw > 0.05 ? 'var(--amber)' : 'var(--line)'}" opacity="${f.pv_kw > 0.05 ? 0.85 : 0.5}" />`).join('')}
-    <rect x="140" y="152" width="160" height="148" rx="4" fill="var(--panel)" stroke="var(--line)" stroke-width="2" />
-    <rect x="206" y="256" width="28" height="44" rx="3" fill="none" stroke="var(--line)" stroke-width="2" />
-    <text x="220" y="190" text-anchor="middle" fill="var(--dim)" font-size="13">Home</text>
-    <text x="220" y="222" text-anchor="middle" fill="${homeCol}" font-size="26" font-weight="700" class="num">${kw(f.home_kw)}</text>`;
-  return `<div class="flow-wrap"><svg class="flow-svg" viewBox="0 0 440 360" role="img" aria-label="Where the house's power is coming from and going to right now">
-    ${lines}${house}${nodeEls}
+  const solarOn = f.pv_generating || num(f.pv_kw) > 0.05;
+  const carOn = f.ev_charging || num(f.ev_kw) > 0.05;
+  const hpOn = f.has_heatpump && num(f.heatpump_kw) > 0.05;
+  const gridOn = f.importing || f.exporting || bypassActive;
+  const batOn = f.battery_charging || f.battery_discharging;
+  const C_SOLAR = '#f5b942', C_GRID = bypassActive ? '#fb923c' : (f.exporting ? '#5ec8e5' : '#e8a33d');
+  const C_BAT = '#4ade80', C_CAR = '#4ade80', C_HP = '#f87171';
+  // Dark faces, lit from the front left.
+  const WALL = '#232a36', WALL_SIDE = '#1a2029', ROOF = '#12161d', TRIM = '#2e3644';
+
+  // ---- the building ------------------------------------------------------
+  // Far to near: the house, then the garage that stands in front of its gable.
+  const house = [
+    poly([[6, 0, 0], [6, 5, 0], [6, 5, 3], [6, 2.5, 5.2], [6, 0, 3]], WALL_SIDE),
+    poly([[0, 5, 0], [6, 5, 0], [6, 5, 3], [0, 5, 3]], WALL),
+    poly([[-0.25, 5.35, 2.8], [6.25, 5.35, 2.8], [6.25, 2.5, 5.25], [-0.25, 2.5, 5.25]], ROOF, `stroke="${TRIM}" stroke-width="1"`),
+  ];
+  const garage = [
+    poly([[10, 1, 0], [10, 5.2, 0], [10, 5.2, 2.4], [10, 1, 2.4]], WALL_SIDE),
+    poly([[6, 5.2, 0], [10, 5.2, 0], [10, 5.2, 2.4], [6, 5.2, 2.4]], WALL),
+    poly([[5.9, 0.8, 2.4], [10.2, 0.8, 2.4], [10.2, 5.4, 2.4], [5.9, 5.4, 2.4]], ROOF, `stroke="${TRIM}" stroke-width="1"`),
+  ];
+  // Solar panels on the front slope: 2 rows x 4.
+  const slope = (u, v) => [u, 5.35 - 2.85 * v, 2.8 + 2.45 * v];   // u along the ridge, v up the slope 0..1
+  const panels = [];
+  for (let r = 0; r < 2; r++) for (let c = 0; c < 4; c++) {
+    const u0 = 0.8 + c * 1.2, v0 = 0.14 + r * 0.38;
+    panels.push(poly([slope(u0, v0), slope(u0 + 1.1, v0), slope(u0 + 1.1, v0 + 0.34), slope(u0, v0 + 0.34)],
+      solarOn ? '#1f3150' : '#18202e', `stroke="${solarOn ? '#3d5a86' : '#262f3d'}" stroke-width="0.8"`));
+  }
+  // Windows: warm when the house is using power.
+  const homeKw = num(f.home_kw);
+  const glow = Math.min(0.85, 0.25 + homeKw / 3);
+  const win = (x0, x1, z0, z1) => poly([[x0, 5, z0], [x1, 5, z0], [x1, 5, z1], [x0, 5, z1]], '#f2c46b', `opacity="${glow.toFixed(2)}"`)
+    + `<path d="${line([[x0, 5, (z0 + z1) / 2], [x1, 5, (z0 + z1) / 2]])} M${pt((x0 + x1) / 2, 5, z0)} L${pt((x0 + x1) / 2, 5, z1)}" stroke="${WALL}" stroke-width="1.6"/>`;
+  const windows = win(2.0, 3.6, 1.0, 2.3);
+  // Garage door opening with the car inside (seen from behind), and its charger.
+  const door = poly([[6.6, 5.2, 0], [9.5, 5.2, 0], [9.5, 5.2, 1.95], [6.6, 5.2, 1.95]], '#07090d');
+  const carCol = carOn ? '#cfd6e2' : '#7c8594';
+  const Y = 4.9;
+  const car = poly([[7.25, Y, 0.05], [7.6, Y, 0.05], [7.6, Y, 0.3], [7.25, Y, 0.3]], '#05070a')
+    + poly([[8.5, Y, 0.05], [8.85, Y, 0.05], [8.85, Y, 0.3], [8.5, Y, 0.3]], '#05070a')
+    + poly([[7.05, Y, 0.22], [9.05, Y, 0.22], [9.12, Y, 0.62], [9.0, Y, 0.86], [8.72, Y, 1.32], [7.38, Y, 1.32], [7.1, Y, 0.86], [6.98, Y, 0.62]],
+      '#2b3340', `stroke="${carCol}" stroke-width="1" stroke-linejoin="round"`)
+    + poly([[7.38, Y, 0.92], [8.72, Y, 0.92], [8.58, Y, 1.24], [7.52, Y, 1.24]], '#0b0e13')
+    + `<path d="${line([[7.1, Y, 0.72], [9.0, Y, 0.72]])}" stroke="#ef4444" stroke-width="1.6" stroke-linecap="round" opacity="${carOn ? 0.85 : 0.45}"/>`;
+  const charger = poly([[6.18, 5.2, 0.85], [6.45, 5.2, 0.85], [6.45, 5.2, 1.4], [6.18, 5.2, 1.4]], '#d9dee6')
+    + `<circle cx="${P(6.31, 5.2, 1.2)[0].toFixed(1)}" cy="${P(6.31, 5.2, 1.2)[1].toFixed(1)}" r="1.6" fill="${carOn ? C_CAR : '#5b6473'}"/>`;
+  // Battery on the front wall, with its level as a light strip.
+  const bat = poly([[4.45, 5, 0.25], [5.55, 5, 0.25], [5.55, 5, 1.95], [4.45, 5, 1.95]], '#dfe3ea', 'stroke="#aab2bf" stroke-width="0.8"')
+    + `<path d="${line([[5.0, 5, 0.45], [5.0, 5, 0.45 + 1.3 * Math.max(0.04, soc)]])}" stroke="${batOn ? C_BAT : '#8c96a6'}" stroke-width="3" stroke-linecap="round"/>`;
+  // Heat pump: a box on the ground in front, with a fan grille.
+  const hp = f.has_heatpump ? (() => {
+    const box = poly([[0.3, 5.6, 0], [1.9, 5.6, 0], [1.9, 6.3, 0], [0.3, 6.3, 0]], '#0d1016')
+      + poly([[1.9, 5.6, 0], [1.9, 6.3, 0], [1.9, 6.3, 1.05], [1.9, 5.6, 1.05]], '#b9c0cb')
+      + poly([[0.3, 6.3, 0], [1.9, 6.3, 0], [1.9, 6.3, 1.05], [0.3, 6.3, 1.05]], '#d6dbe3')
+      + poly([[0.3, 5.6, 1.05], [1.9, 5.6, 1.05], [1.9, 6.3, 1.05], [0.3, 6.3, 1.05]], '#eef1f5');
+    const ring = Array.from({ length: 24 }, (_, i) => { const a = i / 24 * 2 * Math.PI; return [0.95 + 0.38 * Math.cos(a), 6.3, 0.52 + 0.38 * Math.sin(a)]; });
+    return box + poly(ring, '#2b3340', `stroke="${hpOn ? C_HP : '#7c8594'}" stroke-width="1"`)
+      + (hpOn ? `<g transform-origin="${pt(0.95, 6.3, 0.52).replace(',', ' ')}"><path d="${line([[0.62, 6.3, 0.52], [1.28, 6.3, 0.52]])} M${pt(0.95, 6.3, 0.2)} L${pt(0.95, 6.3, 0.84)}" stroke="#9aa3b2" stroke-width="1"/></g>` : '');
+  })() : '';
+  // Grid: a pole on the left, the drop cable to a meter box on the wall.
+  const pole = `<path d="${line([[-2.0, 7.2, 0], [-2.0, 7.2, 4.0]])}" stroke="#4b5563" stroke-width="2.2" stroke-linecap="round"/>
+    <path d="${line([[-2.5, 7.2, 3.75], [-1.5, 7.2, 3.75]])}" stroke="#4b5563" stroke-width="1.6" stroke-linecap="round"/>`
+    + poly([[0.15, 5, 1.7], [0.65, 5, 1.7], [0.65, 5, 2.4], [0.15, 5, 2.4]], '#c9cfd8');
+
+  // ---- wires: [key, colour, on, pulse forward (true = towards the battery), points, kW] --------
+  const meterToBat = [[0.4, 5, 2.4], [0.4, 5, 2.62], [4.7, 5, 2.62], [4.7, 5, 1.95]];
+  const wires = [
+    ['solar', C_SOLAR, solarOn, true, [slope(5.4, 0.12), [5.75, 5, 2.8], [5.75, 5, 2.2], [5.3, 5, 2.2], [5.3, 5, 1.95]], f.pv_kw],
+    ['grid', C_GRID, gridOn, f.importing || bypassActive || !f.exporting,
+      [[-2.0, 7.2, 3.75], [-1.0, 6.3, 3.0], [0.4, 5, 2.4]].concat(meterToBat.slice(1)), f.grid_kw],
+    ['car', C_CAR, carOn, false, [[5.55, 5, 1.1], [6.18, 5.2, 1.1], [6.31, 5.2, 0.85], [6.6, 5.1, 0.45], [7.0, 4.95, 0.55]], f.ev_kw],
+    ...(f.has_heatpump ? [['hp', C_HP, hpOn, false, [[4.6, 5, 0.25], [4.6, 5, 0.1], [1.9, 5.05, 0.1], [1.9, 5.6, 0.1], [1.6, 5.9, 0.35]], f.heatpump_kw]] : []),
+  ];
+  const maxKw = Math.max(0.3, ...wires.map((w) => num(w[5])));
+  const wireEls = wires.map(([key, col, on, fwd, pts, k]) => {
+    const d = line(pts);
+    const base = `<path d="${d}" fill="none" stroke="${on ? col : '#2a3240'}" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round" opacity="${on ? 0.55 : 0.9}">${on ? '<animate attributeName="opacity" values=".35;.7;.35" dur="2.4s" repeatCount="indefinite"/>' : ''}</path>`;
+    if (!on) return base;
+    const sh = Math.min(1, num(k) / maxKw), dur = (3.2 - 1.8 * sh).toFixed(2);
+    const pulse = (delay) => `<path d="${d}" pathLength="100" fill="none" stroke="${col}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"
+        stroke-dasharray="10 90" filter="url(#flowGlow)">
+        <animate attributeName="stroke-dashoffset" values="${fwd ? '100;0' : '0;100'}" dur="${dur}s" begin="${delay}s" repeatCount="indefinite"/></path>`;
+    return base + pulse(0) + (sh > 0.4 ? pulse(-(Number(dur) / 2).toFixed(2)) : '');
+  }).join('');
+
+  // ---- labels along the top, leader lines down -----------------------------
+  const items = [
+    { key: 'grid', at: [-2.0, 7.2, 4.0], val: kw(f.grid_kw), cap: 'Grid', sub: f.exporting ? 'exporting' : f.importing ? 'importing' : '', on: gridOn, col: C_GRID },
+    ...(f.has_heatpump ? [{ key: 'hp', at: [1.1, 5.95, 1.05], val: kw(f.heatpump_kw), cap: 'Heat pump', sub: hpOn ? 'running' : 'off', on: hpOn, col: C_HP }] : []),
+    { key: 'solar', at: slope(2.6, 0.7), val: kw(f.pv_kw), cap: 'Solar', sub: '', on: solarOn, col: C_SOLAR },
+    { key: 'home', at: [2.8, 5, 2.3], val: kw(f.home_kw), cap: 'Home', sub: '', on: homeKw > 0.05, col: '#e5e7eb' },
+    { key: 'bat', at: [5.0, 5, 1.95], val: socPct === null ? kw(f.battery_kw) : `${socPct}%`, cap: 'Battery',
+      sub: f.battery_charging ? `charging ${kw(f.battery_kw)}` : f.battery_discharging ? `using ${kw(f.battery_kw)}` : 'idle', on: batOn, col: C_BAT },
+    { key: 'car', at: [8.0, 4.9, 1.32], val: kw(f.ev_kw), cap: 'Car', sub: carOn ? (f.ev_protected ? 'charging, protected' : 'charging') : '', on: carOn, col: C_CAR },
+  ].map((it) => ({ ...it, a: P(...it.at) })).sort((a, b) => a.a[0] - b.a[0]);
+  const W = 480, colW = W / items.length;
+  const labels = items.map((it, i) => {
+    const lx = colW * (i + 0.5), [ax, ay] = it.a, knee = Math.max(70, ay - 26);
+    return `<path d="M${lx.toFixed(1)},60 L${lx.toFixed(1)},${knee.toFixed(1)} L${ax.toFixed(1)},${(ay - 3).toFixed(1)}" fill="none" stroke="#475569" stroke-width="0.8"/>
+      <circle cx="${ax.toFixed(1)}" cy="${(ay - 3).toFixed(1)}" r="2" fill="${it.on ? it.col : '#64748b'}"/>
+      <text x="${lx.toFixed(1)}" y="26" text-anchor="middle" font-size="15" font-weight="600" fill="${it.on ? '#f1f5f9' : '#94a3b8'}" style="font-variant-numeric:tabular-nums">${it.val}</text>
+      <text x="${lx.toFixed(1)}" y="41" text-anchor="middle" font-size="8.5" letter-spacing="1.2" fill="#8b95a5">${esc(it.cap.toUpperCase())}</text>
+      ${it.sub ? `<text x="${lx.toFixed(1)}" y="53" text-anchor="middle" font-size="8.5" fill="${it.on ? it.col : '#64748b'}">${esc(it.sub)}</text>` : ''}`;
+  }).join('');
+
+  return `<div class="flow-wrap"><svg class="flow-svg" viewBox="0 0 ${W} 400" role="img" aria-label="Where the house's power is coming from and going to right now" style="shape-rendering:geometricPrecision">
+    <defs>
+      <filter id="flowGlow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="1.8" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+      <radialGradient id="flowGround" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="#1b2230" stop-opacity=".9"/><stop offset="100%" stop-color="#1b2230" stop-opacity="0"/></radialGradient>
+    </defs>
+    <ellipse cx="${P(4.5, 5.5, 0)[0].toFixed(1)}" cy="${(P(4.5, 5.5, 0)[1] - 6).toFixed(1)}" rx="230" ry="62" fill="url(#flowGround)"/>
+    ${house.join('')}${panels.join('')}${windows}${bat}${pole}${garage.join('')}${door}${car}${charger}${hp}
+    ${wireEls}${labels}
   </svg></div>${f.ev_protected ? '<div style="text-align:center;color:var(--violet);font-size:13px;margin-top:8px">EV/PV Bypass: battery locked while the car charges</div>' : ''}`;
 }
 // Column order is gridlock.py's publish_plan()'s plan_table.columns —

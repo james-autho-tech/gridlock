@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.83.0 - 2026-11-16
+
+### Overview
+- Live power flow redrawn as an angled 3D house at night: panels on the roof, battery on the front wall, car in the garage, heat pump outside, grid on a pole; windows glow with the house's use
+- Wires run along the walls to the battery; a busy wire breathes and a soft glowing pulse glides along it the way the power goes, quicker for more power
+- Figures along the top (kW, name, status such as "charging 1.2 kW") with thin leader lines down to each thing
+
 ## 3.82.1 - 2026-11-15
 
 ### Car charging
