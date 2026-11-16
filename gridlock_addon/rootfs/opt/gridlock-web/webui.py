@@ -2195,7 +2195,7 @@ function renderFlow(f, bypassActive) {
   // the walls to the battery and inverter; a busy wire glows and a soft
   // pulse glides along it the way the power goes, quicker the more power.
   // Figures sit along the top with thin leader lines down to their thing.
-  const S = 21, C = 0.866, OX = 190, OY = 214;
+  const S = 25, C = 0.866, OX = 240, OY = 204;
   const P = (x, y, z) => [OX + (x - y) * C * S, OY + (x + y) * 0.5 * S - z * S];
   const pt = (x, y, z) => P(x, y, z).map((v) => v.toFixed(1)).join(',');
   const poly = (pts, fill, extra = '') => `<polygon points="${pts.map((p) => pt(...p)).join(' ')}" fill="${fill}" ${extra}/>`;
@@ -2222,10 +2222,12 @@ function renderFlow(f, bypassActive) {
     poly([[0, 5, 0], [6, 5, 0], [6, 5, 3], [0, 5, 3]], WALL),
     poly([[-0.25, 5.35, 2.8], [6.25, 5.35, 2.8], [6.25, 2.5, 5.25], [-0.25, 2.5, 5.25]], ROOF, `stroke="${TRIM}" stroke-width="1"`),
   ];
+  // The garage: a lower pitched roof, ridge parallel to the house's.
   const garage = [
-    poly([[10, 1, 0], [10, 5.2, 0], [10, 5.2, 2.4], [10, 1, 2.4]], WALL_SIDE),
-    poly([[6, 5.2, 0], [10, 5.2, 0], [10, 5.2, 2.4], [6, 5.2, 2.4]], WALL),
-    poly([[5.9, 0.8, 2.4], [10.2, 0.8, 2.4], [10.2, 5.4, 2.4], [5.9, 5.4, 2.4]], ROOF, `stroke="${TRIM}" stroke-width="1"`),
+    poly([[10, 1, 0], [10, 5.2, 0], [10, 5.2, 2.2], [10, 3.1, 3.1], [10, 1, 2.2]], WALL_SIDE),
+    poly([[5.9, 0.8, 2.1], [10.2, 0.8, 2.1], [10.2, 3.1, 3.15], [5.9, 3.1, 3.15]], '#0c0f14', `stroke="${TRIM}" stroke-width="1"`),
+    poly([[6, 5.2, 0], [10, 5.2, 0], [10, 5.2, 2.2], [6, 5.2, 2.2]], WALL),
+    poly([[5.9, 5.45, 2.1], [10.2, 5.45, 2.1], [10.2, 3.1, 3.15], [5.9, 3.1, 3.15]], ROOF, `stroke="${TRIM}" stroke-width="1"`),
   ];
   // Solar panels on the front slope: 2 rows x 4.
   const slope = (u, v) => [u, 5.35 - 2.85 * v, 2.8 + 2.45 * v];   // u along the ridge, v up the slope 0..1
@@ -2308,10 +2310,15 @@ function renderFlow(f, bypassActive) {
       sub: f.battery_charging ? `charging ${kw(f.battery_kw)}` : f.battery_discharging ? `using ${kw(f.battery_kw)}` : 'idle', on: batOn, col: C_BAT },
     { key: 'car', at: [8.0, 4.9, 1.32], val: kw(f.ev_kw), cap: 'Car', sub: carOn ? (f.ev_protected ? 'charging, protected' : 'charging') : '', on: carOn, col: C_CAR },
   ].map((it) => ({ ...it, a: P(...it.at) })).sort((a, b) => a.a[0] - b.a[0]);
-  const W = 480, colW = W / items.length;
+  // Each figure sits right above its thing; neighbours are nudged apart
+  // just enough not to collide, and the line bends only up near the text.
+  const W = 480, GAP = 74, TOP = 62;
+  // Evenly spaced across the top, in the same left-to-right order as the things.
+  void GAP;
+  const xs = items.map((_, i) => (W / items.length) * (i + 0.5));
   const labels = items.map((it, i) => {
-    const lx = colW * (i + 0.5), [ax, ay] = it.a, knee = Math.max(70, ay - 26);
-    return `<path d="M${lx.toFixed(1)},60 L${lx.toFixed(1)},${knee.toFixed(1)} L${ax.toFixed(1)},${(ay - 3).toFixed(1)}" fill="none" stroke="#64748b" stroke-width="0.6" opacity=".55"/>
+    const lx = xs[i], [ax, ay] = it.a, bend = TOP + 22;
+    return `<path d="M${lx.toFixed(1)},${TOP} L${lx.toFixed(1)},${TOP + 4} L${ax.toFixed(1)},${bend} L${ax.toFixed(1)},${(ay - 4).toFixed(1)}" fill="none" stroke="#64748b" stroke-width="0.6" opacity=".45"/>
       <circle cx="${ax.toFixed(1)}" cy="${(ay - 3).toFixed(1)}" r="2" fill="${it.on ? it.col : '#64748b'}"/>
       <text x="${lx.toFixed(1)}" y="26" text-anchor="middle" font-size="15" font-weight="600" fill="${it.on ? '#f1f5f9' : '#94a3b8'}" style="font-variant-numeric:tabular-nums">${it.val}</text>
       <text x="${lx.toFixed(1)}" y="41" text-anchor="middle" font-size="8.5" letter-spacing="1.2" fill="#8b95a5">${esc(it.cap.toUpperCase())}</text>

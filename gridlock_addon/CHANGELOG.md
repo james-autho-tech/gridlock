@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.83.2 - 2026-11-16
+
+### Overview
+- House view tidied: drawn larger to fill the width, figures evenly spaced along the top, each leader line bends once under its text and drops straight onto its thing
+- Garage has a low pitched roof instead of a flat dark slab
+
 ## 3.83.1 - 2026-11-16
 
 ### Overview
