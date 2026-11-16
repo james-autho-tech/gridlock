@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.84.1 - 2026-11-16
+
+### Overview
+- House view: each figure sits beside its own thing with a short line (solar above the roof, grid above the pole, car beside the garage, battery and heat pump in front), not all hanging from the top
+- Colour-coded: one colour per thing for its wire, pulses, line, dot and name (solar amber, grid orange importing / cyan exporting, battery green, car blue, heat pump red, home violet), bright when busy
+- Cropped to the house, bottom fades out; the shadow layer that showed as dark boxes removed; the car's dot is on the car
+
 ## 3.84.0 - 2026-11-16
 
 ### Overview

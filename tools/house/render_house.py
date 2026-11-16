@@ -206,9 +206,8 @@ for wx in (CX - 0.9, CX + 0.9):
 # ---- ground: driveway, path, and a shadow catcher ---------------------------
 box("driveway", GX0 + 0.1, GX1 - 0.1, -6.5, 0.0, 0.0, 0.015, M["drive"])
 box("path", 5.6, 6.85, -6.5, -0.5, 0.0, 0.012, M["drive"])
-bpy.ops.mesh.primitive_plane_add(size=80, location=(2, 0, 0))
-ground = bpy.context.object
-ground.is_shadow_catcher = True
+# No shadow catcher: on the dashboard's dark background its shadows read as
+# boxy dark patches. The dashboard fades the bottom of the picture instead.
 
 # ---- the grid pole ------------------------------------------------------------
 POLE = Vector((11.2, -2.0, 0))
@@ -299,13 +298,36 @@ anchors = {
     "home": (1.85, F, 4.55),
     "solar": tuple(on_front_slope(3.9, 0.55) + slope_n * 0.22),
     "battery": (1.02, -0.24, 2.15),
-    "car": (CX, 3.0, 1.56),
+    "car": (CX, CY0 + 0.35, 1.08),
+}
+# Where each figure goes: a point in the scene beside its thing, so a
+# re-render keeps them in place. Labels above, beside or below their thing.
+labels = {
+    "solar": (4.2, 3.0, RIDGE + 2.4),
+    "home": (-3.0, 3.0, RIDGE + 1.4),
+    "grid": (POLE.x, POLE.y, 9.8),
+    "car": (GX0 - 3.6, -1.2, 1.1),
+    "battery": (1.0, -4.6, 0.0),
+    "heatpump": (9.4, -3.6, 0.0),
 }
 data = {"width": W, "height": H,
         "wires": {k: [px(p) for p in pts] for k, pts in wires.items()},
-        "anchors": {k: px(p) for k, p in anchors.items()}}
-with open(os.path.join(OUT, "house.json"), "w") as f:
-    json.dump(data, f, indent=1)
+        "anchors": {k: px(p) for k, p in anchors.items()},
+        "labels": {k: px(p) for k, p in labels.items()}}
 
 bpy.ops.render.render(write_still=True)
 print("rendered", scene.render.filepath)
+
+# The picture's visible extent, so the dashboard can crop to it.
+img = bpy.data.images.load(scene.render.filepath)
+px_ = list(img.pixels)
+xs, ys = [], []
+for yy in range(0, H, 4):
+    row = (H - 1 - yy) * W * 4
+    for xx in range(0, W, 4):
+        if px_[row + xx * 4 + 3] > 0.04:
+            xs.append(xx)
+            ys.append(yy)
+data["bbox"] = [min(xs), min(ys), max(xs), max(ys)] if xs else [0, 0, W, H]
+with open(os.path.join(OUT, "house.json"), "w") as f:
+    json.dump(data, f, indent=1)

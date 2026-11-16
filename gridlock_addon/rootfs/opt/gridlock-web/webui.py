@@ -2195,7 +2195,7 @@ function renderFlow(f, bypassActive, house) {
   // breathes while it carries power, and a soft glowing pulse glides along
   // it the way the power goes, quicker the more power. Figures along the
   // top with thin leader lines down to their thing.
-  const IW = house.width, IH = house.height, TOPBAND = 120, VW = IW, VH = IH + TOPBAND;
+  const IW = house.width, IH = house.height, TOPBAND = 0, VW = IW, VH = IH + TOPBAND;
   const at = ([x, y]) => [x, y + TOPBAND];
   const num = (v) => Math.abs(Number(v) || 0);
   const kw = (v) => `${num(v).toFixed(1)} kW`;
@@ -2210,7 +2210,7 @@ function renderFlow(f, bypassActive, house) {
   };
   const col = {
     solar: '#f5b942', grid: bypassActive ? '#fb923c' : (f.exporting ? '#5ec8e5' : '#e8a33d'),
-    home: '#eef2f8', car: '#4ade80', heatpump: '#f87171', battery: '#4ade80',
+    home: '#c4b5fd', car: '#60a5fa', heatpump: '#f87171', battery: '#4ade80',
   };
   const kwOf = { solar: f.pv_kw, grid: f.grid_kw, home: f.home_kw, car: f.ev_kw, heatpump: f.heatpump_kw };
   // Towards the battery (true) or away from it.
@@ -2227,7 +2227,7 @@ function renderFlow(f, bypassActive, house) {
         stroke-dasharray="7 93" filter="url(#flowGlow)"><animate attributeName="stroke-dashoffset" values="${inward[k] ? '100;0' : '0;100'}" dur="${dur}s" begin="${delay}s" repeatCount="indefinite"/></path>`;
     return base + pulse(0) + (sh > 0.4 ? pulse(-(Number(dur) / 2).toFixed(2)) : '');
   }).join('');
-  const A = house.anchors || {};
+  const A = house.anchors || {}, L = house.labels || {};
   const items = [
     { k: 'grid', val: kw(f.grid_kw), cap: 'Grid', sub: f.exporting ? 'exporting' : f.importing ? 'importing' : '' },
     ...(f.has_heatpump ? [{ k: 'heatpump', val: kw(f.heatpump_kw), cap: 'Heat pump', sub: on.heatpump ? 'running' : 'off' }] : []),
@@ -2236,19 +2236,38 @@ function renderFlow(f, bypassActive, house) {
     { k: 'battery', val: socPct === null ? kw(f.battery_kw) : `${socPct}%`, cap: 'Battery',
       sub: f.battery_charging ? `charging ${kw(f.battery_kw)}` : f.battery_discharging ? `using ${kw(f.battery_kw)}` : 'idle' },
     { k: 'car', val: kw(f.ev_kw), cap: 'Car', sub: on.car ? (f.ev_protected ? 'charging, protected' : 'charging') : '' },
-  ].filter((it) => A[it.k]).map((it) => ({ ...it, a: at(A[it.k]) })).sort((p, q) => p.a[0] - q.a[0]);
-  const LABEL_Y = 54, LINE_TOP = 150, BEND = 190;
-  const labels = items.map((it, i) => {
-    const lx = (VW / items.length) * (i + 0.5), [ax, ay] = it.a, live = on[it.k];
-    return `<path d="M${lx.toFixed(1)},${LINE_TOP} L${ax.toFixed(1)},${BEND} L${ax.toFixed(1)},${(ay - 10).toFixed(1)}" fill="none" stroke="#8894a6" stroke-width="1.5" opacity=".45"/>
-      <circle cx="${ax.toFixed(1)}" cy="${(ay - 6).toFixed(1)}" r="5" fill="${live ? col[it.k] : '#7c8798'}"/>
-      <text x="${lx.toFixed(1)}" y="${LABEL_Y}" text-anchor="middle" font-size="40" font-weight="600" fill="${live ? '#f1f5f9' : '#9aa5b5'}" style="font-variant-numeric:tabular-nums">${it.val}</text>
-      <text x="${lx.toFixed(1)}" y="${LABEL_Y + 34}" text-anchor="middle" font-size="20" letter-spacing="3" fill="#8b95a5">${esc(it.cap.toUpperCase())}</text>
-      ${it.sub ? `<text x="${lx.toFixed(1)}" y="${LABEL_Y + 64}" text-anchor="middle" font-size="21" fill="${live ? col[it.k] : '#6b7686'}">${esc(it.sub)}</text>` : ''}`;
+  ].filter((it) => A[it.k] && L[it.k]);
+  // Each figure sits at its own spot beside its thing (from the render), a
+  // short straight line from the side of the text facing it.
+  const boxes = [];
+  const labels = items.map((it) => {
+    const [ax, ay] = at(A[it.k]), [lx, ly] = at(L[it.k]), live = on[it.k];
+    const above = ly < ay - 80, below = ly > ay + 80;
+    const anchor = above || below ? 'middle' : (lx < ax ? 'end' : 'start');
+    const top = ly - 36, bottom = ly + (it.sub ? 66 : 40);
+    const sx = above || below ? lx : lx + (lx < ax ? 16 : -16);
+    const sy = above ? bottom + 10 : below ? top - 12 : ly - 12;
+    const half = 130;
+    boxes.push([anchor === 'end' ? lx - 2 * half : anchor === 'start' ? lx : lx - half, top, anchor === 'end' ? lx : anchor === 'start' ? lx + 2 * half : lx + half, bottom]);
+    // One colour per thing: line, dot and name in it, bright when busy.
+    const c = col[it.k];
+    return `<path d="M${sx.toFixed(1)},${sy.toFixed(1)} L${ax.toFixed(1)},${ay.toFixed(1)}" fill="none" stroke="${c}" stroke-width="1.5" opacity="${live ? 0.7 : 0.3}"/>
+      <circle cx="${ax.toFixed(1)}" cy="${ay.toFixed(1)}" r="${live ? 6 : 5}" fill="${c}" opacity="${live ? 1 : 0.45}"/>
+      <text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="${anchor}" font-size="40" font-weight="600" fill="${live ? '#f1f5f9' : '#9aa5b5'}" style="font-variant-numeric:tabular-nums">${it.val}</text>
+      <text x="${lx.toFixed(1)}" y="${(ly + 32).toFixed(1)}" text-anchor="${anchor}" font-size="20" letter-spacing="3" fill="${c}" opacity="${live ? 0.95 : 0.55}">${esc(it.cap.toUpperCase())}</text>
+      ${it.sub ? `<text x="${lx.toFixed(1)}" y="${(ly + 60).toFixed(1)}" text-anchor="${anchor}" font-size="21" fill="${live ? c : '#6b7686'}">${esc(it.sub)}</text>` : ''}`;
   }).join('');
-  return `<div class="flow-wrap"><svg class="flow-svg" viewBox="0 0 ${VW} ${VH}" role="img" aria-label="Where the house's power is coming from and going to right now">
-    <defs><filter id="flowGlow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
-    <image href="assets/house.webp?v=${house.v}" x="0" y="${TOPBAND}" width="${IW}" height="${IH}"/>
+  // Crop to the house and its figures.
+  const bb = house.bbox || [0, 0, IW, IH];
+  const ext = [bb[0], bb[1] + TOPBAND, bb[2], bb[3] + TOPBAND];
+  for (const b of boxes) { ext[0] = Math.min(ext[0], b[0]); ext[1] = Math.min(ext[1], b[1]); ext[2] = Math.max(ext[2], b[2]); ext[3] = Math.max(ext[3], b[3]); }
+  const PAD = 24, vb = [ext[0] - PAD, ext[1] - PAD, ext[2] - ext[0] + 2 * PAD, ext[3] - ext[1] + 2 * PAD].map((v) => v.toFixed(0)).join(' ');
+  void VW; void VH;
+  return `<div class="flow-wrap"><svg class="flow-svg" viewBox="${vb}" role="img" aria-label="Where the house's power is coming from and going to right now">
+    <defs><filter id="flowGlow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+      <linearGradient id="houseFade" x1="0" y1="0" x2="0" y2="1"><stop offset="0.72" stop-color="#fff"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+      <mask id="houseMask" maskUnits="userSpaceOnUse" x="0" y="${TOPBAND}" width="${IW}" height="${IH}"><rect x="0" y="${TOPBAND}" width="${IW}" height="${IH}" fill="url(#houseFade)"/></mask></defs>
+    <image href="assets/house.webp?v=${house.v}" x="0" y="${TOPBAND}" width="${IW}" height="${IH}" mask="url(#houseMask)"/>
     ${wireEls}${labels}
   </svg></div>${f.ev_protected ? '<div style="text-align:center;color:var(--violet);font-size:13px;margin-top:8px">EV/PV Bypass: battery locked while the car charges</div>' : ''}`;
 }
