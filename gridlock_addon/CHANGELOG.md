@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.84.0 - 2026-11-16
+
+### Overview
+- Power flow is now a proper 3D-rendered house at night (garage with the car, panels on the roof, battery on the wall, heat pump, meter and grid pole), replacing the hand-drawn one
+- Live layer drawn exactly over it: wires along the walls breathe while they carry power, glowing pulses glide the way the power goes (quicker for more), figures along the top with leader lines
+- The picture and its wire positions come from tools/house/render_house.py (Blender); served cached, about 95 KB
+
 ## 3.83.2 - 2026-11-16
 
 ### Overview
