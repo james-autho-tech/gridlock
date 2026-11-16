@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.84.3 - 2026-11-16
+
+### Overview
+- House view: pulses on the car, heat pump and house wires now run out from the battery to them (they were running backwards, into the battery)
+
 ## 3.84.2 - 2026-11-16
 
 ### Notifications

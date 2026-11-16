@@ -2214,7 +2214,11 @@ function renderFlow(f, bypassActive, house) {
   };
   const kwOf = { solar: f.pv_kw, grid: f.grid_kw, home: f.home_kw, car: f.ev_kw, heatpump: f.heatpump_kw };
   // Towards the battery (true) or away from it.
-  const inward = { solar: true, grid: !!(f.importing || bypassActive || !f.exporting), home: false, car: false, heatpump: false };
+  // Which way the power runs along each wire as drawn (house.json): solar
+  // from the panels and grid from the pole run towards the battery; home,
+  // car and heat pump are drawn from the battery out to them. Grid reverses
+  // when exporting.
+  const alongPath = { solar: true, grid: !!(f.importing || bypassActive || !f.exporting), home: true, car: true, heatpump: true };
   const wires = Object.entries(house.wires || {}).filter(([k]) => k !== 'heatpump' || f.has_heatpump);
   const maxKw = Math.max(0.3, ...wires.map(([k]) => num(kwOf[k])));
   const wireEls = wires.map(([k, pts]) => {
@@ -2224,7 +2228,7 @@ function renderFlow(f, bypassActive, house) {
     if (!live) return base;
     const sh = Math.min(1, num(kwOf[k]) / maxKw), dur = (3.4 - 1.9 * sh).toFixed(2);
     const pulse = (delay) => `<path d="${d}" pathLength="100" fill="none" stroke="${col[k]}" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"
-        stroke-dasharray="7 93" filter="url(#flowGlow)"><animate attributeName="stroke-dashoffset" values="${inward[k] ? '100;0' : '0;100'}" dur="${dur}s" begin="${delay}s" repeatCount="indefinite"/></path>`;
+        stroke-dasharray="7 93" filter="url(#flowGlow)"><animate attributeName="stroke-dashoffset" values="${alongPath[k] ? '100;0' : '0;100'}" dur="${dur}s" begin="${delay}s" repeatCount="indefinite"/></path>`;
     return base + pulse(0) + (sh > 0.4 ? pulse(-(Number(dur) / 2).toFixed(2)) : '');
   }).join('');
   const A = house.anchors || {}, L = house.labels || {};
