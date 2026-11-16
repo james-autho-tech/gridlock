@@ -2217,6 +2217,7 @@ function renderFlow(f, bypassActive) {
   // ---- the building ------------------------------------------------------
   // Far to near: the house, then the garage that stands in front of its gable.
   const house = [
+    poly([[-0.25, -0.35, 2.8], [6.25, -0.35, 2.8], [6.25, 2.5, 5.25], [-0.25, 2.5, 5.25]], '#0c0f14', `stroke="${TRIM}" stroke-width="1"`),
     poly([[6, 0, 0], [6, 5, 0], [6, 5, 3], [6, 2.5, 5.2], [6, 0, 3]], WALL_SIDE),
     poly([[0, 5, 0], [6, 5, 0], [6, 5, 3], [0, 5, 3]], WALL),
     poly([[-0.25, 5.35, 2.8], [6.25, 5.35, 2.8], [6.25, 2.5, 5.25], [-0.25, 2.5, 5.25]], ROOF, `stroke="${TRIM}" stroke-width="1"`),
@@ -2243,18 +2244,22 @@ function renderFlow(f, bypassActive) {
   // Garage door opening with the car inside (seen from behind), and its charger.
   const door = poly([[6.6, 5.2, 0], [9.5, 5.2, 0], [9.5, 5.2, 1.95], [6.6, 5.2, 1.95]], '#07090d');
   const carCol = carOn ? '#cfd6e2' : '#7c8594';
-  const Y = 4.9;
-  const car = poly([[7.25, Y, 0.05], [7.6, Y, 0.05], [7.6, Y, 0.3], [7.25, Y, 0.3]], '#05070a')
-    + poly([[8.5, Y, 0.05], [8.85, Y, 0.05], [8.85, Y, 0.3], [8.5, Y, 0.3]], '#05070a')
-    + poly([[7.05, Y, 0.22], [9.05, Y, 0.22], [9.12, Y, 0.62], [9.0, Y, 0.86], [8.72, Y, 1.32], [7.38, Y, 1.32], [7.1, Y, 0.86], [6.98, Y, 0.62]],
-      '#2b3340', `stroke="${carCol}" stroke-width="1" stroke-linejoin="round"`)
-    + poly([[7.38, Y, 0.92], [8.72, Y, 0.92], [8.58, Y, 1.24], [7.52, Y, 1.24]], '#0b0e13')
-    + `<path d="${line([[7.1, Y, 0.72], [9.0, Y, 0.72]])}" stroke="#ef4444" stroke-width="1.6" stroke-linecap="round" opacity="${carOn ? 0.85 : 0.45}"/>`;
+  // Parked nose-in: body and cabin as boxes, the back (lights) towards the door.
+  const box = (x0, x1, y0, y1, z0, z1, top, side, back) =>
+    poly([[x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]], side)
+    + poly([[x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]], back)
+    + poly([[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]], top);
+  const body = carOn ? '#3a4556' : '#2a313d';
+  const car = `<g clip-path="url(#flowDoor)">`
+    + box(7.15, 8.95, 1.6, 4.95, 0.18, 0.78, '#465166', '#232a35', body)
+    + box(7.4, 8.7, 2.5, 4.3, 0.78, 1.28, '#11151c', '#1a2029', '#0e1218')
+    + `<path d="${line([[7.25, 4.95, 0.62], [8.85, 4.95, 0.62]])}" stroke="#ef4444" stroke-width="1.6" stroke-linecap="round" opacity="${carOn ? 0.9 : 0.5}"/>`
+    + `</g>`;
   const charger = poly([[6.18, 5.2, 0.85], [6.45, 5.2, 0.85], [6.45, 5.2, 1.4], [6.18, 5.2, 1.4]], '#d9dee6')
     + `<circle cx="${P(6.31, 5.2, 1.2)[0].toFixed(1)}" cy="${P(6.31, 5.2, 1.2)[1].toFixed(1)}" r="1.6" fill="${carOn ? C_CAR : '#5b6473'}"/>`;
   // Battery on the front wall, with its level as a light strip.
   const bat = poly([[4.45, 5, 0.25], [5.55, 5, 0.25], [5.55, 5, 1.95], [4.45, 5, 1.95]], '#dfe3ea', 'stroke="#aab2bf" stroke-width="0.8"')
-    + `<path d="${line([[5.0, 5, 0.45], [5.0, 5, 0.45 + 1.3 * Math.max(0.04, soc)]])}" stroke="${batOn ? C_BAT : '#8c96a6'}" stroke-width="3" stroke-linecap="round"/>`;
+    + `<path d="${line([[5.0, 5, 0.45], [5.0, 5, 0.45 + 1.3 * Math.max(0.04, soc)]])}" stroke="${batOn ? C_BAT : '#8c96a6'}" stroke-width="3" stroke-linecap="round">${batOn ? '<animate attributeName="opacity" values="1;.45;1" dur="2.4s" repeatCount="indefinite"/>' : ''}</path>`;
   // Heat pump: a box on the ground in front, with a fan grille.
   const hp = f.has_heatpump ? (() => {
     const box = poly([[0.3, 5.6, 0], [1.9, 5.6, 0], [1.9, 6.3, 0], [0.3, 6.3, 0]], '#0d1016')
@@ -2272,11 +2277,13 @@ function renderFlow(f, bypassActive) {
 
   // ---- wires: [key, colour, on, pulse forward (true = towards the battery), points, kW] --------
   const meterToBat = [[0.4, 5, 2.4], [0.4, 5, 2.62], [4.7, 5, 2.62], [4.7, 5, 1.95]];
+  const homeOn = homeKw > 0.05;
   const wires = [
+    ['home', '#e8eef7', homeOn, false, [[4.45, 5, 1.45], [3.9, 5, 1.45], [3.75, 5, 1.6]], f.home_kw],
     ['solar', C_SOLAR, solarOn, true, [slope(5.4, 0.12), [5.75, 5, 2.8], [5.75, 5, 2.2], [5.3, 5, 2.2], [5.3, 5, 1.95]], f.pv_kw],
     ['grid', C_GRID, gridOn, f.importing || bypassActive || !f.exporting,
       [[-2.0, 7.2, 3.75], [-1.0, 6.3, 3.0], [0.4, 5, 2.4]].concat(meterToBat.slice(1)), f.grid_kw],
-    ['car', C_CAR, carOn, false, [[5.55, 5, 1.1], [6.18, 5.2, 1.1], [6.31, 5.2, 0.85], [6.6, 5.1, 0.45], [7.0, 4.95, 0.55]], f.ev_kw],
+    ['car', C_CAR, carOn, false, [[5.55, 5, 1.1], [6.18, 5.2, 1.1], [6.31, 5.2, 0.85], [6.75, 5.1, 0.35], [7.2, 4.95, 0.5]], f.ev_kw],
     ...(f.has_heatpump ? [['hp', C_HP, hpOn, false, [[4.6, 5, 0.25], [4.6, 5, 0.1], [1.9, 5.05, 0.1], [1.9, 5.6, 0.1], [1.6, 5.9, 0.35]], f.heatpump_kw]] : []),
   ];
   const maxKw = Math.max(0.3, ...wires.map((w) => num(w[5])));
@@ -2304,7 +2311,7 @@ function renderFlow(f, bypassActive) {
   const W = 480, colW = W / items.length;
   const labels = items.map((it, i) => {
     const lx = colW * (i + 0.5), [ax, ay] = it.a, knee = Math.max(70, ay - 26);
-    return `<path d="M${lx.toFixed(1)},60 L${lx.toFixed(1)},${knee.toFixed(1)} L${ax.toFixed(1)},${(ay - 3).toFixed(1)}" fill="none" stroke="#475569" stroke-width="0.8"/>
+    return `<path d="M${lx.toFixed(1)},60 L${lx.toFixed(1)},${knee.toFixed(1)} L${ax.toFixed(1)},${(ay - 3).toFixed(1)}" fill="none" stroke="#64748b" stroke-width="0.6" opacity=".55"/>
       <circle cx="${ax.toFixed(1)}" cy="${(ay - 3).toFixed(1)}" r="2" fill="${it.on ? it.col : '#64748b'}"/>
       <text x="${lx.toFixed(1)}" y="26" text-anchor="middle" font-size="15" font-weight="600" fill="${it.on ? '#f1f5f9' : '#94a3b8'}" style="font-variant-numeric:tabular-nums">${it.val}</text>
       <text x="${lx.toFixed(1)}" y="41" text-anchor="middle" font-size="8.5" letter-spacing="1.2" fill="#8b95a5">${esc(it.cap.toUpperCase())}</text>
@@ -2313,10 +2320,10 @@ function renderFlow(f, bypassActive) {
 
   return `<div class="flow-wrap"><svg class="flow-svg" viewBox="0 0 ${W} 400" role="img" aria-label="Where the house's power is coming from and going to right now" style="shape-rendering:geometricPrecision">
     <defs>
+      <clipPath id="flowDoor"><polygon points="${[[6.6, 5.2, 0], [9.5, 5.2, 0], [9.5, 5.2, 1.95], [6.6, 5.2, 1.95]].map((q) => pt(...q)).join(' ')}"/></clipPath>
       <filter id="flowGlow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="1.8" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
       <radialGradient id="flowGround" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="#1b2230" stop-opacity=".9"/><stop offset="100%" stop-color="#1b2230" stop-opacity="0"/></radialGradient>
     </defs>
-    <ellipse cx="${P(4.5, 5.5, 0)[0].toFixed(1)}" cy="${(P(4.5, 5.5, 0)[1] - 6).toFixed(1)}" rx="230" ry="62" fill="url(#flowGround)"/>
     ${house.join('')}${panels.join('')}${windows}${bat}${pole}${garage.join('')}${door}${car}${charger}${hp}
     ${wireEls}${labels}
   </svg></div>${f.ev_protected ? '<div style="text-align:center;color:var(--violet);font-size:13px;margin-top:8px">EV/PV Bypass: battery locked while the car charges</div>' : ''}`;

@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.83.1 - 2026-11-16
+
+### Overview
+- House: back roof slope drawn, so the roof reads as a roof instead of the gable wall poking up behind one slope
+- New wire from the battery into the house, pulsing with the house's use (the biggest flow wasn't shown at all)
+- Car drawn as a parked car seen through the garage door; battery strip breathes while it charges or discharges
+- Lighter leader lines; the square ground shadow removed
+
 ## 3.83.0 - 2026-11-16
 
 ### Overview
