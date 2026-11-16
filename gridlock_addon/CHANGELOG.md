@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.84.4 - 2026-11-16
+
+### Overview
+- House view: HOME's line now lands where the house's supply (the violet wire from the battery) goes in, instead of on an upstairs window; its figure sits in front beside the battery's
+
 ## 3.84.3 - 2026-11-16
 
 ### Overview

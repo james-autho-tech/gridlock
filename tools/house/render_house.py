@@ -295,7 +295,7 @@ wires = {
 anchors = {
     "grid": (POLE.x, POLE.y, 7.6),
     "heatpump": (7.45, -0.5, 0.86),
-    "home": (1.85, F, 4.55),
+    "home": wires["home"][-1],        # where the house's supply goes in
     "solar": tuple(on_front_slope(3.9, 0.55) + slope_n * 0.22),
     "battery": (1.02, -0.24, 2.15),
     "car": (CX, CY0 + 0.35, 1.08),
@@ -304,10 +304,10 @@ anchors = {
 # re-render keeps them in place. Labels above, beside or below their thing.
 labels = {
     "solar": (4.2, 3.0, RIDGE + 2.4),
-    "home": (-3.0, 3.0, RIDGE + 1.4),
+    "home": (4.3, -4.4, 0.0),
     "grid": (POLE.x, POLE.y, 9.8),
     "car": (GX0 - 3.6, -1.2, 1.1),
-    "battery": (1.0, -4.6, 0.0),
+    "battery": (0.2, -5.0, 0.0),
     "heatpump": (9.4, -3.6, 0.0),
 }
 data = {"width": W, "height": H,
