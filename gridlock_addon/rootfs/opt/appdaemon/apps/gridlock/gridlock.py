@@ -7094,16 +7094,13 @@ class GridLock(hass.Hass):
 
             self._publish_load_management(site_import_kw, load_mgmt_state, safe_charge_kw)
             if load_mgmt_state != self._prev_load_mgmt_state:
+                # Routine and working as intended: logged (and in the decision
+                # log below), not sent to the phone or HA's notifications.
                 if load_mgmt_state:
-                    self._notify(
-                        "GridLock: Load Management engaged",
-                        f"Other loads are drawing {other_loads_kw:.1f}kW — battery charging "
-                        f"reduced to {safe_charge_kw:.1f}kW to stay clear of your "
-                        f"{self.main_fuse_amps:.0f}A main fuse (never discharges to help — "
-                        "just charges slower).")
+                    self.log(f"Load Management engaged: other loads {other_loads_kw:.1f} kW, battery charging "
+                             f"held to {safe_charge_kw:.1f} kW for the {self.main_fuse_amps:.0f} A main fuse")
                 elif self._prev_load_mgmt_state:
-                    self._notify("GridLock: Load Management cleared",
-                                "Full charge rate available again — normal planning resumed.")
+                    self.log("Load Management cleared: full charge rate available again")
             self._prev_load_mgmt_state = load_mgmt_state
             if load_mgmt_state == "throttle":
                 if safe_charge_kw > 0.05:
@@ -7249,9 +7246,8 @@ class GridLock(hass.Hass):
 
         ev_protection_now = ev_active and action != "CHARGE" and not axle_event
         if ev_protection_now and not self._prev_ev_protection:
-            self._notify("GridLock: EV/PV Bypass engaged",
-                        "Battery locked while your EV charges — solar and "
-                        "grid feed the house and car.")
+            # Routine: logged and in the decision log, not sent to the phone.
+            self.log("EV/PV Bypass engaged: battery locked while the car charges")
         self._prev_ev_protection = ev_protection_now
 
         # Computed whenever storm is active regardless of off_grid, not

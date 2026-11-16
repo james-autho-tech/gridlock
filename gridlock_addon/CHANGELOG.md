@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.84.2 - 2026-11-16
+
+### Notifications
+- EV/PV Bypass and Load Management (main fuse) engaged/cleared no longer go to the phone or HA's notifications; still in the decision log and the add-on log
+
 ## 3.84.1 - 2026-11-16
 
 ### Overview
