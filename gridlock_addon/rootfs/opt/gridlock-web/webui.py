@@ -2828,6 +2828,16 @@ function renderCop(c) {
         <button class="gl-btn-sm" onclick="saveCop()">Save</button>
       </div></div>`;
 }
+async function showAppPairing() {
+  const el = document.getElementById('app-pairing');
+  try {
+    const r = await fetch('api/app-pairing');
+    const p = await r.json();
+    const addr = `http://${location.hostname}:${p.port}`;
+    el.innerHTML = `<div class="field"><div class="lbl">Address</div><code style="color:var(--ink);user-select:all">${esc(addr)}</code></div>
+      <div class="field" style="margin-top:8px"><div class="lbl">App key</div><code style="color:var(--ink);user-select:all;word-break:break-all">${esc(p.key)}</code></div>`;
+  } catch (e) { el.textContent = 'Could not load the pairing details.'; }
+}
 async function saveCop() {
   if (copBusy) return;
   copBusy = true;
@@ -4222,6 +4232,9 @@ async function refresh() {
     </div>
     <div class="tab-page" data-tab="notify">
       ${renderNotify(d.notify)}
+      <div class="gl-wrap"><div class="gl-h">Phone app</div>
+        <div class="gl-sub">The GridLock app talks to GridLock directly, not through Home Assistant. Pair it with this address and key. Anyone with the key can see and control GridLock from your network, so keep it to yourself.</div>
+        <div id="app-pairing" class="gl-sub" style="margin-top:8px"><button class="gl-btn-sm" onclick="showAppPairing()">Show address and key</button></div></div>
     </div>
     <div class="tab-page" data-tab="billing">
       <div class="gl-wrap">
@@ -4373,6 +4386,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_gridwarm_entities()
         elif path.endswith("/api/flex-entities"):
             self._handle_flex_entities()
+        elif path.endswith("/api/app-pairing"):
+            self._send(200, json.dumps({"port": APP_PORT, "key": app_key()}).encode(), "application/json")
         elif path.endswith("/api/notify-services"):
             self._send(200, json.dumps({"services": ha_notify_services()}).encode(), "application/json")
         elif path.endswith("/api/autho-solar/day"):
@@ -4960,6 +4975,74 @@ class Handler(http.server.BaseHTTPRequestHandler):
         pass
 
 
+# ---- the phone app's API -------------------------------------------------------
+# The same data and controls as the dashboard, on their own port (the add-on
+# maps it to the host), for the GridLock phone app to talk to directly rather
+# than through Home Assistant. Every request needs the app key: made once,
+# kept in the engine folder (not world-readable), shown on the Notifications
+# page (behind HA's own login) for pairing.
+APP_PORT = 8098
+APP_KEY_PATH = os.path.join(ENGINE_DIR, "app_key.txt")
+
+
+def app_key():
+    try:
+        with open(APP_KEY_PATH) as f:
+            key = f.read().strip()
+        if len(key) >= 24:
+            return key
+    except OSError:
+        pass
+    import secrets
+    key = secrets.token_urlsafe(32)
+    fd = os.open(APP_KEY_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(key)
+    return key
+
+
+class AppHandler(Handler):
+    """Handler, behind the app key; no dashboard page, no pairing details."""
+
+    def _authorised(self):
+        import hmac
+        got = self.headers.get("Authorization", "")
+        ok = got.startswith("Bearer ") and hmac.compare_digest(got[7:].strip().encode(), app_key().encode())
+        if not ok:
+            self._send(401, json.dumps({"error": "app key needed"}).encode(), "application/json")
+        return ok
+
+    def _blocked(self):
+        path = self.path.split("?", 1)[0].rstrip("/")
+        if path in ("", "/") or path.endswith("/api/app-pairing"):
+            self._send(404, b"not found", "text/plain")
+            return True
+        return False
+
+    def do_GET(self):
+        if self._authorised() and not self._blocked():
+            super().do_GET()
+
+    def do_POST(self):
+        if self._authorised() and not self._blocked():
+            super().do_POST()
+
+    def log_message(self, fmt, *args):   # no per-request noise in the add-on log
+        pass
+
+
+def _serve_app():
+    try:
+        app_key()
+        with socketserver.ThreadingTCPServer(("0.0.0.0", APP_PORT), AppHandler) as httpd:
+            httpd.daemon_threads = True
+            httpd.serve_forever()
+    except OSError as exc:
+        print(f"GridLock app API not started on {APP_PORT}: {exc!r}", file=sys.stderr)
+
+
 if __name__ == "__main__":
+    import threading
+    threading.Thread(target=_serve_app, daemon=True).start()
     with socketserver.TCPServer(("0.0.0.0", PORT), Handler) as httpd:
         httpd.serve_forever()

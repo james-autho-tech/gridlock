@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.85.0 - 2026-11-18
+
+### Phone app
+- GridLock's own API for the phone app on port 8098: the dashboard's data and controls, straight from GridLock rather than through Home Assistant
+- Every request needs the app key (made on first start, kept in the engine folder); address and key on the Notifications page
+
 ## 3.84.4 - 2026-11-16
 
 ### Overview

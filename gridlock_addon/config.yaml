@@ -1,5 +1,5 @@
 name: GridLock
-version: "3.84.4"
+version: "3.85.0"
 slug: gridlock
 description: Battery optimisation engine for Sigenergy + Octopus IOG (bundled AppDaemon)
 url: https://github.com/james-autho-tech/gridlock
@@ -10,6 +10,11 @@ init: false
 hassio_api: true
 homeassistant_api: true
 ingress: true
+# The phone app's own API (needs the app key, see the Notifications page).
+ports:
+  8098/tcp: 8098
+ports_description:
+  8098/tcp: GridLock phone app (app key required)
 panel_icon: mdi:battery-charging-high
 panel_title: GridLock
 map:
